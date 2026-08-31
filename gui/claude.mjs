@@ -141,6 +141,10 @@ export function needsLogin(health) {
   return Boolean(health?.installed && health.loggedIn === false && !health.error);
 }
 
+export function shouldAutoStartClaude(health) {
+  return needsInstall(health) || needsLogin(health);
+}
+
 export function parseAuthStatus(raw) {
   const data = typeof raw === "string" ? JSON.parse(raw) : raw;
   if (!data || typeof data !== "object") {

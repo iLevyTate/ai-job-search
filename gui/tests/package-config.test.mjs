@@ -23,3 +23,16 @@ test("runtime dependencies are production dependencies without lifecycle scripts
   assert.ok(pkg.devDependencies["happy-dom"]);
   assert.ok(pkg.devDependencies["@playwright/test"]);
 });
+
+test("Windows installer replaces the previous Desk and can keep a copy", async () => {
+  const yml = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
+  const nsis = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");
+  assert.match(yml, /oneClick:\s*false/);
+  assert.match(yml, /allowToChangeInstallationDirectory:\s*true/);
+  assert.match(yml, /include:\s*build\/installer\.nsh/);
+  assert.match(yml, /deleteAppDataOnUninstall:\s*false/);
+  assert.match(nsis, /replace it with this version/);
+  assert.match(nsis, /keep a copy of the old app/);
+  assert.match(nsis, /CopyFiles \/SILENT/);
+  assert.match(nsis, /Job Search Desk \(previous\)\.lnk/);
+});

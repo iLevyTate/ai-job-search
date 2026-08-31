@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isJobSearchWorkspace } from "./claude.mjs";
+import { createClaudeBootstrap } from "./claude-bootstrap.mjs";
 import { createDeskRuntimeFactory } from "./desk-session.mjs";
 import { startDesk } from "./server.mjs";
 import { createClaudePty, defaultSpawnPty } from "./terminal/claude-pty.mjs";
@@ -53,6 +54,7 @@ function sourceWorkspace() {
 let mainWindow = null;
 let desk = null;
 let activePty = null;
+const claudeBootstrap = createClaudeBootstrap();
 
 function opaqueId(value) {
   return typeof value === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(value) ? value : "";
@@ -259,6 +261,8 @@ ipcMain.handle("terminal-dispose", async (_event, payload = {}) => {
   return { ok: true };
 });
 
+ipcMain.handle("ensure-claude", async () => claudeBootstrap.ensure());
+
 ipcMain.handle("clone-workspace", async () => {
   const destParent = await dialog.showOpenDialog(mainWindow, {
     title: "Choose where to create ai-job-search",
@@ -296,6 +300,7 @@ if (!hasLock) {
       }
     }
     createWindow();
+    claudeBootstrap.ensure().catch(() => {});
     const root = sourceWorkspace();
     if (root) {
       try {

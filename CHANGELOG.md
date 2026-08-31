@@ -14,6 +14,9 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Changed
+- Job Search Desk starts Claude Code as soon as the app opens, so first run
+  does not wait on a Start desk click. The Windows installer asks whether to
+  replace the previous app or keep a copy, then launches the new version.
 - Job Search Desk releases publish Windows x64, Linux x64, and macOS Apple
   Silicon installers. The Intel Mac builder is dropped so a queued
   `macos-13` runner cannot block the GitHub Release.

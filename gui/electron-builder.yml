@@ -31,13 +31,16 @@ win:
 portable:
   artifactName: JobSearchDesk-${version}-win-${arch}-portable.${ext}
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: true
   shortcutName: Job Search Desk
   createDesktopShortcut: always
   createStartMenuShortcut: true
   runAfterFinish: true
-  uninstallDisplayName: Job Search Desk
+  deleteAppDataOnUninstall: false
+  uninstallDisplayName: Job Search Desk ${version}
+  include: build/installer.nsh
 mac:
   category: public.app-category.productivity
   icon: build/icon.png

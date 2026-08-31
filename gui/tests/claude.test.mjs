@@ -24,6 +24,7 @@ import {
   parseAuthStatus,
   resolveCommand,
   saveDeskSession,
+  shouldAutoStartClaude,
   shouldRetryWithoutResume,
   turnStatusText,
   windowsShimTarget,
@@ -59,6 +60,9 @@ test("needsLogin only when Claude reports signed out", () => {
   assert.equal(needsLogin({ installed: false, loggedIn: false }), false);
   assert.equal(needsInstall({ installed: false, loggedIn: false }), true);
   assert.equal(needsInstall({ installed: false, error: "where failed" }), false);
+  assert.equal(shouldAutoStartClaude({ installed: false, loggedIn: false }), true);
+  assert.equal(shouldAutoStartClaude({ installed: true, loggedIn: false }), true);
+  assert.equal(shouldAutoStartClaude({ installed: true, loggedIn: true }), false);
 });
 
 test("extractHttpsUrls keeps login links and drops trailing punctuation", () => {

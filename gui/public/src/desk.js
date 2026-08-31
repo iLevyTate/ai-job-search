@@ -699,6 +699,7 @@ const accountLabel = document.getElementById("account-label");
 
 let authWaiter = null;
 let lastHealth = null;
+let claudeAutoStarted = false;
 
 function setGate(open, title, copy) {
   document.body.classList.toggle("gated", open);
@@ -757,17 +758,24 @@ function applyHealth(health) {
     return true;
   }
   if (needsInstall(health)) {
-    setGate(true, "Install Claude Code", "The desk uses Claude Code on this machine. One click runs Anthropic's official installer, then signs you in with the same Claude account you use in Chrome.");
-    gateAction.textContent = "Install and sign in";
+    setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+    gateAction.textContent = claudeAutoStarted ? "Working…" : "Install and sign in";
     return false;
   }
   if (needsLogin(health)) {
-    setGate(true, "Sign in with Claude", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
-    gateAction.textContent = "Sign in with Claude";
+    setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+    gateAction.textContent = claudeAutoStarted ? "Working…" : "Sign in with Claude";
     return false;
   }
   setGate(false);
   return true;
+}
+
+function autoStartClaude(health) {
+  if (claudeAutoStarted) return;
+  if (!needsInstall(health) && !needsLogin(health)) return;
+  claudeAutoStarted = true;
+  bootstrapClaude();
 }
 
 async function bootstrapClaude() {
@@ -777,11 +785,21 @@ async function bootstrapClaude() {
     let health = await readHealth();
     if (needsInstall(health)) {
       appendGateLog("Installing Claude Code with the official installer.");
-      const res = await post("/auth/install");
-      if (!res.ok) throw new Error("Install is already running.");
-      const done = await waitForAuth("install");
-      if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
-      health = done.health || (await readHealth());
+      if (window.deskApp?.ensureClaude) {
+        let info = await window.deskApp.ensureClaude();
+        while (info?.status === "installing") {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          info = await window.deskApp.ensureClaude();
+        }
+        if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
+        health = info?.health || (await readHealth());
+      } else {
+        const res = await post("/auth/install");
+        if (!res.ok) throw new Error("Install is already running.");
+        const done = await waitForAuth("install");
+        if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
+        health = done.health || (await readHealth());
+      }
     }
     if (needsLogin(health)) {
       appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
@@ -844,7 +862,10 @@ fetch("/auth/meta")
   .catch(() => {});
 
 readHealth()
-  .then(applyHealth)
+  .then((health) => {
+    applyHealth(health);
+    autoStartClaude(health);
+  })
   .catch(() => {
     setGate(false);
     accountLabel.textContent = "Claude status unknown";
