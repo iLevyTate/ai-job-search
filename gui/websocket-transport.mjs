@@ -67,6 +67,10 @@ export function attachWebSocketTransport({
       const message = checked.message;
 
       if (message.type === "hello") {
+        if (helloDone) {
+          send(ws, { type: "protocol.error", error: "hello already completed" });
+          return;
+        }
         const replay = runtime.eventsAfter(message.afterSequence ?? 0);
         const lastReplayed = replay.at(-1)?.sequence ?? message.afterSequence ?? 0;
         unsubscribe = runtime.subscribe((event) => {

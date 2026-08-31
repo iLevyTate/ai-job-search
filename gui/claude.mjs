@@ -102,6 +102,7 @@ export function resolveCommand(name, env = process.env) {
     const found = execFileSync(IS_WIN ? "where" : "which", [name], {
       encoding: "utf8",
       env: merged,
+      timeout: 5000,
     })
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -312,8 +313,14 @@ export function buildClaudeArgs(prompt, { sessionId = null, chrome = chromeEnabl
 function claudeInvocation(env) {
   const command = resolveCommand("claude", env);
   const plan = claudeSpawnPlan(command);
+  // An unresolvable .cmd wrapper would run through cmd.exe with the prompt as
+  // a raw argument. Node does not escape argv for shell:true, so a prompt
+  // containing & or | would execute as a separate command. Refuse instead.
+  if (plan.shell) {
+    throw new Error("Claude Code shim is not resolvable. Reinstall Claude Code, or open a terminal and run claude once.");
+  }
   const runEnv = withClaudePath(env || process.env);
-  if (!plan.viaNode) return { file: plan.file, prefixArgs: plan.prefixArgs, shell: plan.shell, env: runEnv };
+  if (!plan.viaNode) return { file: plan.file, prefixArgs: plan.prefixArgs, shell: false, env: runEnv };
   const node = nodeRunner(env);
   if (node.asNode) runEnv.ELECTRON_RUN_AS_NODE = "1";
   return { file: node.file, prefixArgs: plan.prefixArgs, shell: false, env: runEnv };

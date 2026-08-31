@@ -381,12 +381,25 @@ function connectRuntime() {
     }));
   });
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
     if (message.type === "snapshot") {
       state = applySnapshot(state, message.snapshot || {});
       paintChat();
     } else if (message.type === "event" && message.event) {
       ingest(message.event);
+    } else if (message.type === "command.rejected") {
+      // A rejected send (wrong controller, stale generation, queue full) must
+      // not leave the composer spinning as if Claude were working.
+      setBusy(false);
+      sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+    } else if (message.type === "protocol.error") {
+      setBusy(false);
+      sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
     }
   });
   socket.addEventListener("close", () => {
@@ -616,6 +629,7 @@ async function ensureTerminal() {
   });
   bridge.onExit(() => {
     terminalView.setInputEnabled(false);
+    releaseTerminal();
   });
   const started = await bridge.start({
     expectedControllerGeneration: state.controllerGeneration,
@@ -633,12 +647,26 @@ async function ensureTerminal() {
   terminalView.focus();
 }
 
+async function releaseTerminal() {
+  if (!terminalId) return;
+  const bridge = window.deskApp?.terminal;
+  const id = terminalId;
+  terminalId = null;
+  try {
+    await bridge?.dispose({ terminalId: id });
+  } catch {
+    // The handoff back to chat is best-effort; the runtime also resets the
+    // persisted controller on load.
+  }
+}
+
 bindDelegatedActions(document);
 mountTabs(document.getElementById("surface-tabs"), {
   selectedId: "chat",
   onSelect(id) {
     if (id === "files") loadArtifacts();
     if (id === "terminal") ensureTerminal();
+    if (id !== "terminal") releaseTerminal();
   },
 });
 filesEl.addEventListener("click", (event) => {

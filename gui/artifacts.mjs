@@ -13,6 +13,10 @@ const IGNORE = [
   /(^|\/)\.git(\/|$)/i,
   /(^|\/)node_modules(\/|$)/i,
   /(^|\/)release(\/|$)/i,
+  // Desk internal state (conversations, permission policy) changes on every
+  // turn and is not a user artifact. Other .claude content stays visible.
+  /(^|\/)\.claude\/desk(\/|$)/i,
+  /(^|\/)\.claude\/permission-policy\.json$/i,
   /(^|\/)\.env(\.|$)/i,
   /(^|\/)credentials\.json$/i,
   /\.(pem|key|p12|pfx)$/i,
@@ -152,19 +156,32 @@ export function createArtifactService({
         continue;
       }
       if (!entry.isFile()) continue;
-      const stat = await fs.stat(absolute);
+      // A file can vanish between readdir and stat (LaTeX temp output, editor
+      // swap files, a concurrent git operation). That is not an error.
+      let stat;
+      try {
+        stat = await fs.stat(absolute);
+      } catch {
+        continue;
+      }
       const type = previewTypeFor(rel);
-      const item = {
+      let hash;
+      let previousText = null;
+      try {
+        hash = await hashFile(fs, absolute, stat.size);
+        if (type?.kind === "text" && stat.size <= maxDiffBytes) {
+          previousText = await fs.readFile(absolute, "utf8");
+        }
+      } catch {
+        continue;
+      }
+      out.push({
         relativePath: rel,
         size: stat.size,
         mtimeMs: stat.mtimeMs,
-        hash: await hashFile(fs, absolute, stat.size),
-        previousText: null,
-      };
-      if (type?.kind === "text" && stat.size <= maxDiffBytes) {
-        item.previousText = await fs.readFile(absolute, "utf8");
-      }
-      out.push(item);
+        hash,
+        previousText,
+      });
     }
   }
 

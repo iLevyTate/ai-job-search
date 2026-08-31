@@ -71,23 +71,23 @@ function boundedDim(value, fallback, min, max) {
 }
 
 async function openDesk(root) {
+  if (desk && desk.workspace === root) {
+    if (mainWindow) await mainWindow.loadURL(desk.href);
+    return;
+  }
+  // Start the new desk before touching the old one or the pointer: if the new
+  // root fails to serve, the running desk and the saved workspace stay valid.
+  const next = await startDesk({
+    root,
+    openBrowser: false,
+    allowRuntimeFailure: true,
+    runtimeFactory: createDeskRuntimeFactory(),
+  });
+  desk?.stop();
+  desk = next;
   writeWorkspace(root);
   process.env.JOB_SEARCH_ROOT = root;
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
-  if (desk && desk.workspace !== root) {
-    // The user picked a different folder: a kept-alive server would keep
-    // writing scrapes and CVs into the old one while the UI claims the new.
-    desk.stop();
-    desk = null;
-  }
-  if (!desk) {
-    desk = await startDesk({
-      root,
-      openBrowser: false,
-      allowRuntimeFailure: true,
-      runtimeFactory: createDeskRuntimeFactory(),
-    });
-  }
   if (mainWindow) await mainWindow.loadURL(desk.href);
 }
 
@@ -221,7 +221,10 @@ ipcMain.handle("terminal-start", async (_event, payload = {}) => {
       });
       pty.start({ cols, rows });
       pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
-      pty.onExit((info) => mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code }));
+      pty.onExit((info) => {
+        if (activePty?.id === pty.id) activePty = null;
+        mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code });
+      });
       activePty = pty;
       return pty;
     },

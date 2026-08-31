@@ -372,6 +372,10 @@ export function createSessionRuntime({
       await store.transact(conversationId, (next) => {
         next.partialTurn = null;
         next.queue = [];
+        // Drop the event log too: the client resets its cursor to 0, so keeping
+        // events would replay the whole "cleared" conversation on next hello.
+        next.events = [];
+        next.nextSequence = 1;
         next.controllerGeneration += 1;
       });
       return commandResult(true, snapshot());

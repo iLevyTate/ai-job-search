@@ -28,11 +28,14 @@ test("Windows installer replaces the previous Desk and can keep a copy", async (
   const yml = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
   const nsis = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");
   assert.match(yml, /oneClick:\s*false/);
-  assert.match(yml, /allowToChangeInstallationDirectory:\s*true/);
+  // The install directory must stay fixed: electron-builder's uninstaller runs
+  // RMDir /r $INSTDIR, so a user-chosen folder could be a job-search workspace.
+  assert.match(yml, /allowToChangeInstallationDirectory:\s*false/);
   assert.match(yml, /include:\s*build\/installer\.nsh/);
   assert.match(yml, /deleteAppDataOnUninstall:\s*false/);
   assert.match(nsis, /replace it with this version/);
   assert.match(nsis, /keep a copy of the old app/);
-  assert.match(nsis, /CopyFiles \/SILENT/);
+  // A wildcard CopyFiles skips subdirectories; robocopy /E keeps app.asar.
+  assert.match(nsis, /robocopy/);
   assert.match(nsis, /Job Search Desk \(previous\)\.lnk/);
 });

@@ -16,6 +16,16 @@ export async function createDeskSession({
   await store.load();
   let conversationId = store.activeConversationId();
   if (!conversationId) conversationId = (await store.createConversation()).id;
+  // A persisted "terminal" controller with no live pty would leave Chat
+  // rejecting every message after a restart. No pty survives a reload, so the
+  // only safe controller on load is chat.
+  const active = store.get(conversationId);
+  if (active && active.controller !== "chat") {
+    await store.transact(conversationId, (next) => {
+      next.controller = "chat";
+      next.controllerGeneration += 1;
+    });
+  }
   const permissionPolicy = createPermissionPolicy({ workspace });
   await permissionPolicy.load();
   const artifacts = artifactService || createArtifactService({ workspace });

@@ -33,7 +33,7 @@ portable:
 nsis:
   oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  allowToChangeInstallationDirectory: false
   shortcutName: Job Search Desk
   createDesktopShortcut: always
   createStartMenuShortcut: true
