@@ -250,15 +250,18 @@ ipcMain.handle("terminal-dispose", async (_event, payload = {}) => {
   if (activePty && (!terminalId || activePty.id === terminalId)) {
     const snapshot = desk?.runtime?.snapshot?.();
     if (desk?.controllers && snapshot?.controller === "terminal") {
-      await switchToChat({
+      const handoff = await switchToChat({
         controllers: desk.controllers,
         expectedControllerGeneration: snapshot.controllerGeneration,
         terminalId: activePty.id,
         disposePty: async () => activePty.dispose(),
       });
-    } else {
-      activePty.dispose();
+      activePty = null;
+      // Return the post-handoff snapshot so the renderer's controllerGeneration
+      // stays in sync; dropping it leaves every later message stale-controller.
+      return handoff?.ok ? { ok: true, snapshot: handoff.snapshot } : { ok: true };
     }
+    activePty.dispose();
     activePty = null;
   }
   return { ok: true };

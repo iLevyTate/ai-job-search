@@ -120,6 +120,12 @@ export function attachWebSocketTransport({
       send(ws, result.ok
         ? { type: "command.accepted", command: message.type }
         : { type: "command.rejected", reason: result.reason || "rejected" });
+      // Generation-changing commands (reset, handoffs) must push the new
+      // snapshot, or the client's stale controllerGeneration rejects the next
+      // message. The accepted result above carries no generation.
+      if (result.ok && result.snapshot) {
+        send(ws, { type: "snapshot", snapshot: result.snapshot });
+      }
     });
   });
 

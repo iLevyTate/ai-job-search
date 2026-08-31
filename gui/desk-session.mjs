@@ -46,6 +46,12 @@ export function createDeskRuntimeFactory(overrides = {}) {
   return async ({ workspace }) => {
     const session = await createDeskSession({ workspace, ...overrides });
     await session.runtime.start();
-    return session.runtime;
+    // Expose the session's artifact/autofill services so the server shares the
+    // same instances the runtime writes to; otherwise the Files tab reads an
+    // empty, separate artifact store.
+    const runtime = session.runtime;
+    runtime.artifactService = session.artifacts;
+    runtime.autofillBridge = session.autofill;
+    return runtime;
   };
 }

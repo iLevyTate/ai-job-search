@@ -653,7 +653,8 @@ async function releaseTerminal() {
   const id = terminalId;
   terminalId = null;
   try {
-    await bridge?.dispose({ terminalId: id });
+    const result = await bridge?.dispose({ terminalId: id });
+    if (result?.snapshot) state = applySnapshot(state, result.snapshot);
   } catch {
     // The handoff back to chat is best-effort; the runtime also resets the
     // persisted controller on load.

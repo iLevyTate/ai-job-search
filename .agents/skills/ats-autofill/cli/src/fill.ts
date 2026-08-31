@@ -141,12 +141,16 @@ export async function fillApplication(opts: FillOptions): Promise<FillReport> {
       )
       .catch(() => {})
     if ((await page.locator("input, textarea, select").count()) < 3) {
-      const applyLink = page
-        .locator('a:has-text("Apply"), button:has-text("Apply")')
-        .first()
+      // Only follow a navigation link. A short or iframe-hosted form can read
+      // as "<3 controls" while still having a submit button labeled "Apply";
+      // clicking that would submit a blank application. Anchors navigate.
+      const applyLink = page.locator('a[href]:has-text("Apply")').first()
       if (await applyLink.count()) {
-        await applyLink.click({ timeout: 5000 }).catch(() => {})
-        await page.waitForTimeout(2000)
+        const insideForm = await applyLink.evaluate((el) => Boolean(el.closest("form"))).catch(() => true)
+        if (!insideForm) {
+          await applyLink.click({ timeout: 5000 }).catch(() => {})
+          await page.waitForTimeout(2000)
+        }
       }
     }
 

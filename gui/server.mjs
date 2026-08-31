@@ -810,8 +810,8 @@ export async function startDesk(options = {}) {
     }
   }
   deskRuntime = runtime;
-  deskAutofill = options.autofill || createAutofillBridge();
-  deskArtifacts = options.artifacts || createArtifactService({ workspace });
+  deskAutofill = options.autofill || runtime?.autofillBridge || createAutofillBridge();
+  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace });
   let transport = null;
 
   const stop = (exitProcess = false) => {

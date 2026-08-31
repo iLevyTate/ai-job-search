@@ -142,7 +142,12 @@ export function createSessionRuntime({
         await store.transact(conversationId, (next) => {
           next.recoveryAttempts += 1;
         });
-        await startAdapter();
+        try {
+          await startAdapter();
+        } catch {
+          // Recovery failed; the pump stays dead and the next submitMessage
+          // surfaces the failure instead of an unhandled rejection here.
+        }
       }
     }
   }
@@ -157,7 +162,9 @@ export function createSessionRuntime({
     });
     await adapter.start();
     const currentEpoch = epoch;
-    pumping = pump(adapter, currentEpoch);
+    // pump recovers by re-entering startAdapter; if that restart rejects, the
+    // orphaned promise would be an unhandled rejection and kill the process.
+    pumping = pump(adapter, currentEpoch).catch(() => {});
   }
 
   function clearHandoffTimer() {

@@ -83,7 +83,7 @@ jobs:
           cache-dependency-path: gui/package-lock.json
       - name: Run desk tests when present
         run: |
-          if [ -d gui/tests ]; then
+          if [ -d tests ]; then
             npm ci
             npm run build:renderer
             npm test

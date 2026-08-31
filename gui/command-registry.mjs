@@ -64,27 +64,42 @@ export async function createCommandRegistry({ workspace } = {}) {
   const seen = new Set();
 
   const commandDir = join(workspace, ".claude", "commands");
-  for (const name of await readdir(commandDir)) {
+  let commandNames = [];
+  try {
+    commandNames = await readdir(commandDir);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  for (const name of commandNames) {
     if (!name.endsWith(".md")) continue;
-    const definition = await readDefinition(workspace, join(commandDir, name), "command");
-    if (!definition) continue;
-    if (seen.has(definition.id)) throw new Error(`Duplicate command id ${definition.id}`);
+    let definition;
+    try {
+      definition = await readDefinition(workspace, join(commandDir, name), "command");
+    } catch {
+      // One malformed file must not empty the whole palette.
+      continue;
+    }
+    if (!definition || seen.has(definition.id)) continue;
     seen.add(definition.id);
     definitions.push(definition);
   }
 
   const skillRoot = join(workspace, ".claude", "skills");
-  for (const name of await readdir(skillRoot)) {
+  let skillNames = [];
+  try {
+    skillNames = await readdir(skillRoot);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  for (const name of skillNames) {
     const skillFile = join(skillRoot, name, "SKILL.md");
     try {
       const definition = await readDefinition(workspace, skillFile, "skill");
-      if (!definition) continue;
-      if (seen.has(definition.id)) throw new Error(`Duplicate command id ${definition.id}`);
+      if (!definition || seen.has(definition.id)) continue;
       seen.add(definition.id);
       definitions.push(definition);
-    } catch (error) {
-      if (error && error.code === "ENOENT") continue;
-      throw error;
+    } catch {
+      continue;
     }
   }
 
