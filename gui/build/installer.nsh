@@ -2,14 +2,14 @@
 
 ; Asked on upgrade: replace the previous Desk, or keep a copy then install.
 ; The copy must happen in customInit. electron-builder uninstalls the old
-; app before customInstall runs. PreviousDeskCopy is the only flag: a
-; second unused NSIS Var trips warning 6001, which CI treats as an error.
-Var PreviousDeskCopy
+; app before customInstall runs.
+;
+; Do not declare NSIS Var here. The uninstaller also includes this file and
+; does not call these macros, so an unused Var is warning 6001, which
+; electron-builder treats as an error. Write the copy path to PLUGINSDIR.
 
 !macro customInit
   ${IfNot} ${UAC_IsInnerInstance}
-    StrCpy $PreviousDeskCopy ""
-
     Push $R0
     Push $R1
     Push $R2
@@ -44,13 +44,13 @@ Var PreviousDeskCopy
         ; CopyFiles with a wildcard skips subdirectories, which would leave a
         ; shortcut to an app missing resources\app.asar. robocopy /E copies the
         ; whole tree; exit codes below 8 are success. The destination and the
-        ; exit code must not share a register, so the destination moves into
-        ; $PreviousDeskCopy before the call.
-        StrCpy $PreviousDeskCopy "$R2"
-        nsExec::ExecToLog 'robocopy "$R0" "$PreviousDeskCopy" /E /NFL /NDL /NJH /NJS /R:2 /W:2'
-        Pop $R2
-        ${If} $R2 >= 8
-          StrCpy $PreviousDeskCopy ""
+        ; exit code must not share a register.
+        nsExec::ExecToLog 'robocopy "$R0" "$R2" /E /NFL /NDL /NJH /NJS /R:2 /W:2'
+        Pop $R1
+        ${If} $R1 < 8
+          FileOpen $R1 "$PLUGINSDIR\desk-previous-copy.txt" w
+          FileWrite $R1 "$R2"
+          FileClose $R1
         ${EndIf}
       replace_desk:
     ${EndIf}
@@ -62,9 +62,18 @@ Var PreviousDeskCopy
 !macroend
 
 !macro customInstall
-  ${If} $PreviousDeskCopy != ""
-  ${AndIf} ${FileExists} "$PreviousDeskCopy\${APP_EXECUTABLE_FILENAME}"
-    CreateShortCut "$SMPROGRAMS\Job Search Desk (previous).lnk" "$PreviousDeskCopy\${APP_EXECUTABLE_FILENAME}"
-    DetailPrint "Kept the previous Desk at $PreviousDeskCopy"
+  Push $R0
+  Push $R1
+  ${If} ${FileExists} "$PLUGINSDIR\desk-previous-copy.txt"
+    FileOpen $R0 "$PLUGINSDIR\desk-previous-copy.txt" r
+    FileRead $R0 $R1
+    FileClose $R0
+    ${If} $R1 != ""
+    ${AndIf} ${FileExists} "$R1\${APP_EXECUTABLE_FILENAME}"
+      CreateShortCut "$SMPROGRAMS\Job Search Desk (previous).lnk" "$R1\${APP_EXECUTABLE_FILENAME}"
+      DetailPrint "Kept the previous Desk at $R1"
+    ${EndIf}
   ${EndIf}
+  Pop $R1
+  Pop $R0
 !macroend
