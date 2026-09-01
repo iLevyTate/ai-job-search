@@ -76,6 +76,14 @@ export function reduceDeskEvent(state, event) {
     next.busy = false;
     next.pendingQuestionId = null;
     next.pendingPermissionId = null;
+    if (event.type === "turn.failed" || event.type === "turn.interrupted") {
+      for (const card of next.cards.values()) {
+        if (card.type === "tool.started") {
+          card.type = "tool.completed";
+          card.payload.phase = "completed";
+        }
+      }
+    }
   }
   if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "tool.started") {
     next.busy = true;

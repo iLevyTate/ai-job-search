@@ -34,6 +34,7 @@ export function resolveGit(env = process.env) {
     const found = execFileSync(IS_WIN ? "where" : "which", ["git"], {
       encoding: "utf8",
       env: merged,
+      cwd: homedir(),
       windowsHide: true,
     })
       .split(/\r?\n/)
@@ -365,7 +366,7 @@ export function rememberWorkspace(root, home = homedir(), platform = process.pla
  */
 export function hasBinary(bin, env = process.env) {
   try {
-    execFileSync(IS_WIN ? "where" : "which", [bin], { env, stdio: "ignore", windowsHide: true });
+    execFileSync(IS_WIN ? "where" : "which", [bin], { env, cwd: homedir(), stdio: "ignore", windowsHide: true });
     return true;
   } catch {
     return false;

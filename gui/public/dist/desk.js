@@ -9214,6 +9214,14 @@ ${h2.join(`
       next.busy = false;
       next.pendingQuestionId = null;
       next.pendingPermissionId = null;
+      if (event.type === "turn.failed" || event.type === "turn.interrupted") {
+        for (const card2 of next.cards.values()) {
+          if (card2.type === "tool.started") {
+            card2.type = "tool.completed";
+            card2.payload.phase = "completed";
+          }
+        }
+      }
     }
     if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "tool.started") {
       next.busy = true;
@@ -9657,7 +9665,8 @@ ${multiline}` : rendered;
   }
   function renderAutofillBody(card) {
     const disabled = card.entered ? " disabled" : "";
-    const url = card.payload.url ? `<p><a href="${escapeHtml2(card.payload.url)}" target="_blank" rel="noreferrer">${escapeHtml2(card.payload.url)}</a></p>` : "";
+    const rawUrl = card.payload.url || "";
+    const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml2(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml2(rawUrl)}</a></p>` : `<p>${escapeHtml2(rawUrl)}</p>` : "";
     const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml2(card.payload.screenshot)}</p>` : "";
     return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml2(card.id)}" data-token="${escapeHtml2(card.payload.token || "")}">
     <p>The form is filled. Submit stays in the browser. Continue closes Autofill; Cancel stops it.</p>
@@ -9763,6 +9772,10 @@ ${multiline}` : rendered;
   var paletteList = document.getElementById("palette-list");
   var busy = false;
   var sseSequence = 0;
+  var sseTurn = 0;
+  var sseTurnClosed = true;
+  var sendPending = false;
+  var replayingTranscript = false;
   var commands = [];
   var activeCommand = null;
   var runtimeSocket = null;
@@ -9841,7 +9854,6 @@ ${multiline}` : rendered;
     sendBtn.disabled = next && !runtimeSocket;
     stopBtn.hidden = !next;
     document.body.classList.toggle("working", next);
-    document.body.setAttribute("aria-busy", String(next));
     statusEl.textContent = next ? "Claude is working" : "Ready";
   }
   function setWorkspaceLabel(root) {
@@ -9870,8 +9882,10 @@ ${multiline}` : rendered;
     renderArtifactView(filesEl, artifactState);
   }
   function ingest(event) {
+    const wasBusy = state.busy;
     state = reduceDeskEvent(state, event);
     paintChat();
+    if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
     if (event.type === "artifact.discovered") {
       const incoming = {
         id: event.payload.artifactId || event.payload.entityId,
@@ -9927,18 +9941,40 @@ ${multiline}` : rendered;
   async function confirmArtifactAction() {
     const confirm2 = artifactState.confirm;
     if (!confirm2) return;
-    await post(`/artifacts/${confirm2.id}/${confirm2.action}`, {
-      expectedControllerGeneration: state.controllerGeneration
-    });
+    try {
+      const res = await post(`/artifacts/${confirm2.id}/${confirm2.action}`, {
+        expectedControllerGeneration: state.controllerGeneration
+      });
+      if (!res.ok) {
+        artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
+        paintFiles();
+        return;
+      }
+    } catch {
+      artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
+      paintFiles();
+      return;
+    }
     artifactState = { ...artifactState, confirm: null };
     paintFiles();
   }
   function sseEvent(type, payload) {
     sseSequence += 1;
+    if (type === "user.message" || type === "assistant.message") {
+      sseTurn += 1;
+      sseTurnClosed = false;
+    } else if (type === "assistant.delta") {
+      if (sseTurnClosed) {
+        sseTurn += 1;
+        sseTurnClosed = false;
+      }
+    } else if (type === "turn.completed" || type === "turn.failed" || type === "turn.interrupted") {
+      sseTurnClosed = true;
+    }
     ingest({
       eventId: `sse-${sseSequence}`,
       sequence: Math.max(state.lastSequence + 1, sseSequence),
-      turnId: "print",
+      turnId: `turn-${sseTurn}`,
       type,
       payload
     });
@@ -9963,42 +9999,48 @@ ${multiline}` : rendered;
     const text = prompt.trim();
     if (!text) return false;
     if (busy && runtimeSocket) {
-      const messageId2 = `q-${Date.now()}`;
-      state = queueFollowUp(state, { messageId: messageId2, text });
+      const messageId = `q-${Date.now()}`;
+      state = queueFollowUp(state, { messageId, text });
       paintChat();
-      runtimeSend({ type: "user.message", messageId: messageId2, text });
+      runtimeSend({ type: "user.message", messageId, text });
       return true;
     }
     if (busy) return false;
-    if (!lastHealth?.loggedIn) {
-      try {
-        lastHealth = await readHealth();
-      } catch {
-      }
-    }
-    if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
-      applyHealth(lastHealth || { installed: false });
-      if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
-        sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
-      }
-      return false;
-    }
-    setMenu(false);
-    setBusy(true);
-    const messageId = `m-${Date.now()}`;
-    if (runtimeSend({ type: "user.message", messageId, text })) {
-      sseEvent("user.message", { messageId, text });
-      return true;
-    }
+    if (sendPending) return false;
+    sendPending = true;
     try {
-      sseEvent("user.message", { text });
-      const res = await post("/send", { prompt: text });
-      if (!res.ok) throw new Error();
-      return true;
-    } catch {
-      setBusy(false);
-      sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
-      return false;
+      if (!lastHealth?.loggedIn) {
+        try {
+          lastHealth = await readHealth();
+        } catch {
+        }
+      }
+      if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
+        applyHealth(lastHealth || { installed: false });
+        if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
+          sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
+        }
+        return false;
+      }
+      setMenu(false);
+      setBusy(true);
+      const messageId = `m-${Date.now()}`;
+      if (runtimeSend({ type: "user.message", messageId, text })) {
+        sseEvent("user.message", { messageId, text });
+        return true;
+      }
+      try {
+        sseEvent("user.message", { text });
+        const res = await post("/send", { prompt: text });
+        if (!res.ok) throw new Error();
+        return true;
+      } catch {
+        setBusy(false);
+        sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
+        return false;
+      }
+    } finally {
+      sendPending = false;
     }
   }
   function runAction(name) {
@@ -10059,12 +10101,23 @@ ${multiline}` : rendered;
       }));
     });
     socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
       if (message.type === "snapshot") {
         state = applySnapshot(state, message.snapshot || {});
         paintChat();
       } else if (message.type === "event" && message.event) {
         ingest(message.event);
+      } else if (message.type === "command.rejected") {
+        setBusy(false);
+        sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+      } else if (message.type === "protocol.error") {
+        setBusy(false);
+        sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
       }
     });
     socket.addEventListener("close", () => {
@@ -10080,9 +10133,14 @@ ${multiline}` : rendered;
     setBusy(Boolean(data.busy));
     rememberSession(data);
     if (Array.isArray(data.transcript) && data.transcript.length && !state.cards.size) {
-      for (const entry of data.transcript) {
-        const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
-        sseEvent(type, { text: entry.text || "" });
+      replayingTranscript = true;
+      try {
+        for (const entry of data.transcript) {
+          const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
+          sseEvent(type, { text: entry.text || "" });
+        }
+      } finally {
+        replayingTranscript = false;
       }
     }
   });
@@ -10114,7 +10172,16 @@ ${multiline}` : rendered;
     const payload = JSON.parse(event.data);
     sseEvent("autofill.review", payload);
   });
+  source.addEventListener("reset", () => {
+    state = createDeskState({ permissionMode: state.permissionMode });
+    sseSequence = 0;
+    sseTurn = 0;
+    sseTurnClosed = true;
+    paintChat();
+    jumpBtn.hidden = true;
+  });
   source.addEventListener("idle", () => {
+    sseTurnClosed = true;
     setBusy(false);
     state = applySnapshot(state, { busy: false });
     paintChat();
@@ -10151,6 +10218,7 @@ ${multiline}` : rendered;
   });
   promptEl.addEventListener("input", sizePrompt);
   promptEl.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       form.requestSubmit();
@@ -10171,14 +10239,33 @@ ${multiline}` : rendered;
     }
     sendPrompt(renderCommandInvocation(activeCommand, valuesFromForm(sheetFields)));
   });
-  stopBtn.addEventListener("click", () => {
-    if (!runtimeSend({ type: "turn.interrupt" })) post("/stop");
+  stopBtn.addEventListener("click", async () => {
+    if (runtimeSend({ type: "turn.interrupt" })) return;
+    try {
+      const res = await post("/stop");
+      if (!res.ok) statusEl.textContent = "Could not stop the current turn.";
+    } catch {
+      statusEl.textContent = "Could not stop the current turn.";
+    }
   });
   resetBtn.addEventListener("click", async () => {
     if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
-    if (!runtimeSend({ type: "conversation.reset" })) await post("/reset");
+    if (!runtimeSend({ type: "conversation.reset" })) {
+      try {
+        const res = await post("/reset");
+        if (!res.ok) {
+          statusEl.textContent = "Could not start a new conversation.";
+          return;
+        }
+      } catch {
+        statusEl.textContent = "Could not start a new conversation.";
+        return;
+      }
+    }
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
+    sseTurn = 0;
+    sseTurnClosed = true;
     paintChat();
     jumpBtn.hidden = true;
     setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -10198,28 +10285,43 @@ ${multiline}` : rendered;
     if (!formNode) return;
     event.preventDefault();
     const id = formNode.dataset.id;
-    runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) });
+    if (!runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) })) {
+      statusEl.textContent = "Could not send your answer. Is the terminal still running?";
+      return;
+    }
     state = markEntered(state, id);
     paintChat();
   });
-  logEl.addEventListener("click", (event) => {
+  logEl.addEventListener("click", async (event) => {
     const decision = event.target.closest("[data-decision]");
     if (!decision) return;
     const root = decision.closest("[data-id]");
     const id = root?.dataset.id;
     if (root?.dataset.kind === "autofill") {
-      post("/autofill/decide", {
-        reviewId: id,
-        token: root.dataset.token,
-        decision: decision.dataset.decision,
-        expectedControllerGeneration: state.controllerGeneration,
-        conversationId: state.conversationId
-      });
+      try {
+        const res = await post("/autofill/decide", {
+          reviewId: id,
+          token: root.dataset.token,
+          decision: decision.dataset.decision,
+          expectedControllerGeneration: state.controllerGeneration,
+          conversationId: state.conversationId
+        });
+        if (!res.ok) {
+          statusEl.textContent = "Could not record that autofill decision.";
+          return;
+        }
+      } catch {
+        statusEl.textContent = "Could not record that autofill decision.";
+        return;
+      }
       state = markEntered(state, id);
       paintChat();
       return;
     }
-    runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision });
+    if (!runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision })) {
+      statusEl.textContent = "Could not send that decision. Is the terminal still running?";
+      return;
+    }
     state = markEntered(state, id);
     paintChat();
   });
@@ -10233,6 +10335,7 @@ ${multiline}` : rendered;
     runAction(item.dataset.command);
   });
   document.addEventListener("keydown", (event) => {
+    if (document.body.classList.contains("gated")) return;
     if (event.key === "Escape") {
       setMenu(false);
       return;
@@ -10286,6 +10389,7 @@ ${multiline}` : rendered;
     });
     bridge.onExit(() => {
       terminalView.setInputEnabled(false);
+      releaseTerminal();
     });
     const started = await bridge.start({
       expectedControllerGeneration: state.controllerGeneration,
@@ -10302,12 +10406,24 @@ ${multiline}` : rendered;
     state = applySnapshot(state, started.snapshot || { controller: "terminal" });
     terminalView.focus();
   }
+  async function releaseTerminal() {
+    if (!terminalId) return;
+    const bridge = window.deskApp?.terminal;
+    const id = terminalId;
+    terminalId = null;
+    try {
+      const result = await bridge?.dispose({ terminalId: id });
+      if (result?.snapshot) state = applySnapshot(state, result.snapshot);
+    } catch {
+    }
+  }
   bindDelegatedActions(document);
   mountTabs(document.getElementById("surface-tabs"), {
     selectedId: "chat",
     onSelect(id) {
       if (id === "files") loadArtifacts();
       if (id === "terminal") ensureTerminal();
+      if (id !== "terminal") releaseTerminal();
     }
   });
   filesEl.addEventListener("click", (event) => {
@@ -10351,6 +10467,8 @@ ${multiline}` : rendered;
   });
   connectRuntime();
   var gate = document.getElementById("gate");
+  var gateDock = document.getElementById("dock");
+  var gateStage = document.querySelector("main.stage");
   var gateTitle = document.getElementById("gate-title");
   var gateCopy = document.getElementById("gate-copy");
   var gateLog = document.getElementById("gate-log");
@@ -10362,14 +10480,25 @@ ${multiline}` : rendered;
   var accountLabel = document.getElementById("account-label");
   var authWaiter = null;
   var lastHealth = null;
+  var claudeAutoStarted = false;
   function setGate(open, title, copy) {
     document.body.classList.toggle("gated", open);
     gate.hidden = !open;
     gate.inert = !open;
     gate.setAttribute("aria-hidden", String(!open));
+    for (const node of [gateDock, gateStage]) {
+      if (!node) continue;
+      node.inert = open;
+      node.setAttribute("aria-hidden", String(open));
+    }
     if (title) gateTitle.textContent = title;
     if (copy) gateCopy.textContent = copy;
-    if (open) setMenu(false);
+    if (open) {
+      setMenu(false);
+      gateAction.focus();
+    } else {
+      promptEl.focus();
+    }
   }
   function appendGateLog(text) {
     gateLog.hidden = false;
@@ -10412,17 +10541,23 @@ ${multiline}` : rendered;
       return true;
     }
     if (needsInstall(health)) {
-      setGate(true, "Install Claude Code", "The desk uses Claude Code on this machine. One click runs Anthropic's official installer, then signs you in with the same Claude account you use in Chrome.");
-      gateAction.textContent = "Install and sign in";
+      setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+      gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Install and sign in";
       return false;
     }
     if (needsLogin(health)) {
-      setGate(true, "Sign in with Claude", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
-      gateAction.textContent = "Sign in with Claude";
+      setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+      gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Sign in with Claude";
       return false;
     }
     setGate(false);
     return true;
+  }
+  function autoStartClaude(health) {
+    if (claudeAutoStarted) return;
+    if (!needsInstall(health) && !needsLogin(health)) return;
+    claudeAutoStarted = true;
+    bootstrapClaude();
   }
   async function bootstrapClaude() {
     gateAction.disabled = true;
@@ -10431,11 +10566,21 @@ ${multiline}` : rendered;
       let health = await readHealth();
       if (needsInstall(health)) {
         appendGateLog("Installing Claude Code with the official installer.");
-        const res = await post("/auth/install");
-        if (!res.ok) throw new Error("Install is already running.");
-        const done = await waitForAuth("install");
-        if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
-        health = done.health || await readHealth();
+        if (window.deskApp?.ensureClaude) {
+          let info = await window.deskApp.ensureClaude();
+          while (info?.status === "installing") {
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+            info = await window.deskApp.ensureClaude();
+          }
+          if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
+          health = info?.health || await readHealth();
+        } else {
+          const res = await post("/auth/install");
+          if (!res.ok) throw new Error("Install is already running.");
+          const done = await waitForAuth("install");
+          if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
+          health = done.health || await readHealth();
+        }
       }
       if (needsLogin(health)) {
         appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
@@ -10482,6 +10627,7 @@ ${url}`);
   gateAction.addEventListener("click", () => bootstrapClaude());
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
   gateCode.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key !== "Enter") return;
     const code = gateCode.value.trim();
     if (!code) return;
@@ -10492,7 +10638,10 @@ ${url}`);
     if (meta.chromeExtensionUrl) gateChrome.href = meta.chromeExtensionUrl;
   }).catch(() => {
   });
-  readHealth().then(applyHealth).catch(() => {
+  readHealth().then((health) => {
+    applyHealth(health);
+    autoStartClaude(health);
+  }).catch(() => {
     setGate(false);
     accountLabel.textContent = "Claude status unknown";
   });

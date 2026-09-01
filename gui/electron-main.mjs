@@ -118,8 +118,13 @@ function createWindow() {
   // claude.ai logins and the Chrome Web Store need the user's real browser,
   // with its cookies and extension support, never a bare Electron window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    if (/^(https?|mailto|tel):/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("file:") || (desk && url.startsWith(desk.href))) return;
+    event.preventDefault();
+    if (/^(https?|mailto|tel):/i.test(url)) shell.openExternal(url);
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
