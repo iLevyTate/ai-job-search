@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isJobSearchWorkspace } from "./claude.mjs";
+import { createClaudeBootstrap } from "./claude-bootstrap.mjs";
+import { createDeskRuntimeFactory } from "./desk-session.mjs";
 import { startDesk } from "./server.mjs";
+import { createClaudePty, defaultSpawnPty } from "./terminal/claude-pty.mjs";
+import { switchToChat, switchToTerminal } from "./terminal/handoff.mjs";
 import {
   createWorkspace,
   defaultBrowseDir,
@@ -49,20 +53,41 @@ function sourceWorkspace() {
 
 let mainWindow = null;
 let desk = null;
+let activePty = null;
+const claudeBootstrap = createClaudeBootstrap();
+
+function opaqueId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(value) ? value : "";
+}
+
+function boundedText(value, max = 8192) {
+  return typeof value === "string" ? value.slice(0, max) : "";
+}
+
+function boundedDim(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
 
 async function openDesk(root) {
+  if (desk && desk.workspace === root) {
+    if (mainWindow) await mainWindow.loadURL(desk.href);
+    return;
+  }
+  // Start the new desk before touching the old one or the pointer: if the new
+  // root fails to serve, the running desk and the saved workspace stay valid.
+  const next = await startDesk({
+    root,
+    openBrowser: false,
+    allowRuntimeFailure: true,
+    runtimeFactory: createDeskRuntimeFactory(),
+  });
+  desk?.stop();
+  desk = next;
   writeWorkspace(root);
   process.env.JOB_SEARCH_ROOT = root;
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
-  if (desk && desk.workspace !== root) {
-    // The user picked a different folder: a kept-alive server would keep
-    // writing scrapes and CVs into the old one while the UI claims the new.
-    desk.stop();
-    desk = null;
-  }
-  if (!desk) {
-    desk = await startDesk({ root, openBrowser: false });
-  }
   if (mainWindow) await mainWindow.loadURL(desk.href);
 }
 
@@ -177,6 +202,73 @@ ipcMain.handle("open-folder", async () => {
   }
 });
 
+ipcMain.handle("terminal-start", async (_event, payload = {}) => {
+  if (!desk?.controllers) return { ok: false, error: "runtime-unavailable" };
+  const cols = boundedDim(payload.cols, 80, 2, 500);
+  const rows = boundedDim(payload.rows, 24, 2, 200);
+  const expected = Number(payload.expectedControllerGeneration);
+  return switchToTerminal({
+    controllers: desk.controllers,
+    expectedControllerGeneration: Number.isInteger(expected) ? expected : undefined,
+    startPty: async (begun) => {
+      if (!begun.sessionId) throw new Error("session-id-required");
+      activePty?.dispose();
+      const pty = createClaudePty({
+        workspace: begun.workspace,
+        sessionId: begun.sessionId,
+        permissionMode: begun.permissionMode,
+        spawnPty: defaultSpawnPty,
+      });
+      pty.start({ cols, rows });
+      pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
+      pty.onExit((info) => {
+        if (activePty?.id === pty.id) activePty = null;
+        mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code });
+      });
+      activePty = pty;
+      return pty;
+    },
+  });
+});
+
+ipcMain.handle("terminal-write", async (_event, payload = {}) => {
+  const terminalId = opaqueId(payload.terminalId);
+  const data = boundedText(payload.data);
+  if (!activePty || activePty.id !== terminalId) return { ok: false, error: "unknown-terminal" };
+  activePty.write(data);
+  return { ok: true };
+});
+
+ipcMain.handle("terminal-resize", async (_event, payload = {}) => {
+  const terminalId = opaqueId(payload.terminalId);
+  if (!activePty || activePty.id !== terminalId) return { ok: false, error: "unknown-terminal" };
+  return { ok: true, ...activePty.resize(payload.cols, payload.rows) };
+});
+
+ipcMain.handle("terminal-dispose", async (_event, payload = {}) => {
+  const terminalId = opaqueId(payload.terminalId);
+  if (activePty && (!terminalId || activePty.id === terminalId)) {
+    const snapshot = desk?.runtime?.snapshot?.();
+    if (desk?.controllers && snapshot?.controller === "terminal") {
+      const handoff = await switchToChat({
+        controllers: desk.controllers,
+        expectedControllerGeneration: snapshot.controllerGeneration,
+        terminalId: activePty.id,
+        disposePty: async () => activePty.dispose(),
+      });
+      activePty = null;
+      // Return the post-handoff snapshot so the renderer's controllerGeneration
+      // stays in sync; dropping it leaves every later message stale-controller.
+      return handoff?.ok ? { ok: true, snapshot: handoff.snapshot } : { ok: true };
+    }
+    activePty.dispose();
+    activePty = null;
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("ensure-claude", async () => claudeBootstrap.ensure());
+
 ipcMain.handle("clone-workspace", async () => {
   const destParent = await dialog.showOpenDialog(mainWindow, {
     title: "Choose where to create ai-job-search",
@@ -214,6 +306,7 @@ if (!hasLock) {
       }
     }
     createWindow();
+    claudeBootstrap.ensure().catch(() => {});
     const root = sourceWorkspace();
     if (root) {
       try {

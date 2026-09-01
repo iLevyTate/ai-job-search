@@ -14,6 +14,21 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Changed
+- Job Search Desk starts Claude Code as soon as the app opens, so first run
+  does not wait on a Start desk click. The Windows installer asks whether to
+  replace the previous app or keep a copy, then launches the new version.
+- Job Search Desk releases publish Windows x64, Linux x64, and macOS Apple
+  Silicon installers. The Intel Mac builder is dropped so a queued
+  `macos-13` runner cannot block the GitHub Release.
+- Public repo hygiene: ignore Desk local notes, drop candidate-specific
+  gitignore names, and keep first-run workspace discovery on the public
+  folder name only.
+- Job Search Desk 1.2.5: native Chat runs the Claude Agent SDK behind a
+  versioned event protocol, with Safe/Autonomous permissions, command
+  palette coverage for all 16 workflows, Files/Artifacts preview,
+  authenticated Autofill Continue/Cancel (never Submit), and a Claude-only
+  Terminal tab that resumes the same conversation. Print-mode `/send`
+  remains available when no session runtime is attached.
 
 - Job Search Desk 1.2.4: security and robustness hardening for the local desk
   server. It now rejects cross-origin POSTs and matches its host exactly,

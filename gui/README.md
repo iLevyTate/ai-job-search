@@ -1,6 +1,6 @@
 # Job search desk
 
-A localhost page that talks to Claude Code in this repo. Same conversation, slash commands, and files as the CLI. Works on **macOS, Windows, and Linux**.
+A localhost desk that talks to Claude Code in this repo. Native Chat, a Claude-only Terminal tab, and Files/Artifacts share one workspace and one conversation. Works on **macOS, Windows, and Linux**.
 
 ## Install the app
 
@@ -8,15 +8,15 @@ Download **Job Search Desk** from [Releases](https://github.com/iLevyTate/ai-job
 
 | OS | Installer |
 | --- | --- |
-| Windows | `JobSearchDesk-*-win-x64.exe` (one-click NSIS) or the portable `.exe` |
-| macOS | `JobSearchDesk-*-mac-universal.dmg` |
+| Windows | `JobSearchDesk-*-win-x64.exe` (NSIS: replace or keep the old app) or the portable `.exe` |
+| macOS Apple Silicon | `JobSearchDesk-*-mac-arm64.dmg` |
 | Linux | `JobSearchDesk-*-linux-x64.AppImage` |
 
 Then:
 
-1. Run the installer. On Windows it adds Start Menu and Desktop shortcuts and launches the app when setup finishes. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
+1. Run the installer. On Windows it asks whether to replace the previous Job Search Desk or keep a copy, then adds Start Menu and Desktop shortcuts and launches the app. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of the public repo (downloads it; Git is optional).
-3. The desk opens the conversation if you are already signed in. It only asks you to sign in when Claude Code reports you are signed out. If Claude Code is missing, it offers Anthropic's official installer, then the **claude.ai** login: the same Claude Pro / Max / Team / Enterprise account you use in Chrome.
+3. The desk starts Claude Code as soon as it opens. If Claude Code is missing, it runs Anthropic's official installer. If you are signed out, it opens the **claude.ai** login: the same Claude Pro / Max / Team / Enterprise account you use in Chrome.
 4. Optional: install [Claude in Chrome](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn) if you want the browser extension connected later.
 
 A second click of the shortcut focuses the window that is already running. It does not start a second desk.
@@ -49,9 +49,9 @@ If `claude` lives somewhere unusual:
 CLAUDE_BIN=/path/to/claude node gui/server.mjs
 ```
 
-The desk prefers Google Chrome, then the system default browser. It listens on `http://127.0.0.1:8765/`. The installable app uses the same page inside its own window.
+The desk listens on `http://127.0.0.1:8765/`. The installable app uses the same page inside its own window. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files/Artifacts previews generated PDFs and text. Ctrl+K opens the command palette.
 
-Claude in Chrome stays in **one tab group** named Job Search Desk. The desk turns Chrome integration on, names the Claude session, and resumes that session across turns and relaunches so new browser tabs join the same group instead of stacking orphans. New chat clears the page only. Set `JOB_SEARCH_CLAUDE_CHROME=0` to turn this off.
+Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`. Without that opt-in, Claude is launched with `--no-chrome` so a missing extension cannot block a turn.
 
 ## How to use it
 
@@ -60,18 +60,23 @@ Claude in Chrome stays in **one tab group** named Job Search Desk. The desk turn
 3. **Scrape**, then talk: "which of these are real Staff AI roles?"
 4. **Rank** when the table is too long.
 5. **Apply** with a URL or a pasted posting.
-6. **Autofill** on the employer ATS link. You still click Submit.
-7. Keep typing the way you would in the terminal. Enter sends. Shift+Enter is a new line. Stop cancels the current turn. New chat clears the page and starts a fresh session.
+6. **Autofill** on the employer ATS link. Review the filled form, then click Submit yourself. Desk shows Continue and Cancel only.
+7. Keep typing the way you would in Claude Code. Enter sends. Shift+Enter is a new line. Stop cancels the current turn. New chat asks before clearing the conversation.
 
-The server launches Claude with `--dangerously-skip-permissions` so `/scrape` and `/apply` are not blocked by a permission prompt on every tool. Close the app or the terminal (Ctrl+C) to stop.
+**Safe** mode asks before tools run and fails closed. **Autonomous** may bypass permissions for the selected trusted workspace. Safe is a Desk permission mode; it is not Claude CLI `--safe-mode`.
+
+Open CLI still launches Claude Code in the same folder if you want the external terminal. Close the app or Ctrl+C to stop.
 
 ## Build a release locally
 
 ```bash
 cd gui
 npm ci
+npm run build:renderer
 npm test
-npx electron-builder --publish never
+npm run rebuild:native
+npm run dist:dir
+npm run test:packaged
 ```
 
-CI builds Windows, macOS, and Linux when you push a `desk-v*` tag. See `.github/workflows/desk-release.yml`.
+Release CI builds Windows x64, macOS x64, macOS arm64, and Linux x64. Each job rebuilds native modules, validates the unpacked app, then builds the installer. See `.github/workflows/desk-release.yml`.

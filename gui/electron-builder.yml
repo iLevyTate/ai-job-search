@@ -6,16 +6,17 @@ directories:
   output: release
   buildResources: build
 files:
-  - claude.mjs
-  - defaults.mjs
-  - electron-main.mjs
-  - preload.cjs
-  - server.mjs
-  - workspace.mjs
-  - package.json
+  - "*.mjs"
+  - terminal/**/*
   - public/**/*
+  - public/dist/**/*
+  - package.json
+  - preload.cjs
 asarUnpack:
   - preload.cjs
+  - node_modules/node-pty/**/*
+  - "**/*.node"
+npmRebuild: true
 extraMetadata:
   main: electron-main.mjs
 win:
@@ -30,13 +31,16 @@ win:
 portable:
   artifactName: JobSearchDesk-${version}-win-${arch}-portable.${ext}
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: false
   shortcutName: Job Search Desk
   createDesktopShortcut: always
   createStartMenuShortcut: true
   runAfterFinish: true
-  uninstallDisplayName: Job Search Desk
+  deleteAppDataOnUninstall: false
+  uninstallDisplayName: Job Search Desk ${version}
+  include: build/installer.nsh
 mac:
   category: public.app-category.productivity
   icon: build/icon.png
