@@ -79,4 +79,4 @@ npm run dist:dir
 npm run test:packaged
 ```
 
-Release CI builds Windows x64, macOS x64, macOS arm64, and Linux x64. Each job rebuilds native modules, validates the unpacked app, then builds the installer. See `.github/workflows/desk-release.yml`.
+Release CI builds Windows x64, macOS arm64 (Apple Silicon), and Linux x64. It does not build Intel Mac. Each job rebuilds native modules, validates the unpacked app, then builds the installer. See `.github/workflows/desk-release.yml`.

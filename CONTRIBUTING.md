@@ -1,10 +1,14 @@
 # Contributing
 
-Thanks for considering a contribution! This repo has a deliberate, narrow philosophy, and most declined PRs are well-executed work that simply didn't know about it. Read this first; it will save you effort and tell you where your work will land best.
+This repository is [iLevyTate/ai-job-search](https://github.com/iLevyTate/ai-job-search): the US Job Search Desk. Open PRs here for Desk, US boards, and this product's docs.
+
+The original methodology template is [MadsLorentzen/ai-job-search](https://github.com/MadsLorentzen/ai-job-search). The merge bar below still applies to shared methodology files.
+
+Thanks for considering a contribution. Read this first; it will save you effort and tell you where your work will land best.
 
 ## The one rule everything follows from
 
-**This repo is a universal template.** People fork it and adapt it to their own market, language, and profile. Upstream stays market-agnostic, person-agnostic, and Claude Code-native. The corollary: a contribution is judged by fit to this rule first, execution quality second. Well-built but off-policy still gets declined (kindly, with reasons).
+**This product is US-first.** Desk, English defaults, and North American boards live here. Shared methodology stays person-agnostic and Claude Code-native. A contribution is judged by fit to that split first, execution quality second.
 
 ## What gets merged
 

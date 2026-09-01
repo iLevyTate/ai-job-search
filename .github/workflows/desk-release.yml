@@ -1,5 +1,5 @@
-# Build the installable Job Search Desk for Windows, macOS, and Linux.
-# Tag desk-v1.0.0 (or later) to publish a GitHub Release.
+# Build the installable Job Search Desk for Windows x64, macOS Apple Silicon,
+# and Linux x64. Intel Mac is not built. Tag desk-v* to publish a GitHub Release.
 
 name: Desk release
 
@@ -102,7 +102,7 @@ jobs:
         with:
           name: Job Search Desk ${{ github.ref_name }}
           body: |
-            Installable Job Search Desk for macOS, Windows, and Linux.
+            Installable Job Search Desk for Windows x64, macOS Apple Silicon, and Linux x64. No Intel Mac build.
 
             1. Run the installer. Windows adds Start Menu and Desktop shortcuts and opens the app when setup finishes.
             2. Open an existing job-search folder, or create a new copy of the public repo (Git is optional).

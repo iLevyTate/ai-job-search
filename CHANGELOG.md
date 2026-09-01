@@ -14,6 +14,11 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Changed
+- Public README describes this US Job Search Desk product. Credit for the
+  original methodology stays in Acknowledgements; Ko-fi, the upstream hiring
+  story, and Intel Mac release copy are gone from the front page.
+- Job Search Desk release notes and `gui/README.md` match the live matrix:
+  Windows x64, macOS Apple Silicon, Linux x64. No Intel Mac builder.
 - Job Search Desk starts Claude Code as soon as the app opens, so first run
   does not wait on a Start desk click. The Windows installer asks whether to
   replace the previous app or keep a copy, then launches the new version.
