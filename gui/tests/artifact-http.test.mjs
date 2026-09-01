@@ -29,8 +29,8 @@ async function withDesk(testFn) {
     },
   });
   await artifacts.beginTurn("turn-http");
-  write(REPO, join(".claude", "desk", "notes.md"), "after");
-  write(REPO, join(".claude", "desk", "preview.html"), "<p>preview</p>");
+  write(REPO, join("documents", "notes.md"), "after");
+  write(REPO, join("documents", "preview.html"), "<p>preview</p>");
   await artifacts.settleTurn("turn-http");
   const runtime = {
     snapshot() { return { controllerGeneration: 2 }; },

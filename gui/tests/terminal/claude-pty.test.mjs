@@ -24,10 +24,11 @@ test("PTY normalizes data and exit events from an injected process", async () =>
   pty.onExit((info) => exits.push(info));
   pty.start();
   handlers.data("hello");
-  handlers.exit(0);
   pty.write("abc");
   assert.deepEqual(chunks, ["hello"]);
-  assert.deepEqual(exits, [{ code: 0 }]);
   assert.deepEqual(written, ["abc"]);
   assert.throws(() => pty.write("x".repeat(9000)), /write-too-large/);
+  handlers.exit(0);
+  assert.deepEqual(exits, [{ code: 0 }]);
+  assert.throws(() => pty.write("abc"), /exited/);
 });

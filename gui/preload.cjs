@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("deskApp", {
   openFolder: () => ipcRenderer.invoke("open-folder"),
   cloneWorkspace: () => ipcRenderer.invoke("clone-workspace"),
   openCli: (root) => ipcRenderer.invoke("open-cli", root),
+  ensureClaude: () => ipcRenderer.invoke("ensure-claude"),
   terminal: {
     start: (payload) => ipcRenderer.invoke("terminal-start", payload),
     write: (payload) => ipcRenderer.invoke("terminal-write", payload),

@@ -169,7 +169,7 @@ If you would rather work in a window than the Claude Code TTY, install **Job Sea
 
 | OS | Installer |
 | --- | --- |
-| Windows | `JobSearchDesk-*-win-x64.exe` (one-click NSIS) or `*-portable.exe` |
+| Windows | `JobSearchDesk-*-win-x64.exe` (replace or keep the previous app) or `*-portable.exe` |
 | macOS Apple Silicon | `JobSearchDesk-*-mac-arm64.dmg` |
 | Linux | `JobSearchDesk-*-linux-x64.AppImage` |
 

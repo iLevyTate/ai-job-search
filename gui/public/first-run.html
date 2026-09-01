@@ -38,6 +38,7 @@
         <em>Terminal CLI in the same folder Desk will use</em>
       </button>
     </div>
+    <p id="claude-prep" class="hint">Getting Claude Code ready…</p>
     <p id="first-run-status" class="status first-run-status">Pick a folder to continue.</p>
     <p class="seal">Local only · Claude stays on this machine</p>
   </main>
@@ -181,7 +182,35 @@
       }
     }
 
+    async function prepareClaude() {
+      const desk = api();
+      const prep = document.getElementById("claude-prep");
+      if (!desk?.ensureClaude || !prep) return;
+      const label = (info) => {
+        if (info?.status === "ready") return "Claude Code is installed. Pick a folder and the desk will sign in if needed.";
+        if (info?.status === "installing") return "Installing Claude Code so first run is ready…";
+        if (info?.status === "failed") return "Claude Code did not install yet. You can still pick a folder and retry from the desk.";
+        return "Getting Claude Code ready…";
+      };
+      try {
+        prep.textContent = label(await desk.ensureClaude());
+      } catch {
+        prep.textContent = "Claude Code will start after you pick a folder.";
+        return;
+      }
+      const poll = window.setInterval(async () => {
+        try {
+          const info = await desk.ensureClaude();
+          prep.textContent = label(info);
+          if (info?.status === "ready" || info?.status === "failed") window.clearInterval(poll);
+        } catch {
+          window.clearInterval(poll);
+        }
+      }, 2000);
+    }
+
     showFound();
+    prepareClaude();
   </script>
 </body>
 </html>

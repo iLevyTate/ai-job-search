@@ -8,15 +8,15 @@ Download **Job Search Desk** from [Releases](https://github.com/iLevyTate/ai-job
 
 | OS | Installer |
 | --- | --- |
-| Windows | `JobSearchDesk-*-win-x64.exe` (one-click NSIS) or the portable `.exe` |
+| Windows | `JobSearchDesk-*-win-x64.exe` (NSIS: replace or keep the old app) or the portable `.exe` |
 | macOS Apple Silicon | `JobSearchDesk-*-mac-arm64.dmg` |
 | Linux | `JobSearchDesk-*-linux-x64.AppImage` |
 
 Then:
 
-1. Run the installer. On Windows it adds Start Menu and Desktop shortcuts and launches the app when setup finishes. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
+1. Run the installer. On Windows it asks whether to replace the previous Job Search Desk or keep a copy, then adds Start Menu and Desktop shortcuts and launches the app. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of the public repo (downloads it; Git is optional).
-3. The desk opens the conversation if you are already signed in. It only asks you to sign in when Claude Code reports you are signed out. If Claude Code is missing, it offers Anthropic's official installer, then the **claude.ai** login: the same Claude Pro / Max / Team / Enterprise account you use in Chrome.
+3. The desk starts Claude Code as soon as it opens. If Claude Code is missing, it runs Anthropic's official installer. If you are signed out, it opens the **claude.ai** login: the same Claude Pro / Max / Team / Enterprise account you use in Chrome.
 4. Optional: install [Claude in Chrome](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn) if you want the browser extension connected later.
 
 A second click of the shortcut focuses the window that is already running. It does not start a second desk.

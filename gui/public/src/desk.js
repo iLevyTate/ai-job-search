@@ -381,12 +381,25 @@ function connectRuntime() {
     }));
   });
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
     if (message.type === "snapshot") {
       state = applySnapshot(state, message.snapshot || {});
       paintChat();
     } else if (message.type === "event" && message.event) {
       ingest(message.event);
+    } else if (message.type === "command.rejected") {
+      // A rejected send (wrong controller, stale generation, queue full) must
+      // not leave the composer spinning as if Claude were working.
+      setBusy(false);
+      sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+    } else if (message.type === "protocol.error") {
+      setBusy(false);
+      sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
     }
   });
   socket.addEventListener("close", () => {
@@ -616,6 +629,7 @@ async function ensureTerminal() {
   });
   bridge.onExit(() => {
     terminalView.setInputEnabled(false);
+    releaseTerminal();
   });
   const started = await bridge.start({
     expectedControllerGeneration: state.controllerGeneration,
@@ -633,12 +647,27 @@ async function ensureTerminal() {
   terminalView.focus();
 }
 
+async function releaseTerminal() {
+  if (!terminalId) return;
+  const bridge = window.deskApp?.terminal;
+  const id = terminalId;
+  terminalId = null;
+  try {
+    const result = await bridge?.dispose({ terminalId: id });
+    if (result?.snapshot) state = applySnapshot(state, result.snapshot);
+  } catch {
+    // The handoff back to chat is best-effort; the runtime also resets the
+    // persisted controller on load.
+  }
+}
+
 bindDelegatedActions(document);
 mountTabs(document.getElementById("surface-tabs"), {
   selectedId: "chat",
   onSelect(id) {
     if (id === "files") loadArtifacts();
     if (id === "terminal") ensureTerminal();
+    if (id !== "terminal") releaseTerminal();
   },
 });
 filesEl.addEventListener("click", (event) => {
@@ -699,6 +728,7 @@ const accountLabel = document.getElementById("account-label");
 
 let authWaiter = null;
 let lastHealth = null;
+let claudeAutoStarted = false;
 
 function setGate(open, title, copy) {
   document.body.classList.toggle("gated", open);
@@ -757,17 +787,24 @@ function applyHealth(health) {
     return true;
   }
   if (needsInstall(health)) {
-    setGate(true, "Install Claude Code", "The desk uses Claude Code on this machine. One click runs Anthropic's official installer, then signs you in with the same Claude account you use in Chrome.");
-    gateAction.textContent = "Install and sign in";
+    setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+    gateAction.textContent = claudeAutoStarted ? "Working…" : "Install and sign in";
     return false;
   }
   if (needsLogin(health)) {
-    setGate(true, "Sign in with Claude", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
-    gateAction.textContent = "Sign in with Claude";
+    setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+    gateAction.textContent = claudeAutoStarted ? "Working…" : "Sign in with Claude";
     return false;
   }
   setGate(false);
   return true;
+}
+
+function autoStartClaude(health) {
+  if (claudeAutoStarted) return;
+  if (!needsInstall(health) && !needsLogin(health)) return;
+  claudeAutoStarted = true;
+  bootstrapClaude();
 }
 
 async function bootstrapClaude() {
@@ -777,11 +814,21 @@ async function bootstrapClaude() {
     let health = await readHealth();
     if (needsInstall(health)) {
       appendGateLog("Installing Claude Code with the official installer.");
-      const res = await post("/auth/install");
-      if (!res.ok) throw new Error("Install is already running.");
-      const done = await waitForAuth("install");
-      if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
-      health = done.health || (await readHealth());
+      if (window.deskApp?.ensureClaude) {
+        let info = await window.deskApp.ensureClaude();
+        while (info?.status === "installing") {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          info = await window.deskApp.ensureClaude();
+        }
+        if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
+        health = info?.health || (await readHealth());
+      } else {
+        const res = await post("/auth/install");
+        if (!res.ok) throw new Error("Install is already running.");
+        const done = await waitForAuth("install");
+        if (!done.ok) throw new Error(done.error || "Claude Code did not install.");
+        health = done.health || (await readHealth());
+      }
     }
     if (needsLogin(health)) {
       appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
@@ -844,7 +891,10 @@ fetch("/auth/meta")
   .catch(() => {});
 
 readHealth()
-  .then(applyHealth)
+  .then((health) => {
+    applyHealth(health);
+    autoStartClaude(health);
+  })
   .catch(() => {
     setGate(false);
     accountLabel.textContent = "Claude status unknown";

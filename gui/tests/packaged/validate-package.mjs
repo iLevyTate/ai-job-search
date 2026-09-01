@@ -21,10 +21,24 @@ assert.match(yml, /\*\*\/\*\.node/);
 assert.match(yml, /npmRebuild:\s*true/);
 
 function looksLikeUnpackedApp(dir) {
-  return existsSync(join(dir, "resources", "app.asar"))
+  if (existsSync(join(dir, "resources", "app.asar"))
     || existsSync(join(dir, "JobSearchDesk.exe"))
     || existsSync(join(dir, "Job Search Desk.exe"))
-    || existsSync(join(dir, "job-search-desk"));
+    || existsSync(join(dir, "job-search-desk"))) {
+    return true;
+  }
+  // macOS electron-builder --dir nests the app one level deeper.
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.endsWith(".app")
+        && existsSync(join(dir, entry.name, "Contents", "Resources", "app.asar"))) {
+        return true;
+      }
+    }
+  } catch {
+    // Not a readable directory.
+  }
+  return false;
 }
 
 const candidates = [
@@ -34,6 +48,10 @@ const candidates = [
 const unpacked = candidates.find((dir) => existsSync(dir) && looksLikeUnpackedApp(dir));
 
 if (!unpacked) {
+  if (process.env.JOB_SEARCH_REQUIRE_PACKAGED === "1") {
+    console.error("JOB_SEARCH_REQUIRE_PACKAGED=1 but no unpacked app was found.");
+    process.exit(1);
+  }
   console.log("Packaging config is valid. No unpacked app found; skipping runtime launch.");
   process.exit(0);
 }

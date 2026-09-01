@@ -57,20 +57,24 @@ export function createClaudePty({
       for (const listener of dataListeners) listener(String(chunk));
     });
     proc.on?.("exit", (code) => {
+      proc = null;
+      started = false;
       for (const listener of exitListeners) listener({ code });
     });
     return { id, file, args, cwd: workspace };
   }
 
   function write(data) {
-    if (disposed || !proc) throw new Error("not-started");
+    if (disposed) throw new Error("not-started");
+    if (!proc) throw new Error("exited");
     if (typeof data !== "string") throw new Error("bounded-string-required");
     if (data.length > MAX_WRITE) throw new Error("write-too-large");
     proc.write(data);
   }
 
   function resize(cols, rows) {
-    if (disposed || !proc) throw new Error("not-started");
+    if (disposed) throw new Error("not-started");
+    if (!proc) throw new Error("exited");
     const nextCols = clamp(cols, RESIZE_BOUNDS.minCols, RESIZE_BOUNDS.maxCols, 80);
     const nextRows = clamp(rows, RESIZE_BOUNDS.minRows, RESIZE_BOUNDS.maxRows, 24);
     proc.resize(nextCols, nextRows);
@@ -80,17 +84,19 @@ export function createClaudePty({
   function dispose() {
     if (disposed) return { ok: true, idempotent: true, id };
     disposed = true;
+    const pid = proc?.pid;
     try {
       proc?.kill?.();
     } catch {
       // Process may already be gone.
     }
-    if (killProcessTree && proc?.pid) {
+    if (killProcessTree && pid) {
       setTimeout(() => {
-        try { killProcessTree(proc.pid); } catch { /* already dead */ }
+        try { killProcessTree(pid); } catch { /* already dead */ }
       }, 1500).unref?.();
     }
     proc = null;
+    started = false;
     return { ok: true, id };
   }
 

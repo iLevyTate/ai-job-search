@@ -67,6 +67,10 @@ export function attachWebSocketTransport({
       const message = checked.message;
 
       if (message.type === "hello") {
+        if (helloDone) {
+          send(ws, { type: "protocol.error", error: "hello already completed" });
+          return;
+        }
         const replay = runtime.eventsAfter(message.afterSequence ?? 0);
         const lastReplayed = replay.at(-1)?.sequence ?? message.afterSequence ?? 0;
         unsubscribe = runtime.subscribe((event) => {
@@ -116,6 +120,12 @@ export function attachWebSocketTransport({
       send(ws, result.ok
         ? { type: "command.accepted", command: message.type }
         : { type: "command.rejected", reason: result.reason || "rejected" });
+      // Generation-changing commands (reset, handoffs) must push the new
+      // snapshot, or the client's stale controllerGeneration rejects the next
+      // message. The accepted result above carries no generation.
+      if (result.ok && result.snapshot) {
+        send(ws, { type: "snapshot", snapshot: result.snapshot });
+      }
     });
   });
 

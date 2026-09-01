@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isJobSearchWorkspace } from "./claude.mjs";
+import { createClaudeBootstrap } from "./claude-bootstrap.mjs";
 import { createDeskRuntimeFactory } from "./desk-session.mjs";
 import { startDesk } from "./server.mjs";
 import { createClaudePty, defaultSpawnPty } from "./terminal/claude-pty.mjs";
@@ -53,6 +54,7 @@ function sourceWorkspace() {
 let mainWindow = null;
 let desk = null;
 let activePty = null;
+const claudeBootstrap = createClaudeBootstrap();
 
 function opaqueId(value) {
   return typeof value === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(value) ? value : "";
@@ -69,23 +71,23 @@ function boundedDim(value, fallback, min, max) {
 }
 
 async function openDesk(root) {
+  if (desk && desk.workspace === root) {
+    if (mainWindow) await mainWindow.loadURL(desk.href);
+    return;
+  }
+  // Start the new desk before touching the old one or the pointer: if the new
+  // root fails to serve, the running desk and the saved workspace stay valid.
+  const next = await startDesk({
+    root,
+    openBrowser: false,
+    allowRuntimeFailure: true,
+    runtimeFactory: createDeskRuntimeFactory(),
+  });
+  desk?.stop();
+  desk = next;
   writeWorkspace(root);
   process.env.JOB_SEARCH_ROOT = root;
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
-  if (desk && desk.workspace !== root) {
-    // The user picked a different folder: a kept-alive server would keep
-    // writing scrapes and CVs into the old one while the UI claims the new.
-    desk.stop();
-    desk = null;
-  }
-  if (!desk) {
-    desk = await startDesk({
-      root,
-      openBrowser: false,
-      allowRuntimeFailure: true,
-      runtimeFactory: createDeskRuntimeFactory(),
-    });
-  }
   if (mainWindow) await mainWindow.loadURL(desk.href);
 }
 
@@ -219,7 +221,10 @@ ipcMain.handle("terminal-start", async (_event, payload = {}) => {
       });
       pty.start({ cols, rows });
       pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
-      pty.onExit((info) => mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code }));
+      pty.onExit((info) => {
+        if (activePty?.id === pty.id) activePty = null;
+        mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code });
+      });
       activePty = pty;
       return pty;
     },
@@ -245,19 +250,24 @@ ipcMain.handle("terminal-dispose", async (_event, payload = {}) => {
   if (activePty && (!terminalId || activePty.id === terminalId)) {
     const snapshot = desk?.runtime?.snapshot?.();
     if (desk?.controllers && snapshot?.controller === "terminal") {
-      await switchToChat({
+      const handoff = await switchToChat({
         controllers: desk.controllers,
         expectedControllerGeneration: snapshot.controllerGeneration,
         terminalId: activePty.id,
         disposePty: async () => activePty.dispose(),
       });
-    } else {
-      activePty.dispose();
+      activePty = null;
+      // Return the post-handoff snapshot so the renderer's controllerGeneration
+      // stays in sync; dropping it leaves every later message stale-controller.
+      return handoff?.ok ? { ok: true, snapshot: handoff.snapshot } : { ok: true };
     }
+    activePty.dispose();
     activePty = null;
   }
   return { ok: true };
 });
+
+ipcMain.handle("ensure-claude", async () => claudeBootstrap.ensure());
 
 ipcMain.handle("clone-workspace", async () => {
   const destParent = await dialog.showOpenDialog(mainWindow, {
@@ -296,6 +306,7 @@ if (!hasLock) {
       }
     }
     createWindow();
+    claudeBootstrap.ensure().catch(() => {});
     const root = sourceWorkspace();
     if (root) {
       try {

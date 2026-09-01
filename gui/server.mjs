@@ -355,10 +355,21 @@ function runClaude(prompt, { retried = false } = {}) {
   });
 }
 
+const MAX_BODY_BYTES = 1024 * 1024;
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        reject(new Error("request too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -384,7 +395,9 @@ function autofillApi() {
     markAutofillReady: (payload) => deskAutofill?.markReady(payload),
     decideAutofill: (payload) => deskAutofill?.decide({
       ...payload,
-      currentGeneration: deskRuntime?.snapshot?.()?.controllerGeneration,
+      // The no-runtime fallback reports controllerGeneration 1 (see snapshot
+      // below); passing undefined here would 409 every Continue/Cancel.
+      currentGeneration: 1,
     }),
     pollAutofillDecision: (payload) => deskAutofill?.pollDecision(payload),
     snapshot: () => ({ controllerGeneration: 1 }),
@@ -771,7 +784,20 @@ export async function startDesk(options = {}) {
     throw new Error(existingWorkspaceHint());
   }
   rememberWorkspace(workspace);
+  // A workspace switch must not carry the previous desk's turn state into the
+  // new folder: a dying child's close handler would otherwise save the old
+  // session id into the new workspace's desk-session.json.
   sessionId = loadDeskSession(workspace);
+  child = null;
+  busy = false;
+  helper = null;
+  streamedText = false;
+  sawInit = false;
+  stopRequested = false;
+  turnText = "";
+  turnGen = 0;
+  resetGen = 0;
+  transcript.length = 0;
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
   let runtime = options.runtime || null;
@@ -784,8 +810,8 @@ export async function startDesk(options = {}) {
     }
   }
   deskRuntime = runtime;
-  deskAutofill = options.autofill || createAutofillBridge();
-  deskArtifacts = options.artifacts || createArtifactService({ workspace });
+  deskAutofill = options.autofill || runtime?.autofillBridge || createAutofillBridge();
+  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace });
   let transport = null;
 
   const stop = (exitProcess = false) => {
@@ -799,8 +825,15 @@ export async function startDesk(options = {}) {
     if (exitProcess) setTimeout(() => process.exit(0), 500).unref();
   };
 
-  process.on("SIGINT", () => stop(true));
-  process.on("SIGTERM", () => stop(true));
+  // Signal handlers accumulate if startDesk runs again (workspace switch), so
+  // each registration removes itself before re-adding.
+  function stopOnSignal() {
+    stop(true);
+  }
+  process.off("SIGINT", stopOnSignal);
+  process.off("SIGTERM", stopOnSignal);
+  process.on("SIGINT", stopOnSignal);
+  process.on("SIGTERM", stopOnSignal);
 
   const preferred = options.port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
   let bound = preferred;

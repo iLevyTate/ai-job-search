@@ -41,15 +41,15 @@ test("excludes skills without desk metadata", async () => {
   assert.equal(registry.get("job-application-assistant"), undefined);
 });
 
-test("fails clearly on malformed metadata and picks up a new fixture command", async () => {
+test("skips malformed metadata and still picks up a new fixture command", async () => {
   const root = mkdtempSync(join(tmpdir(), "desk-commands-"));
   mkdirSync(join(root, ".claude", "commands"), { recursive: true });
   mkdirSync(join(root, ".claude", "skills"), { recursive: true });
+  // A malformed file must not abort the whole registry.
   writeFileSync(join(root, ".claude", "commands", "broken.md"), "---\ndesk:\n  id: broken\n  invocation: /broken\n  arguments:\n    - kind: nope\n      name: x\n---\n");
-  await assert.rejects(() => createCommandRegistry({ workspace: root }), /unknown argument kind/);
-
-  writeFileSync(join(root, ".claude", "commands", "broken.md"), "---\ndesk:\n  id: extra\n  invocation: /extra\n  title: Extra\n---\n# extra\n");
+  writeFileSync(join(root, ".claude", "commands", "extra.md"), "---\ndesk:\n  id: extra\n  invocation: /extra\n  title: Extra\n---\n# extra\n");
   const registry = await createCommandRegistry({ workspace: root });
+  assert.equal(registry.get("broken"), undefined);
   assert.ok(registry.get("extra"));
   assert.equal(registry.render("extra", {}), "/extra");
 });
