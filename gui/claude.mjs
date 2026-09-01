@@ -42,25 +42,32 @@ export function extraBinDirs(env = process.env) {
 }
 
 let persistedWindowsPath;
+let warmingWindowsPath;
+
+export function warmWindowsPersistedPath() {
+  if (!IS_WIN || persistedWindowsPath !== undefined || warmingWindowsPath) return warmingWindowsPath;
+  warmingWindowsPath = execFileAsync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "[Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')",
+    ],
+    { encoding: "utf8", timeout: 8000, windowsHide: true },
+  )
+    .then(({ stdout }) => {
+      persistedWindowsPath = stdout.trim();
+    })
+    .catch(() => {
+      persistedWindowsPath = "";
+    });
+  return warmingWindowsPath;
+}
 
 function windowsPersistedPath() {
   if (!IS_WIN) return "";
-  if (persistedWindowsPath !== undefined) return persistedWindowsPath;
-  persistedWindowsPath = "";
-  try {
-    persistedWindowsPath = execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-Command",
-        "[Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')",
-      ],
-      { encoding: "utf8", timeout: 8000, windowsHide: true },
-    ).trim();
-  } catch {
-    persistedWindowsPath = "";
-  }
-  return persistedWindowsPath;
+  warmWindowsPersistedPath();
+  return persistedWindowsPath !== undefined ? persistedWindowsPath : "";
 }
 
 export function withClaudePath(env = process.env) {
@@ -86,6 +93,17 @@ function windowsRunnable(found) {
 
 const commandCache = new Map();
 
+function insideJobSearchWorkspace(candidate) {
+  let dir = dirname(candidate);
+  let prev;
+  while (dir && dir !== prev) {
+    if (isJobSearchWorkspace(dir)) return true;
+    prev = dir;
+    dir = dirname(dir);
+  }
+  return false;
+}
+
 export function resolveCommand(name, env = process.env) {
   if (env.CLAUDE_BIN && name === "claude") return env.CLAUDE_BIN;
 
@@ -102,11 +120,13 @@ export function resolveCommand(name, env = process.env) {
     const found = execFileSync(IS_WIN ? "where" : "which", [name], {
       encoding: "utf8",
       env: merged,
+      cwd: homedir(),
       timeout: 5000,
     })
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((line) => !insideJobSearchWorkspace(line));
     const preferred = found.find((line) => /\.(cmd|exe|bat)$/i.test(line)) || found[0];
     if (preferred) return remember(name, windowsRunnable(preferred), env);
   } catch {
@@ -116,7 +136,7 @@ export function resolveCommand(name, env = process.env) {
   for (const dir of extraBinDirs(merged)) {
     for (const file of candidateNames(name)) {
       const path = join(dir, file);
-      if (existsSync(path)) return remember(name, windowsRunnable(path), env);
+      if (existsSync(path) && !insideJobSearchWorkspace(path)) return remember(name, windowsRunnable(path), env);
     }
   }
   return name;
@@ -205,6 +225,7 @@ export function windowsShimTarget(shim) {
   const dir = dirname(shim);
   for (const match of content.matchAll(/"%dp0%([^"]+)"/g)) {
     const target = join(dir, ...match[1].split(/[\\/]/).filter(Boolean));
+    if (/[\\/]node\.exe$/i.test(target)) continue;
     if (existsSync(target)) return target;
   }
   return "";
@@ -259,8 +280,13 @@ export function loadDeskSession(root) {
 }
 
 export function saveDeskSession(root, id) {
-  mkdirSync(join(root, ".claude"), { recursive: true });
-  writeFileSync(deskSessionPath(root), `${JSON.stringify({ sessionId: id, name: DESK_SESSION_NAME }, null, 2)}\n`);
+  try {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(deskSessionPath(root), `${JSON.stringify({ sessionId: id, name: DESK_SESSION_NAME }, null, 2)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clearDeskSession(root) {
@@ -390,7 +416,7 @@ export function spawnOfficialInstall() {
       { windowsHide: true, env: process.env },
     );
   }
-  return spawn("bash", ["-lc", `curl -fsSL ${CLAUDE_INSTALL_SH} | bash`], { env: process.env });
+  return spawn("bash", ["-lc", `curl -fsSL ${CLAUDE_INSTALL_SH} | bash`], { env: process.env, detached: true });
 }
 
 export function parseClaudeVersion(raw) {
@@ -409,7 +435,7 @@ export function claudeSupportsDeskRuntime(version) {
 export function spawnSubscriptionLogin({ cwd, email } = {}) {
   const args = ["auth", "login", "--claudeai"];
   if (email) args.push("--email", email);
-  const child = spawnClaude(args, { cwd });
+  const child = spawnClaude(args, { cwd, detached: process.platform !== "win32" });
   // If the spawn fails, stdin errors asynchronously; without a listener that
   // EPIPE is an uncaught exception in the desk process.
   child.stdin?.on("error", () => {});

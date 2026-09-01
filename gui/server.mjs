@@ -49,6 +49,11 @@ const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".json": "application/json",
+  ".ico": "image/x-icon",
 };
 
 const clients = new Set();
@@ -80,6 +85,12 @@ function send(event, data) {
   for (const res of clients) res.write(payload);
 }
 
+function sendTurnError(text) {
+  send("turn-error", { text });
+  transcript.push({ role: "error", text });
+  if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+}
+
 function snapshot(withTranscript = false) {
   const base = {
     sessionId,
@@ -87,7 +98,11 @@ function snapshot(withTranscript = false) {
     chromeGroup: chromeEnabled() ? DESK_SESSION_NAME : null,
     workspace,
   };
-  if (withTranscript) base.transcript = transcript.slice(-200);
+  if (withTranscript) {
+    const rows = transcript.slice(-200);
+    if (busy && turnText) rows.push({ role: "assistant", text: turnText, partial: true });
+    base.transcript = rows;
+  }
   return base;
 }
 
@@ -172,7 +187,7 @@ function handleStreamLine(line) {
       send("result", { text: event.result });
     }
     if (event.is_error) {
-      send("turn-error", { text: event.result || "Claude reported an error." });
+      sendTurnError(event.result || "Claude reported an error.");
     }
   }
 }
@@ -211,7 +226,7 @@ function stopClaude(reason = "Stopped") {
 
 function stopHelper() {
   if (!helper) return;
-  stopProcess(helper, false);
+  stopProcess(helper, !IS_WIN);
   helper = null;
 }
 
@@ -269,8 +284,8 @@ function runHelper(kind, factory) {
 
 function runClaude(prompt, { retried = false } = {}) {
   if (busy) {
-    send("turn-error", { text: "Claude is already working. Stop the turn, or wait." });
-    return;
+    sendTurnError("Claude is already working. Stop the turn, or wait.");
+    return false;
   }
 
   if (!commandLooksInstalled(resolveCommand("claude"))) {
@@ -289,11 +304,13 @@ function runClaude(prompt, { retried = false } = {}) {
   turnText = "";
   toolNames.clear();
   const gen = ++turnGen;
+  let settled = false;
   const superseded = () => gen <= resetGen;
   send("status", { text: turnStatusText({ resuming: Boolean(sessionId) }) });
   if (!retried) {
     send("user", { text: prompt });
     transcript.push({ role: "user", text: prompt });
+    if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
   }
 
   child = spawnClaude(args, { cwd: workspace, detached: !IS_WIN });
@@ -318,15 +335,18 @@ function runClaude(prompt, { retried = false } = {}) {
     if (text) send("log", { text });
   });
   child.on("error", (err) => {
+    if (gen !== turnGen) return;
+    if (settled) return;
+    settled = true;
     busy = false;
     child = null;
-    send("turn-error", {
-      text:
-        err.code === "ENOENT" ? MISSING_CLAUDE_TEXT : err.message,
-    });
+    sendTurnError(err.code === "ENOENT" ? MISSING_CLAUDE_TEXT : err.message);
     send("idle", snapshot());
   });
   child.on("close", (code) => {
+    if (gen !== turnGen) return;
+    if (settled) return;
+    settled = true;
     // A child that outlived a /reset must still release busy, but its
     // buffered output, retry, and error reporting belong to the old
     // conversation and are dropped.
@@ -347,10 +367,11 @@ function runClaude(prompt, { retried = false } = {}) {
     }
     if (turnText.trim()) {
       transcript.push({ role: "assistant", text: turnText });
+      if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
       turnText = "";
     }
     const failure = exitErrorText(code, stopRequested);
-    if (failure) send("turn-error", { text: failure });
+    if (failure) sendTurnError(failure);
     send("idle", snapshot());
   });
 }
@@ -361,23 +382,41 @@ function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
-    req.on("data", (chunk) => {
+    let tooLarge = false;
+    const onData = (chunk) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error("request too large"));
-        req.destroy();
+        tooLarge = true;
+        req.off("data", onData);
+        req.resume();
+        const err = new Error("request too large");
+        err.tooLarge = true;
+        reject(err);
         return;
       }
       chunks.push(chunk);
+    };
+    req.on("data", onData);
+    req.on("end", () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks).toString("utf8"));
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    // A drain that aborts mid-flight must not raise an unhandled 'error'.
+    req.on("error", () => {
+      if (!tooLarge) reject(new Error("request stream error"));
+    });
   });
 }
 
 async function readJson(req) {
+  let raw;
   try {
-    return JSON.parse((await readBody(req)) || "{}");
+    raw = await readBody(req);
+  } catch (err) {
+    if (err?.tooLarge) throw err;
+    return null;
+  }
+  try {
+    return JSON.parse(raw || "{}");
   } catch {
     return null;
   }
@@ -430,9 +469,14 @@ function json(res, status, body) {
 
 function createDeskServer() {
   return createServer((req, res) => {
-    handleRequest(req, res).catch(() => {
+    handleRequest(req, res).catch((err) => {
       // A handler throw must never take the desk down (in the app the
       // embedded server dying closes the whole desk).
+      if (err?.tooLarge) {
+        if (!res.headersSent) json(res, 413, { ok: false, error: "payload too large" });
+        else res.end();
+        return;
+      }
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -686,7 +730,10 @@ async function handleRequest(req, res) {
         json(res, 400, { ok: false, error: "prompt required" });
         return;
       }
-      runClaude(prompt);
+      if (runClaude(prompt) === false) {
+        json(res, 409, { ok: false, error: "busy" });
+        return;
+      }
       json(res, 202, { ok: true });
       return;
     }
@@ -739,7 +786,9 @@ function openBrowser(href) {
   const detach = { detached: true, stdio: "ignore" };
   if (IS_WIN) {
     const chrome = spawn("cmd", ["/c", "start", "", "chrome", href], detach);
-    chrome.on("error", () => spawn("cmd", ["/c", "start", "", href], detach).unref());
+    chrome.on("exit", (code) => {
+      if (code) spawn("cmd", ["/c", "start", "", href], detach).unref();
+    });
     chrome.unref();
     return;
   }

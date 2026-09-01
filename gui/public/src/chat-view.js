@@ -122,7 +122,12 @@ function renderPermissionBody(card) {
 
 function renderAutofillBody(card) {
   const disabled = card.entered ? " disabled" : "";
-  const url = card.payload.url ? `<p><a href="${escapeHtml(card.payload.url)}" target="_blank" rel="noreferrer">${escapeHtml(card.payload.url)}</a></p>` : "";
+  const rawUrl = card.payload.url || "";
+  const url = rawUrl
+    ? (/^(https?:|mailto:)/i.test(rawUrl)
+      ? `<p><a href="${escapeHtml(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml(rawUrl)}</a></p>`
+      : `<p>${escapeHtml(rawUrl)}</p>`)
+    : "";
   const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml(card.payload.screenshot)}</p>` : "";
   return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml(card.id)}" data-token="${escapeHtml(card.payload.token || "")}">
     <p>The form is filled. Submit stays in the browser. Continue closes Autofill; Cancel stops it.</p>

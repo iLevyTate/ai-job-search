@@ -52,6 +52,10 @@ const paletteList = document.getElementById("palette-list");
 
 let busy = false;
 let sseSequence = 0;
+let sseTurn = 0;
+let sseTurnClosed = true;
+let sendPending = false;
+let replayingTranscript = false;
 let commands = [];
 let activeCommand = null;
 let runtimeSocket = null;
@@ -139,7 +143,6 @@ function setBusy(next) {
   sendBtn.disabled = next && !runtimeSocket;
   stopBtn.hidden = !next;
   document.body.classList.toggle("working", next);
-  document.body.setAttribute("aria-busy", String(next));
   statusEl.textContent = next ? "Claude is working" : "Ready";
 }
 
@@ -176,8 +179,10 @@ function paintFiles() {
 }
 
 function ingest(event) {
+  const wasBusy = state.busy;
   state = reduceDeskEvent(state, event);
   paintChat();
+  if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
   if (event.type === "artifact.discovered") {
     const incoming = {
       id: event.payload.artifactId || event.payload.entityId,
@@ -237,19 +242,41 @@ async function showArtifactCompare(id) {
 async function confirmArtifactAction() {
   const confirm = artifactState.confirm;
   if (!confirm) return;
-  await post(`/artifacts/${confirm.id}/${confirm.action}`, {
-    expectedControllerGeneration: state.controllerGeneration,
-  });
+  try {
+    const res = await post(`/artifacts/${confirm.id}/${confirm.action}`, {
+      expectedControllerGeneration: state.controllerGeneration,
+    });
+    if (!res.ok) {
+      artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
+      paintFiles();
+      return;
+    }
+  } catch {
+    artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
+    paintFiles();
+    return;
+  }
   artifactState = { ...artifactState, confirm: null };
   paintFiles();
 }
 
 function sseEvent(type, payload) {
   sseSequence += 1;
+  if (type === "user.message" || type === "assistant.message") {
+    sseTurn += 1;
+    sseTurnClosed = false;
+  } else if (type === "assistant.delta") {
+    if (sseTurnClosed) {
+      sseTurn += 1;
+      sseTurnClosed = false;
+    }
+  } else if (type === "turn.completed" || type === "turn.failed" || type === "turn.interrupted") {
+    sseTurnClosed = true;
+  }
   ingest({
     eventId: `sse-${sseSequence}`,
     sequence: Math.max(state.lastSequence + 1, sseSequence),
-    turnId: "print",
+    turnId: `turn-${sseTurn}`,
     type,
     payload,
   });
@@ -284,36 +311,42 @@ async function sendPrompt(prompt) {
     return true;
   }
   if (busy) return false;
-  if (!lastHealth?.loggedIn) {
-    try {
-      lastHealth = await readHealth();
-    } catch {
-      // Keep the last known status if the health endpoint blips.
-    }
-  }
-  if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
-    applyHealth(lastHealth || { installed: false });
-    if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
-      sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
-    }
-    return false;
-  }
-  setMenu(false);
-  setBusy(true);
-  const messageId = `m-${Date.now()}`;
-  if (runtimeSend({ type: "user.message", messageId, text })) {
-    sseEvent("user.message", { messageId, text });
-    return true;
-  }
+  if (sendPending) return false;
+  sendPending = true;
   try {
-    sseEvent("user.message", { text });
-    const res = await post("/send", { prompt: text });
-    if (!res.ok) throw new Error();
-    return true;
-  } catch {
-    setBusy(false);
-    sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
-    return false;
+    if (!lastHealth?.loggedIn) {
+      try {
+        lastHealth = await readHealth();
+      } catch {
+        // Keep the last known status if the health endpoint blips.
+      }
+    }
+    if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
+      applyHealth(lastHealth || { installed: false });
+      if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
+        sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
+      }
+      return false;
+    }
+    setMenu(false);
+    setBusy(true);
+    const messageId = `m-${Date.now()}`;
+    if (runtimeSend({ type: "user.message", messageId, text })) {
+      sseEvent("user.message", { messageId, text });
+      return true;
+    }
+    try {
+      sseEvent("user.message", { text });
+      const res = await post("/send", { prompt: text });
+      if (!res.ok) throw new Error();
+      return true;
+    } catch {
+      setBusy(false);
+      sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
+      return false;
+    }
+  } finally {
+    sendPending = false;
   }
 }
 
@@ -416,9 +449,14 @@ source.addEventListener("hello", (event) => {
   setBusy(Boolean(data.busy));
   rememberSession(data);
   if (Array.isArray(data.transcript) && data.transcript.length && !state.cards.size) {
-    for (const entry of data.transcript) {
-      const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
-      sseEvent(type, { text: entry.text || "" });
+    replayingTranscript = true;
+    try {
+      for (const entry of data.transcript) {
+        const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
+        sseEvent(type, { text: entry.text || "" });
+      }
+    } finally {
+      replayingTranscript = false;
     }
   }
 });
@@ -450,7 +488,16 @@ source.addEventListener("autofill-review", (event) => {
   const payload = JSON.parse(event.data);
   sseEvent("autofill.review", payload);
 });
+source.addEventListener("reset", () => {
+  state = createDeskState({ permissionMode: state.permissionMode });
+  sseSequence = 0;
+  sseTurn = 0;
+  sseTurnClosed = true;
+  paintChat();
+  jumpBtn.hidden = true;
+});
 source.addEventListener("idle", () => {
+  sseTurnClosed = true;
   setBusy(false);
   state = applySnapshot(state, { busy: false });
   paintChat();
@@ -490,6 +537,7 @@ form.addEventListener("submit", async (event) => {
 
 promptEl.addEventListener("input", sizePrompt);
 promptEl.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     form.requestSubmit();
@@ -512,14 +560,33 @@ sheetForm.addEventListener("submit", (event) => {
   sendPrompt(renderCommandInvocation(activeCommand, valuesFromForm(sheetFields)));
 });
 
-stopBtn.addEventListener("click", () => {
-  if (!runtimeSend({ type: "turn.interrupt" })) post("/stop");
+stopBtn.addEventListener("click", async () => {
+  if (runtimeSend({ type: "turn.interrupt" })) return;
+  try {
+    const res = await post("/stop");
+    if (!res.ok) statusEl.textContent = "Could not stop the current turn.";
+  } catch {
+    statusEl.textContent = "Could not stop the current turn.";
+  }
 });
 resetBtn.addEventListener("click", async () => {
   if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
-  if (!runtimeSend({ type: "conversation.reset" })) await post("/reset");
+  if (!runtimeSend({ type: "conversation.reset" })) {
+    try {
+      const res = await post("/reset");
+      if (!res.ok) {
+        statusEl.textContent = "Could not start a new conversation.";
+        return;
+      }
+    } catch {
+      statusEl.textContent = "Could not start a new conversation.";
+      return;
+    }
+  }
   state = createDeskState({ permissionMode: state.permissionMode });
   sseSequence = 0;
+  sseTurn = 0;
+  sseTurnClosed = true;
   paintChat();
   jumpBtn.hidden = true;
   setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -541,29 +608,44 @@ logEl.addEventListener("submit", (event) => {
   if (!formNode) return;
   event.preventDefault();
   const id = formNode.dataset.id;
-  runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) });
+  if (!runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) })) {
+    statusEl.textContent = "Could not send your answer. Is the terminal still running?";
+    return;
+  }
   state = markEntered(state, id);
   paintChat();
 });
 
-logEl.addEventListener("click", (event) => {
+logEl.addEventListener("click", async (event) => {
   const decision = event.target.closest("[data-decision]");
   if (!decision) return;
   const root = decision.closest("[data-id]");
   const id = root?.dataset.id;
   if (root?.dataset.kind === "autofill") {
-    post("/autofill/decide", {
-      reviewId: id,
-      token: root.dataset.token,
-      decision: decision.dataset.decision,
-      expectedControllerGeneration: state.controllerGeneration,
-      conversationId: state.conversationId,
-    });
+    try {
+      const res = await post("/autofill/decide", {
+        reviewId: id,
+        token: root.dataset.token,
+        decision: decision.dataset.decision,
+        expectedControllerGeneration: state.controllerGeneration,
+        conversationId: state.conversationId,
+      });
+      if (!res.ok) {
+        statusEl.textContent = "Could not record that autofill decision.";
+        return;
+      }
+    } catch {
+      statusEl.textContent = "Could not record that autofill decision.";
+      return;
+    }
     state = markEntered(state, id);
     paintChat();
     return;
   }
-  runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision });
+  if (!runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision })) {
+    statusEl.textContent = "Could not send that decision. Is the terminal still running?";
+    return;
+  }
   state = markEntered(state, id);
   paintChat();
 });
@@ -579,6 +661,7 @@ paletteList?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (document.body.classList.contains("gated")) return;
   if (event.key === "Escape") {
     setMenu(false);
     return;
@@ -716,6 +799,8 @@ fetch("/commands")
 connectRuntime();
 
 const gate = document.getElementById("gate");
+const gateDock = document.getElementById("dock");
+const gateStage = document.querySelector("main.stage");
 const gateTitle = document.getElementById("gate-title");
 const gateCopy = document.getElementById("gate-copy");
 const gateLog = document.getElementById("gate-log");
@@ -735,9 +820,19 @@ function setGate(open, title, copy) {
   gate.hidden = !open;
   gate.inert = !open;
   gate.setAttribute("aria-hidden", String(!open));
+  for (const node of [gateDock, gateStage]) {
+    if (!node) continue;
+    node.inert = open;
+    node.setAttribute("aria-hidden", String(open));
+  }
   if (title) gateTitle.textContent = title;
   if (copy) gateCopy.textContent = copy;
-  if (open) setMenu(false);
+  if (open) {
+    setMenu(false);
+    gateAction.focus();
+  } else {
+    promptEl.focus();
+  }
 }
 
 function appendGateLog(text) {
@@ -876,6 +971,7 @@ source.addEventListener("auth-done", (event) => {
 gateAction.addEventListener("click", () => bootstrapClaude());
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
 gateCode.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key !== "Enter") return;
   const code = gateCode.value.trim();
   if (!code) return;
