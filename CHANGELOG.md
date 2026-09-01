@@ -67,6 +67,97 @@ per-file diff commands.
   still works. Pinned by `gui/tests/claude.test.mjs` and
   `.github/workflows/desk-release.yml` on `desk-v*` tags.
 
+### Security
+
+- **`settings.json` no longer pre-approves `bun run` on arbitrary files** (#396) - the
+  template's permission allowlist granted `Bash(bun run:*)`, which auto-approved
+  `bun run <any file on disk>` in every fork. It is now one path-scoped entry per shipped
+  portal CLI, matching what each portal SKILL.md already declares. `/scrape` is unaffected
+  for all portals, including ones added by `/add-portal` - the job-scraper skill's own
+  `allowed-tools` carries the path-scoped wildcard that covers them during the workflow.
+  Running a portal CLI ad hoc outside a skill now prompts once, which is the intended
+  behavior for anything not on the reviewed list. Thanks @vkotaru.
+
+### Fixed
+
+- **The `documents/interview/**` ignore rule no longer claims interview prep is written there**
+  (#336). `/interview` saves its pack to
+  `documents/applications/<company>_<role>/interview_prep_<stage>.md`, already ignored by
+  `documents/applications/**`; nothing has ever written to `documents/interview/`. Nothing leaked -
+  but it was the personal-data block's one dedicated line about interview material, so an auditor
+  checking the framework's most sensitive artifact had every reason to read it and stop, at the
+  only path in the block with no writer. The protection rationale now sits above
+  `documents/applications/**`, the rule that actually provides it, so the next reader finds it
+  where it lives; `documents/interview/**` stays, relabelled belt-and-braces rather than primary
+  guard (`REQUIRED_IGNORE_RULES` pins it, so removing it from `.gitignore` alone fails the guard).
+  Pinned by `tests/test_security_guards.py`, which derives the prep-pack path from
+  `/interview`'s own spec instead of hardcoding it - so moving that path fails CI rather than
+  quietly re-staling the comment.
+
+- **`/scrape` now persists each posting's publication date** (#390) - Step 2's contract guarantees a
+  `date` on every portal CLI's search output (CI enforces it in `test_scrape_contract.py`) and
+  Step 1b uses that date to scope a run to the last 14 days, but Step 4's `seen_jobs.json` schema
+  stored no posting date at all: `first_seen` is when the scraper saw an entry, not when the
+  employer posted it. The freshness window was therefore unauditable the moment a run ended, and
+  `/rank` - which reads the stored entry, not the run - had no age signal to weigh. A
+  `freehire-search` posting dated 2024-05-13 was scraped 27 months later and ranked Strong Fit at
+  position 1 of 133; the scoring note recorded that the listing "may be long stale" in prose
+  nothing reads, and an `/apply` run drafted a tailored CV and cover letter against it. The schema
+  gains `posted_date` (`null` when the portal returned no date, never inferred or backfilled).
+  Pinned by three new cases in `test_scrape_contract.py`, each verified to fail on the unfixed
+  spec. Reported and diagnosed from a real run by @sandunwijerathne.
+
+## [1.7.0] - 2026-08-29
+
+### Fixed
+
+- **Fork clones no longer point `gh issue create` at the upstream public tracker
+  undetected** (#389) - `gh repo fork --clone`, the exact command SETUP.md's fork step
+  recommends, sets the *upstream* repo as gh's default repository, and gh uses the
+  default for creating issues and PRs - so a user's own automation ("file a tracking
+  issue per application") silently published personal job-search data on the upstream
+  repo, under the user's identity, where they cannot delete it (four live instances from
+  two users in one week). SETUP.md section 2 now adds `gh repo set-default
+  <your-username>/ai-job-search` directly to the fork commands with a warning at the
+  point of decision (the #348 pattern), and a new `.github/ISSUE_TEMPLATE/` carries the
+  same heads-up the PR template already had, for the web-UI path. Blank issues stay
+  enabled - the template warns, it does not gatekeep.
+- **`freehire-search` fractional numeric flags no longer silently change the query** (#373) -
+  `parseIntFlag` used bare `parseInt`, so a fractional value was truncated instead of
+  rejected: `--jobage 0.5` became `0`, failed the `jobage > 0` guard, and the
+  `posted_within_days` freshness filter was silently omitted from the outbound request
+  while the CLI exited 0 - on a default-ON `/scrape` portal, exactly the
+  discarded-filter failure the CLI's own `UNKNOWN_FLAG` guard documents. Numeric flags
+  (`--jobage`/`--page`/`--limit`) now accept whole numbers >= 1 only, mirroring the
+  Danish CLIs' `z.coerce.number().int().min(1)` contract, and reject everything else
+  with the stderr-JSON `BAD_ARG` error. The sibling of #371 (`linkedin-search`), which
+  remains with its reporter. Pinned by five new cases in `cli-flag-validation.test.ts`,
+  each verified to fail on the unfixed code.
+
+### Added
+
+- **`linkedin-search detail` reports closed postings** (#280, adopted with the original
+  author's commit preserved) - a new `isActive` field: `false` when the posting page
+  renders LinkedIn's own "No longer accepting applications" top-card banner. Detection
+  is scoped to the top card and pinned by fixture tests in both directions, including
+  the false-positive case the review required (recruiter boilerplate quoting the closed
+  phrase in a *description* must not flag a live job - on the unscoped first version it
+  did, and the new tests fail there). Only the two markers real closed pages carry are
+  matched (`closed-job__flavor` and the banner text, verified against live guest
+  pages); three speculative phrases from the first version were dropped as
+  false-positive-only risk. `/scrape` Step 2 now consumes the signal: a closed-at-source
+  job is recorded in `seen_jobs.json` as `"status": "expired"` - marked, never silently
+  dropped, per the `/rank` pattern - which is the fix for the ghost-LinkedIn-jobs class
+  in #331 (an expired LinkedIn URL redirects to a *similar live job*, so a stored hit
+  can die unnoticed between scrape and click). `isActive: true` is documented as
+  absence of the banner, not proof the posting is open.
+- **pypdf ATS text-layer fallback** - `/apply` Step 5d and `tools/verify_pdf.py` extract the CV PDF text layer with **pypdf** first (BSD, `pip install pypdf`) so Windows machines without Poppler still get a mechanical parseability check. Poppler `pdftotext -layout -enc UTF-8` remains the fallback; if both are missing the check still degrades to a visual keyword review. No extra cache or installer. `05-cv-templates.md` `framework_version` 1.4.2 → 1.4.3.
+- **CI now tests the full documented Python range** (#370) - the Python tool tests job
+  runs a 3.10-3.14 version matrix instead of pinning 3.12, so both the documented 3.10
+  minimum and the newest Python are continuously verified. Grew out of an independent
+  cross-platform verification (Windows + Linux, Python 3.14) contributed by
+  @atiqur-rahman-pro, whose report also confirmed the suite's expected
+  PyYAML-dependent skips in a clean container. Thanks!
 - **Company-research cache for `/apply` and `/interview`** - `/apply` Step 3's reviewer
   agent and `/interview` Step 2 each independently execute the Company Research
   Checklist (`04-job-evaluation.md`) for the same company, so applying and later
@@ -81,7 +172,57 @@ per-file diff commands.
   `security_guards.py`'s `REQUIRED_IGNORE_RULES` (a plain rooted pattern, not `**/`
   -prefixed - the cache is referenced from commands, not a skill, so it resolves
   against the repo root normally). Pinned by the new
-  `tests/test_company_research_cache.py`.
+  `tests/test_company_research_cache.py`. Cache contents are documented as data, never
+  instructions, for a later session reading the file - the same trust-boundary rule
+  `apply.md` Step 0 states for the posting itself, since cache notes are written from
+  the same fetched web content. The verification-still-applies restatement in both
+  `apply.md` and `interview.md`'s cache-check paragraphs is now pinned too.
+- **CI now compiles the LaTeX examples on Debian bookworm's apt-packaged TeX Live** (the
+  separate-PR follow-up invited in #323's review). The `latex-smoke` job ran only
+  `texlive/texlive:latest` - the environment that never had the #242 bug, so the moderncv-2.3.1
+  compile fix shipped guarded by nothing: the next edit to `cv/main_example.tex` could
+  reintroduce a `\firstnamestyle` override or a top-level `\usepackage{hyperref}` and CI would
+  stay green. The job is now a two-leg matrix, `texlive-latest` unchanged and `debian-bookworm`
+  installing TeX Live 2022 from apt (moderncv 2.3.1, verified in a real bookworm container:
+  both documents compile clean and the strict stock assertions - 2-page CV, 1-page cover
+  letter, extractable text - pass on both legs unchanged). `--no-install-recommends` keeps the
+  leg lean, which makes two font packages explicit requirements: `texlive-fonts-extra`
+  (moderncv loads fontawesome5) and `texlive-fonts-recommended` (hyperref's xetex driver
+  probes the `pzdr` metrics). **Note for repo admins:** the matrix renames the check from
+  "Compile example CV and cover letter" to two leg-suffixed names, so a branch-protection
+  rule requiring the old name needs updating once.
+
+### Fixed
+
+- **`/reset profile` left candidate data in two of the skill files it claims to clear**
+  (#364) - `/setup` Step 3 populates six skill files; the profile scope cleared four.
+  `04-job-evaluation.md` was listed by name under "files NOT touched (they contain
+  framework rules, not candidate data)" while Step 3.4 writes the user's match areas,
+  career goals, energizing/draining tasks, financial situation and schedule constraints
+  into it - and CI's placeholder-integrity job already guards it under "personal data may
+  have been committed". `job-scraper/search-queries.md`, which Step 3.8 fills with their
+  job boards, role titles, domain keywords, city and commute tiers, appeared nowhere in
+  `reset.md` at all. Both are tracked and unignored, so the Step 1 preview asked the user
+  to confirm a wipe list that omitted them and Step 4 then reported a blank profile while
+  `/rank` kept scoring against the old skills and career goals and `/scrape` kept running
+  the old city and queries. Both files are now previewed and cleared, restoring their
+  `/setup` placeholders while preserving the scoring framework and the query structure;
+  `04-job-evaluation.md` is out of the preserved list, which keeps `03-writing-style.md`
+  and `06-cover-letter-templates.md` (correctly - the latter's `[YOUR_NAME]` tokens are
+  LaTeX scaffolding Step 3 never writes to). `CLAUDE.md` and `cv/main_example.tex` stay
+  outside the `profile` scope, which covers skill files only, and the preview and Step 4
+  now say so instead of implying a full wipe. `tests/test_reset_command.py` gains a
+  profile-scope guard alongside its documents-scope one, deriving the file list from
+  `/setup` Step 3's own headings so a future `/setup` target that `/reset` forgets fails
+  in CI; the third case pins that a personalized file is never labelled framework-only,
+  which a filename search alone would have missed.
+- **`salary_lookup.py` never stripped the dotted "A.M.B.A." legal suffix** (#356) - the
+  `STRIP_PATTERNS` regex ended in `\.\b`, and a word boundary can't sit between a literal
+  dot and the space or end-of-string that follows it in real company names, so the
+  pattern was dead code: `"Arla Foods A.M.B.A."` normalized differently from
+  `"Arla Foods amba"` and fuzzy-matched at 86 instead of 100. The trailing dot is now
+  optional (`\.?\b`), both forms normalize identically, and two regression tests pin it.
+  Thanks @Ritik650.
 
 ## [1.6.0] - 2026-08-19
 
@@ -955,7 +1096,8 @@ At this baseline the framework provides:
 - **Cross-runtime support** - a root `AGENTS.md` pointer so Codex and Antigravity can
   discover the portable portal skills, with Claude Code as the reference runtime.
 
-[Unreleased]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/MadsLorentzen/ai-job-search/compare/v1.3.0...v1.4.0
