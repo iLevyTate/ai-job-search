@@ -98,7 +98,7 @@ cd ai-job-search
 ```
 
 > [!IMPORTANT]
-> **A GitHub fork of a public repo is always public.** `/setup` writes your name, contact details, employment history, and salary expectations into **tracked** files. For your own job search, create a **private** repository and add this repo as `upstream`. The two-minute recipe is in [SETUP.md section 8](SETUP.md#8-pulling-upstream-updates-into-your-fork). Fork only when you intend to contribute.
+> **A GitHub fork of a public repo is always public.** `/setup` writes personal data (name, contact details, employment history, salary expectations) into **tracked** files. For your own job search, create a **private** repository and add this repo as `upstream`. The two-minute recipe is in [SETUP.md section 8](SETUP.md#8-pulling-upstream-updates-into-your-fork). Fork only when you intend to contribute.
 
 ### Install job search tools
 

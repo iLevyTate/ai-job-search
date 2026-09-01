@@ -1,13 +1,9 @@
 """Guards for the onboarding privacy warnings (issue #345).
 
-The README's quick start walks a new user into creating a public fork
-(forks of public repos cannot be private) and then has /setup write
-personal data into tracked files, with the only complete warning sitting
-in SETUP.md section 8 - a section about pulling updates, downstream of
-the decision it should inform. A real user hit exactly this. These tests
-pin that the warning lives at the point of decision (adjacent to both
-fork commands) and that /setup checks the origin's visibility BEFORE
-writing anything, not in its closing notes.
+A GitHub fork of this public repo is always public, and /setup writes
+personal data into tracked files. The warning must sit next to the
+clone/fork command, not only in SETUP.md section 8. /setup must check
+the origin's visibility BEFORE writing anything.
 """
 import re
 import unittest
@@ -47,9 +43,9 @@ class TestForkWarningsAtTheDecisionPoint(unittest.TestCase):
             f"{where}'s fork section must point at SETUP.md section 8's private-remote recipe",
         )
 
-    def test_readme_quick_start_warns_next_to_the_fork_command(self):
-        body = section(README.read_text(encoding="utf-8"), "### 1. Fork and clone")
-        self.assertIn("gh repo fork", body, "sanity: the fork command lives in this section")
+    def test_readme_clone_section_warns_next_to_the_clone_command(self):
+        body = section(README.read_text(encoding="utf-8"), "## Start from a clone")
+        self.assertIn("gh repo clone", body, "sanity: the clone command lives in this section")
         self.assert_warns(body, "README")
 
     def test_setup_guide_warns_next_to_the_fork_command(self):
