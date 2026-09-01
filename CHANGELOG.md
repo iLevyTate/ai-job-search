@@ -19,6 +19,8 @@ per-file diff commands.
   story, and Intel Mac release copy are gone from the front page.
 - Job Search Desk release notes and `gui/README.md` match the live matrix:
   Windows x64, macOS Apple Silicon, Linux x64. No Intel Mac builder.
+- Windows NSIS no longer declares an unused `KeepPreviousDesk` var, which
+  failed the installer as warning 6001 treated as an error.
 - Job Search Desk starts Claude Code as soon as the app opens, so first run
   does not wait on a Start desk click. The Windows installer asks whether to
   replace the previous app or keep a copy, then launches the new version.

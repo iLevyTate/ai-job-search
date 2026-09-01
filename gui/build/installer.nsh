@@ -1,14 +1,13 @@
 !include "LogicLib.nsh"
 
 ; Asked on upgrade: replace the previous Desk, or keep a copy then install.
-; The copy must happen in customInit — electron-builder uninstalls the old
-; app before customInstall runs.
-Var KeepPreviousDesk
+; The copy must happen in customInit. electron-builder uninstalls the old
+; app before customInstall runs. PreviousDeskCopy is the only flag: a
+; second unused NSIS Var trips warning 6001, which CI treats as an error.
 Var PreviousDeskCopy
 
 !macro customInit
   ${IfNot} ${UAC_IsInnerInstance}
-    StrCpy $KeepPreviousDesk "0"
     StrCpy $PreviousDeskCopy ""
 
     Push $R0
@@ -37,7 +36,6 @@ Var PreviousDeskCopy
         Pop $R0
         Quit
       keep_desk:
-        StrCpy $KeepPreviousDesk "1"
         ${If} $R1 == ""
           StrCpy $R2 "$LOCALAPPDATA\Job Search Desk previous"
         ${Else}
@@ -64,8 +62,7 @@ Var PreviousDeskCopy
 !macroend
 
 !macro customInstall
-  ${If} $KeepPreviousDesk == "1"
-  ${AndIf} $PreviousDeskCopy != ""
+  ${If} $PreviousDeskCopy != ""
   ${AndIf} ${FileExists} "$PreviousDeskCopy\${APP_EXECUTABLE_FILENAME}"
     CreateShortCut "$SMPROGRAMS\Job Search Desk (previous).lnk" "$PreviousDeskCopy\${APP_EXECUTABLE_FILENAME}"
     DetailPrint "Kept the previous Desk at $PreviousDeskCopy"
