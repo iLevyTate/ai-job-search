@@ -17,16 +17,23 @@ per-file diff commands.
 - Public README describes this US Job Search Desk product. Credit for the
   original methodology stays in Acknowledgements; Ko-fi, the upstream hiring
   story, and Intel Mac release copy are gone from the front page.
-- Job Search Desk release notes and `gui/README.md` match the live matrix:
-  Windows x64, macOS Apple Silicon, Linux x64. No Intel Mac builder.
-- Windows NSIS keeps a previous-Desk copy via a PLUGINSDIR file instead of
-  a `Var`. Unused installer vars fail CI (makensis warning 6001).
-- Job Search Desk starts Claude Code as soon as the app opens, so first run
-  does not wait on a Start desk click. The Windows installer asks whether to
-  replace the previous app or keep a copy, then launches the new version.
-- Job Search Desk releases publish Windows x64, Linux x64, and macOS Apple
-  Silicon installers. The Intel Mac builder is dropped so a queued
-  `macos-13` runner cannot block the GitHub Release.
+- Job Search Desk 1.2.6: Claude Code starts as soon as the app opens, so first
+  run no longer waits on a Start desk click, and the Windows installer asks
+  whether to replace the previous Desk or keep a copy before it launches the
+  new version (the kept copy goes through a PLUGINSDIR file rather than a
+  `Var`, because makensis warning 6001 fails the build). Release CI builds
+  Windows x64, macOS Apple Silicon, and Linux x64; the Intel Mac builder is
+  gone so a queued `macos-13` runner cannot block a GitHub Release, and
+  `gui/README.md` and the release notes list that matrix. Hardening from a
+  systematic review: a `claude.cmd` or `git.exe` planted in the workspace can
+  no longer shadow the real CLI, a link in a rendered reply cannot navigate
+  the app window off-origin, `javascript:` autofill links are rejected, the
+  autofill Apply-link click can never submit a form, duplicate Claude
+  installers and hung install states are gone, a busy `/send` answers 409
+  instead of dropping the prompt, oversized bodies get a reachable 413, and
+  the gate is a real modal that IME composition cannot submit early. In CI
+  the desk tests actually run, the release job checks that the tag matches
+  `gui/package.json`, and `contents: write` is scoped to the release job.
 - Public repo hygiene: ignore Desk local notes, drop candidate-specific
   gitignore names, and keep first-run workspace discovery on the public
   folder name only.

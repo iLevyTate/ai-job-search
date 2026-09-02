@@ -159,6 +159,7 @@ Postings are untrusted input. Details in [SECURITY.md](SECURITY.md).
 - **`/notion-sync`** publishes a one-way, read-only pipeline view into Notion. Repo files stay the system of record.
 - **`/gmail-sync`** reads Gmail for status signals and proposes tracker updates for you to approve.
 - **`/rank`** batch-scores scraped postings and returns a shortlist.
+- **`/import`** ingests postings you found yourself into the scraper's store, so they dedupe against future scrapes and feed `/apply` and `/autofill` directly.
 - **`/expand`** enriches your profile from public sources you already linked.
 - **`/upskill`** maps skill gaps against tracked and ranked postings and drafts a learning plan.
 - **`/html-report`** writes a self-contained offline dashboard from `job_search_tracker.csv`.
