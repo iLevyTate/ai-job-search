@@ -38,4 +38,6 @@ test("Windows installer replaces the previous Desk and can keep a copy", async (
   // A wildcard CopyFiles skips subdirectories; robocopy /E keeps app.asar.
   assert.match(nsis, /robocopy/);
   assert.match(nsis, /Job Search Desk \(previous\)\.lnk/);
+  // Unused NSIS Var fails CI: makensis warning 6001 is treated as an error.
+  assert.doesNotMatch(nsis, /^\s*Var\s+/m);
 });
