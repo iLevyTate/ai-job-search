@@ -19,7 +19,7 @@ Thanks for considering a contribution. Read this first; it will save you effort 
 
 ## What gets declined
 
-- **Market- or country-specific skills and content.** One country's portal opens the door to every country's portal; there is no principled stopping point. Precedent: [#31] (India), [#39] (France, despite an honest and excellent PR), [#67] (China). The in-tree portal skills are either country-agnostic (`linkedin-search`) or the maintainer's own demonstration instance (the Danish portals).
+- **Market- or country-specific skills and content.** One country's portal opens the door to every country's portal; there is no principled stopping point. Precedent: [#31] (India), [#39] (France, despite an honest and excellent PR), [#67] (China). The in-tree portal skills are either country-agnostic (`linkedin-search`, `freehire-search`) or the maintainer's own demonstration instance (the Danish portals).
 - **Personal profile data.** The template ships placeholders; your populated profile lives in your fork. CI enforces this (`placeholder-integrity`). Precedent: [#17], [#72].
 - **Alternative-harness ports and duplicate workflow sources.** The markdown specs ARE the implementation; a second copy (another agent CLI, an orchestration layer, a wrapper command) drifts from the first the moment either changes. Precedent: [#44], [#49], [#66].
 - **Speculative infrastructure.** Complexity must be argued from a problem that exists, not one that might. Precedent: [#63].
@@ -38,7 +38,7 @@ Reviews here are empirical. Bug reports are reproduced on master before the fix 
 - State the failing case and how to reproduce it.
 - **Reproduce on the real path, not a constructed input.** A test that fails on master and passes on the fix is necessary but not sufficient: the failing input has to be one the workflow actually produces, not one the test hand-builds. Show the failure through the path the code really runs - the documented CLI invocation, real portal output, an actual data file - not a synthetic value fed straight to the function. A fix whose only demonstration is an input the real code path never receives gets declined even though its test is green.
 - Put CLI tests in `.agents/skills/<name>/cli/tests/` (bun test, network-free where possible); Python tool tests in `tests/`.
-- Run what CI runs: `python3 tools/lint_skills.py`, `python3 tools/check_framework_version.py`, `python3 tools/security_guards.py`, `python3 -m unittest discover -s tests`, and in touched CLIs `bun run typecheck` + `bun test`.
+- Run what CI runs: `python3 tools/lint_skills.py`, `python3 tools/check_framework_version.py`, `python3 tools/security_guards.py`, `python3 -m unittest discover -s tests`, in touched CLIs `bun run typecheck` + `bun test`, and for Desk changes `cd gui && npm ci && npm run build:renderer && npm test`.
 
 **Credit norm:** a change that incorporates your actual code gets a `Co-authored-by` trailer; a change written independently from your observation or report gets a named mention in the commit message and PR. Both happen unprompted.
 

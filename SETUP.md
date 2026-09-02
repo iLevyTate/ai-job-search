@@ -273,7 +273,7 @@ This creates `salary_data.json` which the `/apply` workflow uses for salary benc
 Find a job posting you're interested in, then:
 
 ```
-/apply https://jobindex.dk/job/1234567
+/apply https://job-boards.greenhouse.io/acme/jobs/1234567
 ```
 
 Or paste the job description directly:
@@ -305,7 +305,7 @@ Set-Location cv; lualatex main_<company>_<role>.tex; Set-Location ..
 Set-Location cover_letters; xelatex cover_<company>_<role>.tex; Set-Location ..
 ```
 
-These commands apply to the stock templates (moderncv CV, `cover.cls` cover letter). If you'd rather use your own LaTeX template, run `/add-template`. It captures the template's compile engine, fonts, style rules, and page limit, test-compiles it, and wires it into `/apply`. See the "LaTeX templates" section in the README.
+These commands apply to the stock templates (moderncv CV, `cover.cls` cover letter). If you'd rather use your own LaTeX template, run `/add-template`. It captures the template's compile engine, fonts, style rules, and page limit, test-compiles it, and wires it into `/apply`. See the Customization section in the README.
 
 ## 8. Pulling upstream updates into your fork
 
@@ -350,7 +350,7 @@ Make sure Bun is installed and you ran `bun install` in each CLI directory. The 
 The cover letter template expects fonts in `cover_letters/OpenFonts/fonts/`. Make sure this directory exists and contains the Lato and Raleway font files.
 
 ### Stale `.claude/settings.local.json` from an older clone
-Shared Claude Code permissions now live in `.claude/settings.json` (scoped to `bun run`, `python salary_lookup.py`, and `python3 salary_lookup.py`). Earlier versions of this repo committed a broader `.claude/settings.local.json` that pre-approved `Bash(curl:*)`, `Bash(python:*)` and `Bash(bun:*)`. If you cloned before that change, git leaves the old file behind in your working copy, and its permissions still apply on top of `settings.json`. Delete it (or trim it to your own personal overrides):
+Shared Claude Code permissions now live in `.claude/settings.json` (path-scoped `bun run` entries for each shipped portal CLI, `salary_lookup.py`, `tools/verify_pdf.py`, and `pdftotext`). Earlier versions of this repo committed a broader `.claude/settings.local.json` that pre-approved `Bash(curl:*)`, `Bash(python:*)` and `Bash(bun:*)`. If you cloned before that change, git leaves the old file behind in your working copy, and its permissions still apply on top of `settings.json`. Delete it (or trim it to your own personal overrides):
 
 ```bash
 rm .claude/settings.local.json

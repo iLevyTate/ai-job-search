@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -18,8 +18,14 @@ function write(root, rel, body) {
 async function withDesk(testFn) {
   const opened = [];
   const revealed = [];
-  write(REPO, join(".claude", "desk", "preview.html"), "<p>preview</p>");
-  write(REPO, join(".claude", "desk", "notes.md"), "before");
+  // These fixtures land in the real repo checkout (the desk needs its .claude/
+  // tree), so every file written here is removed again in the finally below.
+  // documents/ is tracked apart from its personal subfolders, and a leftover
+  // notes.md there shows up as an untracked file after every test run.
+  const written = [];
+  const writeFixture = (rel, body) => written.push(write(REPO, rel, body));
+  writeFixture(join(".claude", "desk", "preview.html"), "<p>preview</p>");
+  writeFixture(join(".claude", "desk", "notes.md"), "before");
   const artifacts = createArtifactService({
     workspace: REPO,
     createId: (() => { let n = 0; return () => `http-art-${++n}`; })(),
@@ -29,8 +35,8 @@ async function withDesk(testFn) {
     },
   });
   await artifacts.beginTurn("turn-http");
-  write(REPO, join("documents", "notes.md"), "after");
-  write(REPO, join("documents", "preview.html"), "<p>preview</p>");
+  writeFixture(join("documents", "notes.md"), "after");
+  writeFixture(join("documents", "preview.html"), "<p>preview</p>");
   await artifacts.settleTurn("turn-http");
   const runtime = {
     snapshot() { return { controllerGeneration: 2 }; },
@@ -52,6 +58,7 @@ async function withDesk(testFn) {
     });
   } finally {
     await desk.stop();
+    for (const path of written) rmSync(path, { force: true });
   }
 }
 
