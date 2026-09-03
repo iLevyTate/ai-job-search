@@ -9577,6 +9577,176 @@ ${incoming}`;
     };
   }
 
+  // public/src/desk-views.js
+  function escapeHtml2(text) {
+    return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+  }
+  var JOB_FILTERS = [
+    { id: "open", label: "To look at" },
+    { id: "interested", label: "Interested" },
+    { id: "applied", label: "Applied" },
+    { id: "ignored", label: "Ignored" },
+    { id: "all", label: "All" }
+  ];
+  function filterJobs(jobs, filter = "open", query = "") {
+    const needle = String(query || "").trim().toLowerCase();
+    return (jobs || []).filter((job) => {
+      if (filter === "open" && job.bucket !== "new" && job.bucket !== "interested") return false;
+      if (filter !== "open" && filter !== "all" && job.bucket !== filter) return false;
+      if (!needle) return true;
+      return [job.title, job.company, job.location, job.portal].filter(Boolean).join(" ").toLowerCase().includes(needle);
+    });
+  }
+  function countBuckets(jobs) {
+    const counts = { open: 0, interested: 0, applied: 0, ignored: 0, all: jobs.length };
+    for (const job of jobs) {
+      if (job.bucket === "new" || job.bucket === "interested") counts.open += 1;
+      if (counts[job.bucket] != null && job.bucket !== "new") counts[job.bucket] += 1;
+    }
+    return counts;
+  }
+  function rankBadge(job) {
+    if (job.rankScore == null) return job.fit ? `<span class="pill">${escapeHtml2(job.fit)} fit</span>` : "";
+    const band = job.rankScore >= 75 ? "good" : job.rankScore >= 50 ? "mid" : "low";
+    return `<span class="pill pill-${band}" title="${escapeHtml2(job.rankVerdict || "Fit score from Rank")}">${escapeHtml2(String(job.rankScore))} / 100${job.rankVerdict ? ` \xB7 ${escapeHtml2(job.rankVerdict)}` : ""}</span>`;
+  }
+  function jobMeta(job) {
+    const bits = [job.company, job.location, job.portal ? `via ${job.portal}` : "", job.firstSeen ? `found ${job.firstSeen}` : ""].filter(Boolean);
+    return bits.map(escapeHtml2).join(" \xB7 ");
+  }
+  function renderJobs(container, { jobs = [], filter = "open", query = "", status = "ready", error = "" } = {}) {
+    const document2 = container.ownerDocument;
+    container.replaceChildren();
+    if (status === "loading") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>Loading\u2026</h2></div>`;
+      return;
+    }
+    if (status === "error") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>Could not load the jobs.</h2><p>${escapeHtml2(error || "Try again.")}</p></div>`;
+      return;
+    }
+    if (!jobs.length) {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>No jobs found yet.</h2><p>Click <strong>Find Jobs</strong> in the left column and Claude searches the job boards for openings that match you. They show up here, ready to apply to.</p><div class="empty-actions"><button type="button" data-action="scrape">Find jobs now</button></div></div>`;
+      return;
+    }
+    const counts = countBuckets(jobs);
+    const toolbar = document2.createElement("div");
+    toolbar.className = "list-toolbar";
+    toolbar.innerHTML = `<div class="filters" role="tablist" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
+    <label class="search"><span class="sr-only">Search jobs</span><input type="search" data-job-search placeholder="Search title, company, place" value="${escapeHtml2(query)}"></label>`;
+    container.append(toolbar);
+    const shown = filterJobs(jobs, filter, query);
+    const list = document2.createElement("div");
+    list.className = "job-list";
+    if (!shown.length) {
+      list.innerHTML = `<p class="list-empty">Nothing here${query ? " for that search" : ""}.</p>`;
+    }
+    for (const job of shown) {
+      const row = document2.createElement("article");
+      row.className = `job-row bucket-${job.bucket}`;
+      row.dataset.jobKey = job.key;
+      const title = job.url ? `<a href="${escapeHtml2(job.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml2(job.title || "Untitled posting")}</a>` : escapeHtml2(job.title || "Untitled posting");
+      const notes = job.strengths.length || job.gaps.length ? `<details class="job-notes"><summary>Why this score</summary>${job.strengths.length ? `<p><strong>For you:</strong> ${job.strengths.map(escapeHtml2).join(" \xB7 ")}</p>` : ""}${job.gaps.length ? `<p><strong>Gaps:</strong> ${job.gaps.map(escapeHtml2).join(" \xB7 ")}</p>` : ""}</details>` : "";
+      const applied = job.bucket === "applied" ? `<span class="pill pill-applied">Applied${job.applicationStatus ? ` \xB7 ${escapeHtml2(job.applicationStatus)}` : ""}</span>` : "";
+      const actions = job.bucket === "applied" ? "" : `<div class="row-actions">
+          ${job.url ? `<button type="button" data-job-action="apply">Apply</button>` : `<button type="button" data-job-action="apply" title="No link was saved for this posting; Claude will ask you to paste it">Apply</button>`}
+          ${job.url ? `<button type="button" class="ghost" data-job-action="autofill">Autofill</button>` : ""}
+          ${job.bucket === "interested" ? `<button type="button" class="ghost" data-job-action="unmark">Not interested after all</button>` : job.bucket === "ignored" ? `<button type="button" class="ghost" data-job-action="unmark">Bring back</button>` : `<button type="button" class="ghost" data-job-action="interested">Interested</button><button type="button" class="ghost" data-job-action="ignore">Ignore</button>`}
+        </div>`;
+      row.innerHTML = `<div class="job-head"><h3>${title}</h3>${rankBadge(job)}${applied}</div><p class="job-meta">${jobMeta(job)}${job.deadline ? ` \xB7 <strong>deadline ${escapeHtml2(job.deadline)}</strong>` : ""}</p>${notes}${actions}`;
+      list.append(row);
+    }
+    container.append(list);
+  }
+  var STATUS_LABELS = {
+    applied: "Applied",
+    in_progress: "In progress",
+    interview: "Interviewing",
+    interviewing: "Interviewing",
+    offer: "Offer",
+    hired: "Hired",
+    rejected: "Rejected",
+    no_response: "No response",
+    "no response": "No response",
+    offer_declined: "Declined",
+    "offer declined": "Declined",
+    withdrawn: "Withdrawn",
+    interview_only: "Interviewed"
+  };
+  function statusLabel(status) {
+    const key = String(status || "").toLowerCase().trim();
+    return STATUS_LABELS[key] || (key ? key.replace(/_/g, " ") : "Unknown");
+  }
+  function renderApplications(container, { applications = [], status = "ready", error = "", preview = null } = {}) {
+    const document2 = container.ownerDocument;
+    container.replaceChildren();
+    if (status === "loading") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Loading\u2026</h2></div>`;
+      return;
+    }
+    if (status === "error") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Could not load your applications.</h2><p>${escapeHtml2(error || "Try again.")}</p></div>`;
+      return;
+    }
+    if (!applications.length) {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Nothing applied to yet.</h2><p>When you apply to a job, Claude records it here with its CV, cover letter, and what happened next.</p></div>`;
+      return;
+    }
+    const list = document2.createElement("div");
+    list.className = "app-list";
+    const sorted = [...applications].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+    for (const app of sorted) {
+      const row = document2.createElement("article");
+      row.className = `app-row${app.open ? " open" : ""}`;
+      row.dataset.appId = app.id;
+      row.dataset.company = app.company;
+      row.dataset.role = app.role;
+      const files = [
+        app.cvFile ? `<button type="button" class="ghost" data-file="${escapeHtml2(app.cvFile)}">CV</button>` : "",
+        app.coverLetterFile ? `<button type="button" class="ghost" data-file="${escapeHtml2(app.coverLetterFile)}">Cover letter</button>` : "",
+        app.archive ? `<button type="button" class="ghost" data-reveal="${escapeHtml2(app.archive)}">Show folder</button>` : ""
+      ].filter(Boolean).join("");
+      row.innerHTML = `<div class="job-head"><h3>${escapeHtml2(app.company || "Unknown company")} \xB7 ${escapeHtml2(app.role || "role")}</h3><span class="pill${app.open ? " pill-open" : ""}">${escapeHtml2(statusLabel(app.status))}</span></div>
+      <p class="job-meta">${[app.date ? `applied ${app.date}` : "", app.channel, app.fit ? `fit ${app.fit}` : "", app.deadline ? `<strong>deadline ${escapeHtml2(app.deadline)}</strong>` : ""].filter(Boolean).map((bit) => bit.startsWith("<strong>") ? bit : escapeHtml2(bit)).join(" \xB7 ")}</p>
+      ${app.notes ? `<p class="app-notes">${escapeHtml2(app.notes)}</p>` : ""}
+      <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button></div>`;
+      list.append(row);
+    }
+    container.append(list);
+    if (preview) {
+      const pane = document2.createElement("div");
+      pane.className = "file-preview";
+      pane.innerHTML = `<div class="file-preview-head"><strong>${escapeHtml2(preview.path)}</strong><button type="button" class="ghost" data-open-file="${escapeHtml2(preview.path)}">Open in its usual app</button><button type="button" class="ghost" data-close-preview>Close</button></div>${preview.kind === "pdf" ? `<iframe class="artifact-pdf" src="${escapeHtml2(preview.src)}" title="Preview"></iframe>` : `<pre class="artifact-text">${escapeHtml2(preview.text || "")}</pre>`}`;
+      container.append(pane);
+    }
+  }
+  function renderChecklist(progress, tools) {
+    if (!progress?.steps?.length) return "";
+    const items = progress.steps.map((step, index) => {
+      const current = progress.next === step.id;
+      return `<li class="${step.done ? "done" : current ? "current" : ""}"><span class="tick" aria-hidden="true">${step.done ? "\u2713" : index + 1}</span><div><strong>${escapeHtml2(step.title)}</strong><em>${escapeHtml2(step.hint)}</em>${current ? `<button type="button" data-checklist-action="${escapeHtml2(step.action)}">${step.action === "documents" ? "Add files" : step.action === "scrape" ? "Find jobs" : step.action === "apply" ? "Pick a job" : "Start setup"}</button>` : ""}</div></li>`;
+    }).join("");
+    const missing = (tools?.tools || []).filter((tool) => !tool.installed && tool.requiredFor !== "optional" && tool.id !== "claude");
+    const warning = missing.length ? `<p class="tools-warning">Some steps need tools this computer does not have yet: ${missing.map((tool) => escapeHtml2(tool.name)).join(", ")}. <button type="button" class="link" data-open-tools>See what to install</button></p>` : "";
+    return `<ol class="checklist" aria-label="Getting started">${items}</ol>${warning}`;
+  }
+  function renderTools(container, info) {
+    container.replaceChildren();
+    if (!info?.tools) {
+      container.innerHTML = `<p>Checking\u2026</p>`;
+      return;
+    }
+    const list = container.ownerDocument.createElement("ul");
+    list.className = "tools-list";
+    for (const tool of info.tools) {
+      const item = container.ownerDocument.createElement("li");
+      item.className = tool.installed ? "ok" : tool.requiredFor === "optional" ? "optional" : "missing";
+      item.innerHTML = `<span class="tick" aria-hidden="true">${tool.installed ? "\u2713" : "\u2717"}</span><div><strong>${escapeHtml2(tool.name)}</strong> <span class="pill">${tool.installed ? "installed" : tool.requiredFor === "optional" ? "optional, not installed" : `needed for ${escapeHtml2(tool.requiredFor)}`}</span><em>${escapeHtml2(tool.purpose)}</em>${tool.installed ? "" : `<p class="install">${escapeHtml2(tool.install || "")}${tool.url ? ` <a href="${escapeHtml2(tool.url)}" target="_blank" rel="noopener noreferrer">Download</a>` : ""}</p>`}</div>`;
+      list.append(item);
+    }
+    container.append(list);
+  }
+
   // public/src/terminal-view.js
   var DEFAULT_RESIZE_MS = 80;
   function createTerminalView({
@@ -9658,7 +9828,7 @@ ${incoming}`;
   }
 
   // public/src/chat-view.js
-  function escapeHtml2(text) {
+  function escapeHtml3(text) {
     return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
   }
   function filterCommands(commands2, query) {
@@ -9776,15 +9946,15 @@ ${multiline}` : rendered;
   }
   function renderCommandForm(command) {
     if (commandTakesPaste(command)) {
-      const placeholder = escapeHtml2(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
+      const placeholder = escapeHtml3(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
       return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
     }
     const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
-      const name = escapeHtml2(argument.name);
-      const label = escapeHtml2(labelFor(argument));
-      const placeholder = escapeHtml2(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
+      const name = escapeHtml3(argument.name);
+      const label = escapeHtml3(labelFor(argument));
+      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
       if (argument.kind === "choice") {
-        const options = (argument.values || []).map((value) => `<option value="${escapeHtml2(value)}">${escapeHtml2(value)}</option>`).join("");
+        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
         return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
       }
       if (argument.kind === "boolean") {
@@ -9907,40 +10077,40 @@ ${multiline}` : rendered;
     const blocks = questions.map((question, index) => {
       const name = `q${index}`;
       const options = question.options || [];
-      const legend = question.header ? `<legend>${escapeHtml2(question.header)}</legend>` : "";
-      const text = `<p class="q-text">${escapeHtml2(question.question || question.header || "")}</p>`;
+      const legend = question.header ? `<legend>${escapeHtml3(question.header)}</legend>` : "";
+      const text = `<p class="q-text">${escapeHtml3(question.question || question.header || "")}</p>`;
       if (!options.length) {
         return `<fieldset class="q" data-question="${index}">${legend}${text}<textarea name="${name}" rows="3" placeholder="Type your answer"${disabled}></textarea></fieldset>`;
       }
       const type = question.multiSelect ? "checkbox" : "radio";
-      const choices = options.map((option) => `<label class="q-option"><input type="${type}" name="${name}" value="${escapeHtml2(option.label)}"${disabled}><span><strong>${escapeHtml2(option.label)}</strong>${option.description ? `<em>${escapeHtml2(option.description)}</em>` : ""}</span></label>`).join("");
+      const choices = options.map((option) => `<label class="q-option"><input type="${type}" name="${name}" value="${escapeHtml3(option.label)}"${disabled}><span><strong>${escapeHtml3(option.label)}</strong>${option.description ? `<em>${escapeHtml3(option.description)}</em>` : ""}</span></label>`).join("");
       const hint = question.multiSelect ? `<p class="hint">Pick all that apply.</p>` : "";
       const other = `<label class="q-option q-other"><span>Something else</span><input type="text" name="${name}__other" placeholder="Type your own answer"${disabled}></label>`;
       return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
     }).join("");
     if (readOnly) {
       const list = questions.map((question) => {
-        const options = (question.options || []).map((option) => `<li><strong>${escapeHtml2(option.label)}</strong>${option.description ? `<em>${escapeHtml2(option.description)}</em>` : ""}</li>`).join("");
-        return `<p class="q-text">${escapeHtml2(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
+        const options = (question.options || []).map((option) => `<li><strong>${escapeHtml3(option.label)}</strong>${option.description ? `<em>${escapeHtml3(option.description)}</em>` : ""}</li>`).join("");
+        return `<p class="q-text">${escapeHtml3(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
       }).join("");
-      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Claude will repeat this question in a moment. Answer it then in the message box at the bottom, for example with the name of the option you want.</p></div>`;
+      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml3(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Claude will repeat this question in a moment. Answer it then in the message box at the bottom, for example with the name of the option you want.</p></div>`;
     }
     const footer = card.entered ? `<p class="hint">${card.payload.answered === false ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered." : "Answered."}</p>` : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
-    return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${blocks}${footer}</form>`;
+    return `<form class="interaction" data-kind="question" data-id="${escapeHtml3(card.id)}">${blocks}${footer}</form>`;
   }
   function renderPermissionBody(card) {
     const disabled = card.entered ? " disabled" : "";
     const name = card.payload.displayName || card.payload.toolName || "A tool";
     const title = card.payload.title || `Claude wants to use ${name}.`;
     const detail = describeTool(card.payload.toolName, card.payload.input || {});
-    const description = card.payload.description ? `<p class="hint">${escapeHtml2(card.payload.description)}</p>` : "";
+    const description = card.payload.description ? `<p class="hint">${escapeHtml3(card.payload.description)}</p>` : "";
     const suggestions = Array.isArray(card.payload.suggestions) ? card.payload.suggestions : [];
     const persistent = suggestions.some((item) => item?.destination === "localSettings" || item?.destination === "projectSettings");
     const scoped = suggestions.length ? `<button type="button" data-decision="allow-scoped"${disabled}>${persistent ? "Allow in this folder from now on" : "Allow for the rest of this chat"}</button>` : "";
     const outcome = card.entered ? `<p class="hint">${card.payload.decision === "deny" ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without it." : "Not allowed." : "Allowed."}</p>` : "";
-    return `<div class="interaction" data-kind="permission" data-id="${escapeHtml2(card.id)}">
-    <p>${escapeHtml2(title)}</p>
-    ${detail && !card.payload.title ? `<p class="tool done">${escapeHtml2(detail)}</p>` : ""}
+    return `<div class="interaction" data-kind="permission" data-id="${escapeHtml3(card.id)}">
+    <p>${escapeHtml3(title)}</p>
+    ${detail && !card.payload.title ? `<p class="tool done">${escapeHtml3(detail)}</p>` : ""}
     ${description}
     <div class="sheet-actions">
       <button type="button" data-decision="allow-once"${disabled}>Allow once</button>
@@ -9953,9 +10123,9 @@ ${multiline}` : rendered;
   function renderAutofillBody(card) {
     const disabled = card.entered ? " disabled" : "";
     const rawUrl = card.payload.url || "";
-    const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml2(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml2(rawUrl)}</a></p>` : `<p>${escapeHtml2(rawUrl)}</p>` : "";
-    const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml2(card.payload.screenshot)}</p>` : "";
-    return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml2(card.id)}" data-token="${escapeHtml2(card.payload.token || "")}">
+    const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml3(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml3(rawUrl)}</a></p>` : `<p>${escapeHtml3(rawUrl)}</p>` : "";
+    const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml3(card.payload.screenshot)}</p>` : "";
+    return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml3(card.id)}" data-token="${escapeHtml3(card.payload.token || "")}">
     <p>Claude filled in the application form but did not send it. Open the form in your browser, check every field, and click the employer's own Submit button yourself. Then press Done here so Claude can log it, or Cancel to abandon this application.</p>
     ${url}
     ${shot}
@@ -9972,24 +10142,24 @@ ${multiline}` : rendered;
     if (card.type.startsWith("tool")) {
       const phase = card.type === "tool.completed" ? "done" : "live";
       const label = describeTool(card.payload.name, card.payload.input);
-      return `<p class="tool ${phase}" title="${escapeHtml2(card.payload.name || "tool")}">${escapeHtml2(label)}</p>`;
+      return `<p class="tool ${phase}" title="${escapeHtml3(card.payload.name || "tool")}">${escapeHtml3(label)}</p>`;
     }
     if (card.type === "artifact.discovered") {
-      return `<p class="tool done">Saved ${escapeHtml2(card.payload.relativePath || "a file")}</p>`;
+      return `<p class="tool done">Saved ${escapeHtml3(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
     if (card.type === "turn.failed" && card.payload.detail) {
-      return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml2(card.payload.detail)}</pre></details>`;
+      return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml3(card.payload.detail)}</pre></details>`;
     }
     if (card.type === "subagent.activity") {
       const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
-      const body = markdown2 ? markdown2(text) : `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
-      return `<details class="subagent"><summary>${escapeHtml2(label)} notes</summary>${body}</details>`;
+      const body = markdown2 ? markdown2(text) : `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>`;
+      return `<details class="subagent"><summary>${escapeHtml3(label)} notes</summary>${body}</details>`;
     }
     if (markdown2 && card.type === "assistant.message") {
       return markdown2(text);
     }
-    return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
+    return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>`;
   }
   function signatureFor(card) {
     const text = card.payload.text || "";
@@ -10052,7 +10222,7 @@ ${multiline}` : rendered;
       const queue = document2.createElement("div");
       queue.className = "queue";
       queue.setAttribute("aria-label", "Queued messages");
-      queue.innerHTML = `<p class="kicker">Next up</p>${state2.queued.map((item) => `<p data-queue-id="${escapeHtml2(item.id)}">${escapeHtml2(item.text)}</p>`).join("")}`;
+      queue.innerHTML = `<p class="kicker">Next up</p>${state2.queued.map((item) => `<p data-queue-id="${escapeHtml3(item.id)}">${escapeHtml3(item.text)}</p>`).join("")}`;
       container.append(queue);
     }
     const activity = activityFor(state2);
@@ -10061,7 +10231,7 @@ ${multiline}` : rendered;
       row.className = "activity";
       row.setAttribute("aria-hidden", "true");
       row.dataset.activity = activity;
-      row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml2(activity)}\u2026</span>`;
+      row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml3(activity)}\u2026</span>`;
       container.append(row);
     }
   }
@@ -10072,7 +10242,7 @@ ${multiline}` : rendered;
       button.type = "button";
       button.className = "palette-item";
       button.dataset.command = command.id;
-      button.innerHTML = `<strong>${escapeHtml2(command.title)}</strong><em>${escapeHtml2(command.invocation)}</em>`;
+      button.innerHTML = `<strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.invocation)}</em>`;
       container.append(button);
     }
   }
@@ -10082,7 +10252,7 @@ ${multiline}` : rendered;
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
       button.dataset.action = command.id;
-      button.innerHTML = `<span class="n">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml2(command.title)}</strong><em>${escapeHtml2(command.description || command.invocation)}</em></span>`;
+      button.innerHTML = `<span class="n">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.description || command.invocation)}</em></span>`;
       container.append(button);
     });
   }
@@ -10114,6 +10284,14 @@ ${multiline}` : rendered;
   var stepsEl = document.querySelector(".steps");
   var dock = document.getElementById("dock");
   var filesEl = document.getElementById("panel-files");
+  var jobsEl = document.getElementById("panel-jobs");
+  var applicationsEl = document.getElementById("panel-applications");
+  var toolsDialog = document.getElementById("tools");
+  var toolsList = document.getElementById("tools-list");
+  var modeSheet = document.getElementById("mode-sheet");
+  var modeToggle = document.getElementById("mode-toggle");
+  var docInput = document.getElementById("doc-input");
+  var dropzone = document.getElementById("dropzone");
   var palette = document.getElementById("palette");
   var paletteQuery = document.getElementById("palette-query");
   var paletteList = document.getElementById("palette-list");
@@ -10158,6 +10336,7 @@ ${multiline}` : rendered;
       <p class="kicker">Clean slate</p>
       <h2>New conversation.</h2>
       <p>The page is clear. Your files are still in your job-search folder.</p>
+      ${renderChecklist(progressInfo, toolsInfo)}
       <div class="suggestions" aria-label="Suggested starts">
         <button type="button" data-action="scrape">Find openings</button>
         <button type="button" data-action="rank">Rank what we have</button>
@@ -10165,14 +10344,15 @@ ${multiline}` : rendered;
       </div>
     </div>`;
     }
+    const checklist = renderChecklist(progressInfo, toolsInfo);
     return `<div class="empty" id="empty">
     <p class="kicker">Ready when you are</p>
     <h2>Start wherever you are.</h2>
     <p>New here? Start with <strong>Setup</strong>: it asks a few questions about you, once. Already set up? Click <strong>Find jobs</strong> to search the job boards, or just type what you need below.</p>
-    <div class="empty-actions">
+    ${checklist || `<div class="empty-actions">
       <button type="button" data-action="setup">Start with setup</button>
       <button type="button" data-action="scrape" class="ghost">Find jobs now</button>
-    </div>
+    </div>`}
     <div class="suggestions" aria-label="Suggested starts">
       <button type="button" data-prompt="Which of these roles should I prioritize this week?">Prioritize this week</button>
       <button type="button" data-action="rank">Rank what we have</button>
@@ -10296,6 +10476,11 @@ ${multiline}` : rendered;
       else if (event.type === "turn.failed") announce(`Problem: ${event.payload?.text || "the turn failed."}`);
       else if (event.type === "question.requested") announce("Claude has a question for you.");
       else if (event.type === "permission.requested") announce("Claude is asking for permission.");
+      if (event.type === "turn.completed" || event.type === "turn.failed") {
+        notifyHidden(event.type === "turn.completed" ? "Claude finished." : "Claude ran into a problem.");
+        refreshDeskData();
+      } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
+      else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
     }
     if (event.type === "artifact.discovered") {
       const incoming = {
@@ -10442,6 +10627,7 @@ ${multiline}` : rendered;
       }
       setMenu(false);
       setBusy(true);
+      requestNotificationPermission();
       const messageId = `m-${Date.now()}`;
       if (runtimeSend({ type: "user.message", messageId, text })) {
         inFlightSends.set(messageId, text);
@@ -10584,6 +10770,7 @@ ${multiline}` : rendered;
       if (message.type === "snapshot") {
         if (!runtimeMode) {
           runtimeMode = true;
+          if (modeToggle) modeToggle.hidden = false;
           state = createDeskState({ permissionMode: state.permissionMode });
           sseSequence = 0;
           sseTurn = 0;
@@ -10709,6 +10896,8 @@ ${multiline}` : rendered;
     setBusy(false);
     state = applySnapshot(state, { busy: false });
     paintChat();
+    notifyHidden("Claude finished.");
+    refreshDeskData();
   });
   source.onerror = () => {
     if (source.readyState === EventSource.CLOSED) {
@@ -10785,6 +10974,95 @@ ${multiline}` : rendered;
     }
   });
   var resetPending = false;
+  var progressInfo = null;
+  var toolsInfo = null;
+  var jobsState = { jobs: [], filter: "open", query: "", status: "loading", error: "" };
+  var applicationsState = { applications: [], status: "loading", error: "", preview: null };
+  async function loadProgress() {
+    try {
+      const res = await fetch("/progress");
+      if (res.ok) progressInfo = await res.json();
+    } catch {
+    }
+    if (!state.cards.size) paintChat();
+  }
+  async function loadTools({ refresh = false } = {}) {
+    try {
+      const res = await fetch(refresh ? "/tools?refresh=1" : "/tools");
+      if (res.ok) toolsInfo = await res.json();
+    } catch {
+      toolsInfo = null;
+    }
+    if (toolsDialog?.open) renderTools(toolsList, toolsInfo);
+    if (!state.cards.size) paintChat();
+  }
+  function paintJobs() {
+    renderJobs(jobsEl, jobsState);
+  }
+  async function loadJobs() {
+    jobsState = { ...jobsState, status: jobsState.jobs.length ? "ready" : "loading" };
+    paintJobs();
+    try {
+      const res = await fetch("/jobs");
+      if (!res.ok) throw new Error("Could not read the job list.");
+      const body = await res.json();
+      jobsState = { ...jobsState, jobs: body.jobs || [], status: "ready", error: "" };
+    } catch (error) {
+      jobsState = { ...jobsState, status: "error", error: error.message };
+    }
+    paintJobs();
+  }
+  function paintApplications() {
+    renderApplications(applicationsEl, applicationsState);
+  }
+  async function loadApplications() {
+    applicationsState = { ...applicationsState, status: applicationsState.applications.length ? "ready" : "loading" };
+    paintApplications();
+    try {
+      const res = await fetch("/applications");
+      if (!res.ok) throw new Error("Could not read the tracker.");
+      const body = await res.json();
+      applicationsState = { ...applicationsState, applications: body.applications || [], status: "ready", error: "" };
+    } catch (error) {
+      applicationsState = { ...applicationsState, status: "error", error: error.message };
+    }
+    paintApplications();
+  }
+  function refreshDeskData() {
+    loadProgress();
+    if (selectedTab === "jobs") loadJobs();
+    if (selectedTab === "applications") loadApplications();
+  }
+  var BASE_TITLE = document.title;
+  var attentionFlag = false;
+  function flagAttention() {
+    if (!document.hidden) return;
+    attentionFlag = true;
+    document.title = `\u25CF ${BASE_TITLE}`;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && attentionFlag) {
+      attentionFlag = false;
+      document.title = BASE_TITLE;
+    }
+  });
+  function notifyHidden(body) {
+    flagAttention();
+    if (!document.hidden || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try {
+      const shown = new Notification("Job Search Desk", { body, tag: "desk-turn", silent: true });
+      shown.onclick = () => window.focus();
+    } catch {
+    }
+  }
+  function requestNotificationPermission() {
+    if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+    try {
+      Notification.requestPermission().catch?.(() => {
+      });
+    } catch {
+    }
+  }
   var closingOld = false;
   var inFlightSends = /* @__PURE__ */ new Map();
   var lastSendError = "";
@@ -11055,7 +11333,7 @@ ${multiline}` : rendered;
     setMenu(false);
     openPalette();
   });
-  var surfaceTabs = [{ id: "chat", label: "Chat" }];
+  var surfaceTabs = [{ id: "chat", label: "Chat" }, { id: "jobs", label: "Jobs" }, { id: "applications", label: "Applications" }];
   if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
   surfaceTabs.push({ id: "files", label: "Files" });
   var tabs = mountTabs(document.getElementById("surface-tabs"), {
@@ -11064,10 +11342,183 @@ ${multiline}` : rendered;
     onSelect(id) {
       selectedTab = id;
       if (id === "files") loadArtifacts();
+      if (id === "jobs") loadJobs();
+      if (id === "applications") loadApplications();
       if (id === "terminal") ensureTerminal();
       if (id !== "terminal") releaseTerminal();
       if (id === "chat") requestAnimationFrame(scrollLog);
     }
+  });
+  jobsEl.addEventListener("click", async (event) => {
+    const filter = event.target.closest("[data-job-filter]");
+    if (filter) {
+      jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+      paintJobs();
+      return;
+    }
+    const action = event.target.closest("[data-job-action]");
+    if (!action) return;
+    const row = action.closest("[data-job-key]");
+    const job = jobsState.jobs.find((item) => item.key === row?.dataset.jobKey);
+    if (!job) return;
+    const kind = action.dataset.jobAction;
+    if (kind === "apply") {
+      if (job.url) runStep("apply", `/apply ${job.url}`);
+      else runStep("apply", `/apply
+${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask me for the posting if you need it)`);
+      return;
+    }
+    if (kind === "autofill") {
+      runStep("autofill", `/autofill ${job.url}`);
+      return;
+    }
+    const mark = kind === "interested" ? "interested" : kind === "ignore" ? "ignored" : null;
+    action.disabled = true;
+    try {
+      const res = await post("/jobs/mark", { key: job.key, mark });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not save that.");
+      jobsState = { ...jobsState, jobs: body.jobs || jobsState.jobs };
+    } catch (error) {
+      notice(error.message || "Could not save that.");
+    }
+    paintJobs();
+  });
+  jobsEl.addEventListener("input", (event) => {
+    const search = event.target.closest("[data-job-search]");
+    if (!search) return;
+    jobsState = { ...jobsState, query: search.value };
+    const list = jobsEl.querySelector(".job-list");
+    if (list) {
+      const fresh = jobsEl.ownerDocument.createElement("section");
+      renderJobs(fresh, jobsState);
+      const next = fresh.querySelector(".job-list");
+      if (next) list.replaceWith(next);
+    }
+  });
+  applicationsEl.addEventListener("click", async (event) => {
+    const file = event.target.closest("[data-file]");
+    if (file) {
+      await previewWorkspaceFile(file.dataset.file);
+      return;
+    }
+    const reveal = event.target.closest("[data-reveal]");
+    if (reveal) {
+      if (!window.confirm("Show this application's folder on your computer?")) return;
+      post("/workspace-file/open", { path: `${reveal.dataset.reveal}/job_posting.md`, reveal: true }).catch(() => {
+      });
+      return;
+    }
+    const open = event.target.closest("[data-open-file]");
+    if (open) {
+      if (!window.confirm("Open this file in its usual app (for example Word or your PDF viewer)?")) return;
+      post("/workspace-file/open", { path: open.dataset.openFile }).catch(() => notice("Could not open that file."));
+      return;
+    }
+    if (event.target.closest("[data-close-preview]")) {
+      applicationsState = { ...applicationsState, preview: null };
+      paintApplications();
+      return;
+    }
+    const action = event.target.closest("[data-app-action]");
+    if (!action) return;
+    const row = action.closest("[data-app-id]");
+    const target = [row?.dataset.company, row?.dataset.role].filter(Boolean).join(" ");
+    if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
+    if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
+  });
+  async function previewWorkspaceFile(path) {
+    const src = `/workspace-file?path=${encodeURIComponent(path)}`;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(res.status === 415 ? "This file type has no preview; use Open instead." : "That file is not in your job-search folder any more.");
+      const type = res.headers.get("content-type") || "";
+      applicationsState = {
+        ...applicationsState,
+        preview: type.includes("pdf") ? { path, kind: "pdf", src } : { path, kind: "text", text: await res.text() }
+      };
+    } catch (error) {
+      notice(error.message);
+      return;
+    }
+    paintApplications();
+    applicationsEl.querySelector(".file-preview")?.scrollIntoView({ block: "start" });
+  }
+  document.addEventListener("click", (event) => {
+    const step = event.target.closest("[data-checklist-action]");
+    if (step) {
+      const action = step.dataset.checklistAction;
+      if (action === "documents") docInput.click();
+      else if (action === "apply") tabs?.select("jobs");
+      else runAction(action);
+      return;
+    }
+    if (event.target.closest("[data-open-tools]") || event.target.closest("#open-tools")) {
+      openTools();
+    }
+  });
+  document.getElementById("add-documents")?.addEventListener("click", () => docInput.click());
+  document.getElementById("tools-refresh")?.addEventListener("click", () => {
+    toolsList.innerHTML = "<p>Checking\u2026</p>";
+    loadTools({ refresh: true });
+  });
+  function openTools() {
+    renderTools(toolsList, toolsInfo);
+    toolsDialog.showModal();
+    if (!toolsInfo) loadTools();
+  }
+  async function uploadDocuments(files) {
+    const list = [...files || []];
+    if (!list.length) return;
+    const saved = [];
+    for (const file of list) {
+      try {
+        const kind = /linkedin/i.test(file.name) ? "linkedin" : "cv";
+        const res = await fetch(`/documents?name=${encodeURIComponent(file.name)}&kind=${kind}`, { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || "The upload did not finish.");
+        saved.push(body.relativePath);
+        if (body.progress) progressInfo = body.progress;
+      } catch (error) {
+        notice(`${file.name}: ${error.message}`);
+      }
+    }
+    if (!saved.length) return;
+    notice(`Added ${saved.length === 1 ? saved[0] : `${saved.length} files`} to your documents folder. Run Setup and Claude reads ${saved.length === 1 ? "it" : "them"}.`);
+    if (!state.cards.size) paintChat();
+  }
+  docInput?.addEventListener("change", () => {
+    uploadDocuments(docInput.files);
+    docInput.value = "";
+  });
+  var dragDepth = 0;
+  document.addEventListener("dragenter", (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    dragDepth += 1;
+    dropzone.hidden = false;
+  });
+  document.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dropzone.hidden = true;
+  });
+  document.addEventListener("dragover", (event) => {
+    if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    dragDepth = 0;
+    dropzone.hidden = true;
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    uploadDocuments(event.dataTransfer.files);
+  });
+  modeToggle?.addEventListener("click", () => modeSheet.showModal());
+  modeSheet?.addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-mode-choice]");
+    if (!choice) return;
+    modeSheet.close();
+    const mode = choice.dataset.modeChoice;
+    if (mode === state.permissionMode) return;
+    if (!runtimeSend({ type: "permission.mode", mode })) notice("The desk is not connected to Claude right now; try again in a moment.");
   });
   filesEl.addEventListener("click", (event) => {
     const item = event.target.closest("[data-artifact-id]");
@@ -11104,6 +11555,8 @@ ${multiline}` : rendered;
   });
   paintChat();
   paintFiles();
+  loadProgress();
+  loadTools();
   fetch("/commands").then((res) => res.json()).then((data) => {
     commands = data.commands || [];
     if (commands.length) renderSidebar(stepsEl, commands);

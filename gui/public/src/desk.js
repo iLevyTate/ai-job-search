@@ -12,6 +12,7 @@ import {
   requestArtifactConfirm,
 } from "./artifact-view.js";
 import { mountTabs } from "./tabs.js";
+import { filterJobs, renderApplications, renderChecklist, renderJobs, renderTools } from "./desk-views.js";
 import { createTerminalView } from "./terminal-view.js";
 import {
   answersFromQuestionForm,
@@ -53,6 +54,14 @@ const jumpBtn = document.getElementById("jump");
 const stepsEl = document.querySelector(".steps");
 const dock = document.getElementById("dock");
 const filesEl = document.getElementById("panel-files");
+const jobsEl = document.getElementById("panel-jobs");
+const applicationsEl = document.getElementById("panel-applications");
+const toolsDialog = document.getElementById("tools");
+const toolsList = document.getElementById("tools-list");
+const modeSheet = document.getElementById("mode-sheet");
+const modeToggle = document.getElementById("mode-toggle");
+const docInput = document.getElementById("doc-input");
+const dropzone = document.getElementById("dropzone");
 const palette = document.getElementById("palette");
 const paletteQuery = document.getElementById("palette-query");
 const paletteList = document.getElementById("palette-list");
@@ -104,6 +113,7 @@ function emptyMarkup(kind) {
       <p class="kicker">Clean slate</p>
       <h2>New conversation.</h2>
       <p>The page is clear. Your files are still in your job-search folder.</p>
+      ${renderChecklist(progressInfo, toolsInfo)}
       <div class="suggestions" aria-label="Suggested starts">
         <button type="button" data-action="scrape">Find openings</button>
         <button type="button" data-action="rank">Rank what we have</button>
@@ -111,14 +121,15 @@ function emptyMarkup(kind) {
       </div>
     </div>`;
   }
+  const checklist = renderChecklist(progressInfo, toolsInfo);
   return `<div class="empty" id="empty">
     <p class="kicker">Ready when you are</p>
     <h2>Start wherever you are.</h2>
     <p>New here? Start with <strong>Setup</strong>: it asks a few questions about you, once. Already set up? Click <strong>Find jobs</strong> to search the job boards, or just type what you need below.</p>
-    <div class="empty-actions">
+    ${checklist || `<div class="empty-actions">
       <button type="button" data-action="setup">Start with setup</button>
       <button type="button" data-action="scrape" class="ghost">Find jobs now</button>
-    </div>
+    </div>`}
     <div class="suggestions" aria-label="Suggested starts">
       <button type="button" data-prompt="Which of these roles should I prioritize this week?">Prioritize this week</button>
       <button type="button" data-action="rank">Rank what we have</button>
@@ -264,6 +275,11 @@ function ingest(event) {
     else if (event.type === "turn.failed") announce(`Problem: ${event.payload?.text || "the turn failed."}`);
     else if (event.type === "question.requested") announce("Claude has a question for you.");
     else if (event.type === "permission.requested") announce("Claude is asking for permission.");
+    if (event.type === "turn.completed" || event.type === "turn.failed") {
+      notifyHidden(event.type === "turn.completed" ? "Claude finished." : "Claude ran into a problem.");
+      refreshDeskData();
+    } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
+    else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
   }
   if (event.type === "artifact.discovered") {
     const incoming = {
@@ -421,6 +437,7 @@ async function sendPrompt(prompt) {
     }
     setMenu(false);
     setBusy(true);
+    requestNotificationPermission();
     // The server echoes the message back (runtime: a persisted user.message
     // event; print mode: the "user" SSE event), so the page does not add its
     // own copy. A local copy showed every message twice.
@@ -580,6 +597,7 @@ function connectRuntime() {
     if (message.type === "snapshot") {
       if (!runtimeMode) {
         runtimeMode = true;
+        if (modeToggle) modeToggle.hidden = false;
         state = createDeskState({ permissionMode: state.permissionMode });
         sseSequence = 0;
         sseTurn = 0;
@@ -717,6 +735,8 @@ source.addEventListener("idle", () => {
   setBusy(false);
   state = applySnapshot(state, { busy: false });
   paintChat();
+  notifyHidden("Claude finished.");
+  refreshDeskData();
 });
 source.onerror = () => {
   // EventSource fires error on every reconnect attempt; only a closed stream
@@ -802,6 +822,111 @@ stopBtn.addEventListener("click", async () => {
   }
 });
 let resetPending = false;
+let progressInfo = null;
+let toolsInfo = null;
+let jobsState = { jobs: [], filter: "open", query: "", status: "loading", error: "" };
+let applicationsState = { applications: [], status: "loading", error: "", preview: null };
+
+async function loadProgress() {
+  try {
+    const res = await fetch("/progress");
+    if (res.ok) progressInfo = await res.json();
+  } catch {
+    // The checklist is a nicety; the chat works without it.
+  }
+  if (!state.cards.size) paintChat();
+}
+
+async function loadTools({ refresh = false } = {}) {
+  try {
+    const res = await fetch(refresh ? "/tools?refresh=1" : "/tools");
+    if (res.ok) toolsInfo = await res.json();
+  } catch {
+    toolsInfo = null;
+  }
+  if (toolsDialog?.open) renderTools(toolsList, toolsInfo);
+  if (!state.cards.size) paintChat();
+}
+
+function paintJobs() {
+  renderJobs(jobsEl, jobsState);
+}
+
+async function loadJobs() {
+  jobsState = { ...jobsState, status: jobsState.jobs.length ? "ready" : "loading" };
+  paintJobs();
+  try {
+    const res = await fetch("/jobs");
+    if (!res.ok) throw new Error("Could not read the job list.");
+    const body = await res.json();
+    jobsState = { ...jobsState, jobs: body.jobs || [], status: "ready", error: "" };
+  } catch (error) {
+    jobsState = { ...jobsState, status: "error", error: error.message };
+  }
+  paintJobs();
+}
+
+function paintApplications() {
+  renderApplications(applicationsEl, applicationsState);
+}
+
+async function loadApplications() {
+  applicationsState = { ...applicationsState, status: applicationsState.applications.length ? "ready" : "loading" };
+  paintApplications();
+  try {
+    const res = await fetch("/applications");
+    if (!res.ok) throw new Error("Could not read the tracker.");
+    const body = await res.json();
+    applicationsState = { ...applicationsState, applications: body.applications || [], status: "ready", error: "" };
+  } catch (error) {
+    applicationsState = { ...applicationsState, status: "error", error: error.message };
+  }
+  paintApplications();
+}
+
+// After every turn the files may have changed: refresh what the tabs show.
+function refreshDeskData() {
+  loadProgress();
+  if (selectedTab === "jobs") loadJobs();
+  if (selectedTab === "applications") loadApplications();
+}
+
+// ---- Notifications for long steps that finish while the window is elsewhere
+const BASE_TITLE = document.title;
+let attentionFlag = false;
+
+function flagAttention() {
+  if (!document.hidden) return;
+  attentionFlag = true;
+  document.title = `● ${BASE_TITLE}`;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && attentionFlag) {
+    attentionFlag = false;
+    document.title = BASE_TITLE;
+  }
+});
+
+function notifyHidden(body) {
+  flagAttention();
+  if (!document.hidden || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const shown = new Notification("Job Search Desk", { body, tag: "desk-turn", silent: true });
+    shown.onclick = () => window.focus();
+  } catch {
+    // Some browsers refuse without a service worker; the title flag remains.
+  }
+}
+
+function requestNotificationPermission() {
+  if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+  try {
+    Notification.requestPermission().catch?.(() => {});
+  } catch {
+    // Not available in this environment.
+  }
+}
 // True between New chat during a running turn and the server's idle.
 let closingOld = false;
 // Messages sent to the runtime that it has not yet accepted; a rejection puts
@@ -1095,7 +1220,7 @@ document.getElementById("more-steps")?.addEventListener("click", () => {
   setMenu(false);
   openPalette();
 });
-const surfaceTabs = [{ id: "chat", label: "Chat" }];
+const surfaceTabs = [{ id: "chat", label: "Chat" }, { id: "jobs", label: "Jobs" }, { id: "applications", label: "Applications" }];
 if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
 surfaceTabs.push({ id: "files", label: "Files" });
 const tabs = mountTabs(document.getElementById("surface-tabs"), {
@@ -1104,6 +1229,8 @@ const tabs = mountTabs(document.getElementById("surface-tabs"), {
   onSelect(id) {
     selectedTab = id;
     if (id === "files") loadArtifacts();
+    if (id === "jobs") loadJobs();
+    if (id === "applications") loadApplications();
     if (id === "terminal") ensureTerminal();
     if (id !== "terminal") releaseTerminal();
     // A reply that finished while another tab was in front left the log
@@ -1111,6 +1238,188 @@ const tabs = mountTabs(document.getElementById("surface-tabs"), {
     if (id === "chat") requestAnimationFrame(scrollLog);
   },
 });
+jobsEl.addEventListener("click", async (event) => {
+  const filter = event.target.closest("[data-job-filter]");
+  if (filter) {
+    jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+    paintJobs();
+    return;
+  }
+  const action = event.target.closest("[data-job-action]");
+  if (!action) return;
+  const row = action.closest("[data-job-key]");
+  const job = jobsState.jobs.find((item) => item.key === row?.dataset.jobKey);
+  if (!job) return;
+  const kind = action.dataset.jobAction;
+  if (kind === "apply") {
+    if (job.url) runStep("apply", `/apply ${job.url}`);
+    else runStep("apply", `/apply\n${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask me for the posting if you need it)`);
+    return;
+  }
+  if (kind === "autofill") {
+    runStep("autofill", `/autofill ${job.url}`);
+    return;
+  }
+  const mark = kind === "interested" ? "interested" : kind === "ignore" ? "ignored" : null;
+  action.disabled = true;
+  try {
+    const res = await post("/jobs/mark", { key: job.key, mark });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Could not save that.");
+    jobsState = { ...jobsState, jobs: body.jobs || jobsState.jobs };
+  } catch (error) {
+    notice(error.message || "Could not save that.");
+  }
+  paintJobs();
+});
+jobsEl.addEventListener("input", (event) => {
+  const search = event.target.closest("[data-job-search]");
+  if (!search) return;
+  jobsState = { ...jobsState, query: search.value };
+  const list = jobsEl.querySelector(".job-list");
+  if (list) {
+    // Repaint only the rows so the search box keeps focus and its caret.
+    const fresh = jobsEl.ownerDocument.createElement("section");
+    renderJobs(fresh, jobsState);
+    const next = fresh.querySelector(".job-list");
+    if (next) list.replaceWith(next);
+  }
+});
+
+applicationsEl.addEventListener("click", async (event) => {
+  const file = event.target.closest("[data-file]");
+  if (file) {
+    await previewWorkspaceFile(file.dataset.file);
+    return;
+  }
+  const reveal = event.target.closest("[data-reveal]");
+  if (reveal) {
+    if (!window.confirm("Show this application's folder on your computer?")) return;
+    post("/workspace-file/open", { path: `${reveal.dataset.reveal}/job_posting.md`, reveal: true }).catch(() => {});
+    return;
+  }
+  const open = event.target.closest("[data-open-file]");
+  if (open) {
+    if (!window.confirm("Open this file in its usual app (for example Word or your PDF viewer)?")) return;
+    post("/workspace-file/open", { path: open.dataset.openFile }).catch(() => notice("Could not open that file."));
+    return;
+  }
+  if (event.target.closest("[data-close-preview]")) {
+    applicationsState = { ...applicationsState, preview: null };
+    paintApplications();
+    return;
+  }
+  const action = event.target.closest("[data-app-action]");
+  if (!action) return;
+  const row = action.closest("[data-app-id]");
+  const target = [row?.dataset.company, row?.dataset.role].filter(Boolean).join(" ");
+  if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
+  if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
+});
+
+async function previewWorkspaceFile(path) {
+  const src = `/workspace-file?path=${encodeURIComponent(path)}`;
+  try {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(res.status === 415 ? "This file type has no preview; use Open instead." : "That file is not in your job-search folder any more.");
+    const type = res.headers.get("content-type") || "";
+    applicationsState = {
+      ...applicationsState,
+      preview: type.includes("pdf") ? { path, kind: "pdf", src } : { path, kind: "text", text: await res.text() },
+    };
+  } catch (error) {
+    notice(error.message);
+    return;
+  }
+  paintApplications();
+  applicationsEl.querySelector(".file-preview")?.scrollIntoView({ block: "start" });
+}
+
+// Checklist and dock buttons.
+document.addEventListener("click", (event) => {
+  const step = event.target.closest("[data-checklist-action]");
+  if (step) {
+    const action = step.dataset.checklistAction;
+    if (action === "documents") docInput.click();
+    else if (action === "apply") tabs?.select("jobs");
+    else runAction(action);
+    return;
+  }
+  if (event.target.closest("[data-open-tools]") || event.target.closest("#open-tools")) {
+    openTools();
+  }
+});
+document.getElementById("add-documents")?.addEventListener("click", () => docInput.click());
+document.getElementById("tools-refresh")?.addEventListener("click", () => {
+  toolsList.innerHTML = "<p>Checking…</p>";
+  loadTools({ refresh: true });
+});
+
+function openTools() {
+  renderTools(toolsList, toolsInfo);
+  toolsDialog.showModal();
+  if (!toolsInfo) loadTools();
+}
+
+// ---- Documents: a file picker and a drop zone, both saved into documents/.
+async function uploadDocuments(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  const saved = [];
+  for (const file of list) {
+    try {
+      const kind = /linkedin/i.test(file.name) ? "linkedin" : "cv";
+      const res = await fetch(`/documents?name=${encodeURIComponent(file.name)}&kind=${kind}`, { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "The upload did not finish.");
+      saved.push(body.relativePath);
+      if (body.progress) progressInfo = body.progress;
+    } catch (error) {
+      notice(`${file.name}: ${error.message}`);
+    }
+  }
+  if (!saved.length) return;
+  notice(`Added ${saved.length === 1 ? saved[0] : `${saved.length} files`} to your documents folder. Run Setup and Claude reads ${saved.length === 1 ? "it" : "them"}.`);
+  if (!state.cards.size) paintChat();
+}
+
+docInput?.addEventListener("change", () => {
+  uploadDocuments(docInput.files);
+  docInput.value = "";
+});
+
+let dragDepth = 0;
+document.addEventListener("dragenter", (event) => {
+  if (!event.dataTransfer?.types?.includes("Files")) return;
+  dragDepth += 1;
+  dropzone.hidden = false;
+});
+document.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropzone.hidden = true;
+});
+document.addEventListener("dragover", (event) => {
+  if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+});
+document.addEventListener("drop", (event) => {
+  dragDepth = 0;
+  dropzone.hidden = true;
+  if (!event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  uploadDocuments(event.dataTransfer.files);
+});
+
+// ---- How much Claude asks (installed app only; print mode has one mode).
+modeToggle?.addEventListener("click", () => modeSheet.showModal());
+modeSheet?.addEventListener("click", (event) => {
+  const choice = event.target.closest("[data-mode-choice]");
+  if (!choice) return;
+  modeSheet.close();
+  const mode = choice.dataset.modeChoice;
+  if (mode === state.permissionMode) return;
+  if (!runtimeSend({ type: "permission.mode", mode })) notice("The desk is not connected to Claude right now; try again in a moment.");
+});
+
 filesEl.addEventListener("click", (event) => {
   const item = event.target.closest("[data-artifact-id]");
   if (item) {
@@ -1146,6 +1455,8 @@ filesEl.addEventListener("keydown", (event) => {
 });
 paintChat();
 paintFiles();
+loadProgress();
+loadTools();
 
 fetch("/commands")
   .then((res) => res.json())

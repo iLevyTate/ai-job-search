@@ -13,6 +13,19 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Added
+- Job Search Desk: a **Jobs** tab (what Find Jobs found, ranked, with Apply,
+  Autofill, Interested and Ignore per row), an **Applications** tab (the
+  tracker with status, deadline, inline CV and letter preview, and buttons to
+  record an outcome or prepare an interview), a live getting-started
+  checklist on the empty chat, a **Tools check** that says which programs the
+  steps need on this computer and how to install them, **Add your CV or
+  documents** (a file picker and drag-and-drop into the documents folder), a
+  switch between "works on its own" and "asks before acting" in the installed
+  app, and a tab-title dot plus optional desktop notification when a step
+  finishes in the background. The Files tab's Open and Show in folder now
+  open the file (they were wired to no-ops).
+
 ### Fixed
 - Job Search Desk first-use fixes, after walking through it as someone who has
   never opened it. Signing in opened two claude.ai tabs: Claude Code opens the

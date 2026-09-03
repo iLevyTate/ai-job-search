@@ -37,6 +37,17 @@ import { ARTIFACT_HTML_CSP, createArtifactService } from "./artifacts.mjs";
 import { createAutofillBridge } from "./autofill-bridge.mjs";
 import { attachWebSocketTransport } from "./websocket-transport.mjs";
 import { createCommandRegistry } from "./command-registry.mjs";
+import {
+  checkTools,
+  MAX_DOCUMENT_BYTES,
+  readApplications,
+  readJobs,
+  readProgress,
+  resolveWorkspaceFile,
+  saveDocument,
+  setJobMark,
+  systemOpener,
+} from "./desk-data.mjs";
 
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
@@ -640,6 +651,123 @@ function readBody(req) {
   });
 }
 
+// Uploads (a CV) are larger than any JSON body the desk takes.
+function readRawBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > limit) {
+        req.destroy();
+        const err = new Error("request too large");
+        err.tooLarge = true;
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", () => reject(new Error("request stream error")));
+  });
+}
+
+// `which` per tool costs a process each; the answer rarely changes.
+let toolsCache = null;
+function toolsStatus() {
+  if (toolsCache && Date.now() - toolsCache.at < 30000) return toolsCache.value;
+  const value = checkTools({ workspace });
+  toolsCache = { at: Date.now(), value };
+  return value;
+}
+
+const TEXT_PREVIEW_TYPES = { ".tex": "text/plain", ".md": "text/plain", ".txt": "text/plain", ".csv": "text/plain", ".json": "text/plain" };
+
+async function handleDeskDataRequest(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/jobs") {
+    json(res, 200, { jobs: readJobs(workspace) });
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/jobs/mark") {
+    const body = await readJson(req);
+    if (!body) {
+      json(res, 400, { ok: false, error: "invalid JSON body" });
+      return true;
+    }
+    try {
+      setJobMark(workspace, body.key, body.mark ?? null);
+      json(res, 200, { ok: true, jobs: readJobs(workspace) });
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message });
+    }
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/applications") {
+    json(res, 200, { applications: readApplications(workspace) });
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/progress") {
+    json(res, 200, readProgress(workspace));
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/tools") {
+    if (url.searchParams.get("refresh") === "1") toolsCache = null;
+    json(res, 200, toolsStatus());
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/documents") {
+    let bytes;
+    try {
+      bytes = await readRawBody(req, MAX_DOCUMENT_BYTES);
+    } catch (err) {
+      json(res, err?.tooLarge ? 413 : 400, { ok: false, error: err?.tooLarge ? "That file is larger than 25 MB." : "The upload did not finish." });
+      return true;
+    }
+    try {
+      const saved = saveDocument(workspace, { name: url.searchParams.get("name") || "", kind: url.searchParams.get("kind") || "cv", bytes });
+      json(res, 200, { ok: true, ...saved, progress: readProgress(workspace) });
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message });
+    }
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/workspace-file") {
+    const found = resolveWorkspaceFile(workspace, url.searchParams.get("path") || "");
+    if (!found) {
+      res.writeHead(404).end("not found");
+      return true;
+    }
+    const ext = extname(found.absolutePath).toLowerCase();
+    const type = ext === ".pdf" ? "application/pdf" : TEXT_PREVIEW_TYPES[ext];
+    if (!type) {
+      res.writeHead(415).end("no preview for this file type");
+      return true;
+    }
+    const data = await readFile(found.absolutePath);
+    res.writeHead(200, {
+      "Content-Type": type === "text/plain" ? "text/plain; charset=utf-8" : type,
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": "inline",
+    });
+    res.end(data);
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/workspace-file/open") {
+    const body = await readJson(req);
+    const found = body && resolveWorkspaceFile(workspace, body.path || "");
+    if (!found) {
+      json(res, 404, { ok: false, error: "That file is not in your job-search folder any more." });
+      return true;
+    }
+    if (body.reveal) systemOpener.reveal(found.absolutePath);
+    else systemOpener.open(found.absolutePath);
+    json(res, 200, { ok: true, path: found.relativePath });
+    return true;
+  }
+  return false;
+}
+
 async function readJson(req) {
   let raw;
   try {
@@ -750,6 +878,8 @@ async function handleRequest(req, res) {
       json(res, 200, { commands: registry.list() });
       return;
     }
+
+    if (await handleDeskDataRequest(req, res, url)) return;
 
     if (url.pathname === "/artifacts" || url.pathname.startsWith("/artifacts/")) {
       if (req.headers.origin && !originAllowed(req.headers.origin)) {
@@ -1128,7 +1258,8 @@ export async function startDesk(options = {}) {
   }
   deskRuntime = runtime;
   deskAutofill = options.autofill || runtime?.autofillBridge || createAutofillBridge();
-  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace });
+  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace, openImpl: systemOpener });
+  toolsCache = null;
   let transport = null;
 
   const stop = (exitProcess = false) => {

@@ -295,3 +295,31 @@ test("a runtime command that throws answers the page with a rejection instead of
   await transport.close();
   server.close();
 });
+
+test("the page can switch between Safe and Autonomous and gets the new snapshot back", async () => {
+  const runtime = fakeRuntime();
+  runtime.setPermissionMode = async (message) => {
+    runtime.calls.push(["setPermissionMode", message]);
+    return { ok: true, permissionMode: message.mode };
+  };
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  ws.send(JSON.stringify({ type: "permission.mode", mode: "autonomous", expectedControllerGeneration: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(runtime.calls.some((call) => call[0] === "setPermissionMode" && call[1].mode === "autonomous"));
+  assert.ok(received.some((m) => m.type === "command.accepted" && m.command === "permission.mode"));
+  assert.equal(received.filter((m) => m.type === "snapshot").length, 2, "a fresh snapshot follows the change");
+  ws.send(JSON.stringify({ type: "permission.mode", mode: "bypassPermissions" }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(received.some((m) => m.type === "protocol.error" && /safe or autonomous/.test(m.error)));
+  ws.close();
+  await transport.close();
+  server.close();
+});

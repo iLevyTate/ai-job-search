@@ -53,6 +53,18 @@ The desk listens on `http://127.0.0.1:8765/`. The installable app uses the same 
 
 Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`. Without that opt-in, Claude is launched with `--no-chrome` so a missing extension cannot block a turn.
 
+## What is on the page
+
+- **Chat** is the conversation with Claude. Steps in the left column send the matching command; **More steps…** (Ctrl+K) lists every command.
+- **Jobs** lists what Find Jobs found, best fit first, with Apply and Autofill on each row. Mark a job Interested or Ignore it; applied ones move to their own filter.
+- **Applications** reads the tracker: status, deadline, the CV and cover letter (preview inline or open in their usual app), and buttons to record what happened or prepare for an interview.
+- **Files** previews what Claude wrote in the current conversation.
+- **Add your CV or documents** copies files into the documents folder (or drop them anywhere on the page); run Setup afterwards so Claude reads them.
+- **Tools check** shows which programs the steps need on this computer (TeX for PDFs, Bun for searches, Python, the Autofill browser) and how to install each.
+- The header says whether Claude **works on its own** or **asks before acting**; in the installed app, **Change** switches between the two.
+- The empty chat shows a checklist (profile, CV, first search, first application) that reflects the folder's real state.
+- When a long step finishes while the window is in the background, the tab title gets a dot and, if you allowed it, a desktop notification.
+
 ## How to use it
 
 1. Sign in only if the desk reports you are signed out. Claude Code opens one claude.ai tab for that; if no tab appears, use the **Open the sign-in page** link on the same card. Install Claude Code only if it is missing.

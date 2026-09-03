@@ -147,6 +147,9 @@ export function attachWebSocketTransport({
       } else if (message.type === "conversation.reset") {
         result = await runtime.reset(message);
         if (result.ok) lastReplayed = 0;
+      } else if (message.type === "permission.mode") {
+        result = await runtime.setPermissionMode({ mode: message.mode, expectedControllerGeneration: message.expectedControllerGeneration });
+        if (result.ok) result = { ...result, snapshot: result.snapshot || runtime.snapshot() };
       }
       return result;
     }

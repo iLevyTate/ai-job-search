@@ -26,6 +26,7 @@
       <p class="brand-sub">Connect Claude</p>
       <h2 id="gate-title">Starting Claude Code</h2>
       <p id="gate-copy">The desk starts Claude Code as soon as it opens. Sign in with your Claude subscription, the same account you use on claude.ai. It installs Claude Code if needed, then opens one claude.ai sign-in tab.</p>
+      <p class="hint">Claude Code needs a paid Claude plan (Pro, Max, Team, or Enterprise). A free claude.ai account cannot sign in here.</p>
       <ol class="gate-steps" aria-label="What happens next">
         <li>Install Claude Code if it is missing</li>
         <li>Sign in on claude.ai in the tab that opens. If it shows you a code, paste it below.</li>
@@ -108,6 +109,11 @@
       </button>
     </nav>
     <button type="button" id="more-steps" class="ghost more-steps">More steps… <span class="kbd">Ctrl+K</span></button>
+    <div class="dock-tools">
+      <button type="button" id="add-documents" class="ghost">Add your CV or documents</button>
+      <button type="button" id="open-tools" class="ghost">Tools check</button>
+      <input type="file" id="doc-input" multiple accept=".pdf,.tex,.txt,.md,.docx,.doc,.rtf,.odt,.png,.jpg,.jpeg" hidden>
+    </div>
     <div class="dock-foot">
       <p>Everything Claude finds or writes is saved in your job-search folder on this computer.</p>
       <p class="account" id="account-label">localhost only</p>
@@ -125,7 +131,7 @@
           <h1>Conversation</h1>
           <p id="session-label" class="session">New conversation</p>
           <p id="workspace-label" class="workspace-path">Your job-search folder</p>
-          <p id="mode-label" class="mode-label" data-mode="autonomous" title="Claude may create and change files in your job-search folder without asking first.">Works on its own</p>
+          <p class="mode-row"><span id="mode-label" class="mode-label" data-mode="autonomous" title="Claude may create and change files in your job-search folder without asking first.">Works on its own</span> <button type="button" id="mode-toggle" class="link" hidden>Change</button></p>
         </div>
       </div>
       <div class="bar-actions">
@@ -140,6 +146,8 @@
       <div id="surface-tabs" class="surface-tabs"></div>
       <section id="panel-chat" class="log"></section>
       <p id="announce" class="sr-only" aria-live="polite"></p>
+      <section id="panel-jobs" class="surface-panel" hidden></section>
+      <section id="panel-applications" class="surface-panel" hidden></section>
       <section id="panel-terminal" class="surface-panel" hidden>
         <div class="empty">
           <p class="kicker">Terminal</p>
@@ -178,6 +186,35 @@
       </div>
     </form>
   </dialog>
+
+  <dialog id="tools" class="sheet" aria-labelledby="tools-title">
+    <form method="dialog">
+      <p class="kicker">This computer</p>
+      <h2 id="tools-title">Tools check</h2>
+      <p>Each step needs a few programs on this computer. Green means ready. For a red one, follow the line under it, then click Check again.</p>
+      <div id="tools-list"></div>
+      <div class="sheet-actions">
+        <button type="button" id="tools-refresh">Check again</button>
+        <button type="submit" value="cancel" class="ghost">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mode-sheet" class="sheet" aria-labelledby="mode-title">
+    <form method="dialog">
+      <p class="kicker">How much Claude asks</p>
+      <h2 id="mode-title">Before acting…</h2>
+      <div class="choice-grid">
+        <button type="button" class="choice" data-mode-choice="safe"><strong>Asks before acting</strong><em>Claude asks you before it changes a file or runs a command. Slower, and you see every step.</em></button>
+        <button type="button" class="choice" data-mode-choice="autonomous"><strong>Works on its own</strong><em>Claude creates and changes files in your job-search folder without asking. Faster; it never sends an application for you.</em></button>
+      </div>
+      <div class="sheet-actions">
+        <button type="submit" value="cancel" class="ghost">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="dropzone" class="dropzone" hidden aria-hidden="true"><p>Drop your CV or other documents here</p></div>
 
   <dialog id="palette" class="sheet palette" aria-labelledby="palette-title">
     <form method="dialog">

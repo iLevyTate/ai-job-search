@@ -8,7 +8,10 @@ const CLIENT_TYPES = new Set([
   "question.response",
   "turn.interrupt",
   "conversation.reset",
+  "permission.mode",
 ]);
+
+const DESK_MODES = new Set(["safe", "autonomous"]);
 
 const PERMISSION_DECISIONS = new Set(["allow-once", "allow-scoped", "deny"]);
 
@@ -309,6 +312,9 @@ export function validateClientMessage(value) {
       if (typeof value.requestId !== "string" || !value.requestId) {
         return reject("question.response.requestId is required");
       }
+      break;
+    case "permission.mode":
+      if (!DESK_MODES.has(value.mode)) return reject("permission.mode.mode must be safe or autonomous");
       break;
     case "turn.interrupt":
     case "conversation.reset":
