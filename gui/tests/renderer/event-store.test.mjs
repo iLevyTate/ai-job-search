@@ -172,3 +172,14 @@ test("a permission resolution clears the pending flag and marks the card decided
   assert.equal(state.cards.get("req-1").entered, true);
   assert.equal(state.cards.get("req-1").payload.decision, "allow");
 });
+
+test("a tool completion without input keeps the file name, and a read-only question does not block the activity row", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "tool.started", { toolUseId: "t1", name: "Read", input: { file_path: "cv/main.tex" } }));
+  state = reduceDeskEvent(state, event(2, "tool.completed", { toolUseId: "t1", name: "Read", input: {} }));
+  assert.equal(state.cards.get("t1").payload.input.file_path, "cv/main.tex");
+  state = reduceDeskEvent(state, event(3, "question.requested", { entityId: "q-ro", readOnly: true, questions: [{ question: "Lane?" }] }));
+  assert.equal(state.pendingQuestionId, null);
+  state = reduceDeskEvent(state, event(4, "question.requested", { entityId: "q-live", questions: [{ question: "Lane?" }] }));
+  assert.equal(state.pendingQuestionId, "q-live");
+});

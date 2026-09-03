@@ -66,6 +66,36 @@ per-file diff commands.
   again instead of hiding the gate, and installer URLs are never offered as
   the sign-in link. Rejections from the runtime are plain-language notices
   that say which message or answer they concern instead of ending the turn.
+- Job Search Desk deep audit, third pass, from finders that drove the page in
+  a browser and read every string as a first-time user. A long reply froze
+  the page because every token re-rendered the whole reply's markdown; paints
+  are now coalesced to one per frame. The browser desk keeps its conversation
+  in `.claude/desk/transcript.json`, so a crash or restart mid-turn comes back
+  with the conversation and a note instead of a blank page; tool chips and
+  reply segments survive a reload too. Closing the terminal window (SIGHUP)
+  now stops Claude as the startup text promises. Stop leaves "Stopped. Claude's
+  reply was cut off here." in the conversation; New chat during a running turn
+  says it is closing the old conversation instead of "Ready"; a step clicked
+  while Claude is busy explains why nothing happened, and a pasted posting is
+  never thrown away by a busy send. Links in replies open in a new tab and
+  remote images are not fetched. A stale saved session is reported as a card,
+  an error result no longer swaps reply and problem order after a reload, and
+  when Claude's stderr ends in a clear sentence that sentence leads the
+  Problem card. First run in the app leads with "Start a new job search" in
+  plain words, turns git and download failures into sentences, shows a
+  starting page at once, and "Open in a terminal" also opens the desk. The
+  Terminal tab works on every visit, asks for a first chat message when there
+  is nothing to continue, and hands the conversation back to Chat when Claude
+  Code exits inside it. The header says "Works on its own" or "Asks before
+  acting" with a tooltip, "Open CLI" is "Open in Terminal", the session id is
+  gone, every "repo", "workspace" and "artifact" reads as folder and files,
+  step descriptions say what a click does, and a "More steps…" button reaches
+  the nine commands that were only behind Ctrl+K. Accessibility: only turn
+  ends, questions and permissions are announced (the whole log was a live
+  region), dialogs are named, focus never lands on a disabled button or a
+  hidden drawer, Files keeps keyboard focus after arrow keys, the header wraps
+  and Files stacks on narrow screens, the Latest button sits above the
+  composer, and the status line is legible.
 
 ### Changed
 - Public README describes this US Job Search Desk product. Credit for the

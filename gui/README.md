@@ -49,14 +49,14 @@ If `claude` lives somewhere unusual:
 CLAUDE_BIN=/path/to/claude node gui/server.mjs
 ```
 
-The desk listens on `http://127.0.0.1:8765/`. The installable app uses the same page inside its own window. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files/Artifacts previews generated PDFs and text. Ctrl+K opens the command palette.
+The desk listens on `http://127.0.0.1:8765/`. The installable app uses the same page inside its own window. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files previews generated PDFs and text. Ctrl+K opens the command palette. In browser mode the conversation is kept in `.claude/desk/transcript.json` (ignored by git) so a restart brings it back.
 
 Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`. Without that opt-in, Claude is launched with `--no-chrome` so a missing extension cannot block a turn.
 
 ## How to use it
 
 1. Sign in only if the desk reports you are signed out. Claude Code opens one claude.ai tab for that; if no tab appears, use the **Open the sign-in page** link on the same card. Install Claude Code only if it is missing.
-2. Click a step in the left column. **Setup**, **Scrape**, **Rank**, **Interview**, and **Outcome** run as soon as you click them. **Apply** asks for one thing: the job link, or the whole posting pasted in if the site blocks links. **Autofill** asks for the application form link.
+2. Click a step in the left column. **Setup**, **Find Jobs**, **Rank**, **Interview**, and **Outcome** run as soon as you click them. **Apply** asks for one thing: the job link, or the whole posting pasted in if the site blocks links. **Autofill** asks for the application form link. **More steps…** (or Ctrl+K) lists everything else, such as Import and Upskill.
 3. While Claude works the chat says what it is doing: *Thinking*, *Reading job_search_tracker.csv*, *Writing*. Stop cancels the turn. Scroll up whenever you like; a **Latest** button brings you back. When Claude has a question, a **Needs you** card lists the choices; pick one or type your own answer. In **Safe** mode the same kind of card asks before a tool runs.
 4. **Scrape**, then talk: "which of these are real Staff AI roles?" **Rank** when the table is too long.
 5. **Autofill** fills the employer form and hands the browser to you. Review it, then click Submit yourself. Desk shows Continue and Cancel only.

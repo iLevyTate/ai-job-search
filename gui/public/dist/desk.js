@@ -9200,6 +9200,9 @@ ${h2.join(`
   }
   function mergeCard(existing, event) {
     const next = { ...existing, payload: { ...existing.payload, ...event.payload } };
+    if (event.payload?.input && !Object.keys(event.payload.input).length && existing.payload.input && Object.keys(existing.payload.input).length) {
+      next.payload.input = existing.payload.input;
+    }
     if (event.type === "question.requested" || event.type === "permission.requested") {
       next.type = event.type;
       next.entered = false;
@@ -9323,7 +9326,7 @@ ${incoming}`;
     const card = existing ? mergeCard(existing, event) : toRenderableCard(event, id);
     if (event.type === "question.requested") {
       card.entered = false;
-      next.pendingQuestionId = id;
+      if (!card.payload.readOnly) next.pendingQuestionId = id;
     }
     if (event.type === "permission.requested") {
       card.entered = false;
@@ -9492,7 +9495,7 @@ ${incoming}`;
     { id: "files", label: "Files" }
   ];
   function mountTabs(container, {
-    tabs = DEFAULT_TABS,
+    tabs: tabs2 = DEFAULT_TABS,
     selectedId = "chat",
     onSelect
   } = {}) {
@@ -9501,7 +9504,7 @@ ${incoming}`;
     list.className = "tablist";
     list.setAttribute("role", "tablist");
     list.setAttribute("aria-label", "Desk surfaces");
-    const buttons = tabs.map((tab) => {
+    const buttons = tabs2.map((tab) => {
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
       button.className = "tab";
@@ -9529,7 +9532,7 @@ ${incoming}`;
       }
     }
     function select(id, { focus = false } = {}) {
-      if (!tabs.some((tab) => tab.id === id)) return current;
+      if (!tabs2.some((tab) => tab.id === id)) return current;
       current = id;
       paint();
       if (focus) buttons.find((button) => button.dataset.tab === id)?.focus();
@@ -9544,16 +9547,16 @@ ${incoming}`;
       const index = buttons.findIndex((button) => button.dataset.tab === current);
       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
         event.preventDefault();
-        select(tabs[(index + 1) % tabs.length].id, { focus: true });
+        select(tabs2[(index + 1) % tabs2.length].id, { focus: true });
       } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
         event.preventDefault();
-        select(tabs[(index - 1 + tabs.length) % tabs.length].id, { focus: true });
+        select(tabs2[(index - 1 + tabs2.length) % tabs2.length].id, { focus: true });
       } else if (event.key === "Home") {
         event.preventDefault();
-        select(tabs[0].id, { focus: true });
+        select(tabs2[0].id, { focus: true });
       } else if (event.key === "End") {
         event.preventDefault();
-        select(tabs[tabs.length - 1].id, { focus: true });
+        select(tabs2[tabs2.length - 1].id, { focus: true });
       }
     });
     paint();
@@ -9701,6 +9704,15 @@ ${incoming}`;
   function looksLikeUrl(value) {
     return /^https?:\/\/\S+$/i.test(String(value || "").trim());
   }
+  function looksLikeBareDomain(value) {
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(String(value || "").trim());
+  }
+  function asUrl(value) {
+    const text = String(value || "").trim();
+    if (looksLikeUrl(text)) return text;
+    if (looksLikeBareDomain(text)) return `https://${text}`;
+    return "";
+  }
   function normalizeCommandValues(command, values = {}) {
     if (!commandTakesPaste(command)) return { ...values };
     const { [PASTE_FIELD]: pasted, ...rest } = values;
@@ -9708,7 +9720,8 @@ ${incoming}`;
     if (!text) return rest;
     const urlArgument = (command.arguments || []).find((argument) => argument.kind === "url");
     const postingArgument = (command.arguments || []).find((argument) => argument.kind === "multiline");
-    if (looksLikeUrl(text)) return { ...rest, [urlArgument.name]: text };
+    const url = /\s/.test(text) ? "" : asUrl(text);
+    if (url) return { ...rest, [urlArgument.name]: url };
     return { ...rest, [postingArgument.name]: text };
   }
   function commandInputError(command, values = {}) {
@@ -9725,7 +9738,7 @@ ${incoming}`;
       if (!argument.required) continue;
       const value = values[argument.name];
       if (value == null || String(value).trim() === "") return `${labelFor(argument)} is required.`;
-      if (argument.kind === "url" && !looksLikeUrl(value)) return "That link should start with http:// or https://.";
+      if (argument.kind === "url" && !asUrl(value)) return "That does not look like a web link. Paste the address from your browser, for example https://boards.greenhouse.io/company/jobs/123.";
     }
     return "";
   }
@@ -9744,11 +9757,12 @@ ${incoming}`;
         multiline = String(value);
         continue;
       }
+      const text = argument.kind === "url" ? asUrl(value) || String(value) : String(value);
       if (argument.flag) {
-        parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, String(value));
+        parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, text);
         continue;
       }
-      parts.push(String(value));
+      parts.push(text);
     }
     const rendered = parts.join(" ").trim();
     return multiline ? `${rendered}
@@ -9903,7 +9917,7 @@ ${multiline}` : rendered;
         const options = (question.options || []).map((option) => `<li><strong>${escapeHtml2(option.label)}</strong>${option.description ? `<em>${escapeHtml2(option.description)}</em>` : ""}</li>`).join("");
         return `<p class="q-text">${escapeHtml2(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
       }).join("");
-      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Reply in the message box at the bottom of the page, for example with the number or the name of the option you want.</p></div>`;
+      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Claude will repeat this question in a moment. Answer it then in the message box at the bottom, for example with the name of the option you want.</p></div>`;
     }
     const footer = card.entered ? `<p class="hint">${card.payload.answered === false ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered." : "Answered."}</p>` : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
     return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${blocks}${footer}</form>`;
@@ -10157,9 +10171,19 @@ ${multiline}` : rendered;
     </div>
   </div>`;
   }
+  var purifyHooked = false;
   function markdown(text) {
     if (window.marked && window.DOMPurify) {
-      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }));
+      if (!purifyHooked) {
+        purifyHooked = true;
+        window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+          if (node.tagName === "A" && node.getAttribute("href")) {
+            node.setAttribute("target", "_blank");
+            node.setAttribute("rel", "noopener noreferrer");
+          }
+        });
+      }
+      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), { FORBID_TAGS: ["img", "svg", "picture", "video", "audio"] });
     }
     return String(text || "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`).replace(/\n/g, "<br>");
   }
@@ -10203,9 +10227,17 @@ ${multiline}` : rendered;
     }, 50);
   }
   function paintChat() {
+    paintScheduled = false;
     renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : void 0) });
     paintMode();
     scrollLog();
+  }
+  var paintScheduled = false;
+  function schedulePaint() {
+    if (paintScheduled) return;
+    paintScheduled = true;
+    if (document.hidden || typeof requestAnimationFrame !== "function") window.setTimeout(paintChat, 60);
+    else requestAnimationFrame(paintChat);
   }
   function setBusy(next) {
     busy = next;
@@ -10242,7 +10274,8 @@ ${multiline}` : rendered;
   function ingest(event) {
     const wasBusy = state.busy;
     state = reduceDeskEvent(state, event);
-    paintChat();
+    if (event.type === "assistant.delta" || event.type === "assistant.thinking") schedulePaint();
+    else paintChat();
     if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
     if (!replayingTranscript) {
       if (event.type === "turn.completed") announce("Claude replied.");
@@ -10370,7 +10403,10 @@ ${multiline}` : rendered;
       runtimeSend({ type: "user.message", messageId, text });
       return true;
     }
-    if (busy) return false;
+    if (busy) {
+      notice(REJECT_TEXT.busy);
+      return false;
+    }
     if (sendPending) return false;
     sendPending = true;
     try {
@@ -10431,19 +10467,27 @@ ${multiline}` : rendered;
     }
     notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
   }
+  async function runStep(name, prompt) {
+    const sent = await sendPrompt(prompt);
+    if (sent) {
+      markAction(name);
+      tabs?.select("chat");
+    }
+    return sent;
+  }
   function runAction(name) {
     const command = commands.find((item) => item.id === name);
-    markAction(name);
     setMenu(false);
+    if (busy && !runtimeSocket) {
+      notice(REJECT_TEXT.busy);
+      return;
+    }
     if (!command) {
-      if (name === "setup") sendPrompt("/setup");
-      else if (name === "rank") sendPrompt("/rank");
-      else if (name === "interview") sendPrompt("/interview");
-      else if (name === "outcome") sendPrompt("/outcome");
+      if (["setup", "rank", "interview", "outcome"].includes(name)) runStep(name, `/${name}`);
       return;
     }
     if (!commandNeedsInput(command)) {
-      sendPrompt(command.invocation);
+      runStep(name, command.invocation);
       return;
     }
     openCommandSheet(command);
@@ -10530,6 +10574,11 @@ ${multiline}` : rendered;
     replayingTranscript = true;
     try {
       for (const entry of data.transcript || []) {
+        if (entry.role === "tool") {
+          sseEvent("tool.started", { toolUseId: `replay-${sseSequence + 1}`, name: entry.name, input: entry.input || {} });
+          sseEvent("tool.completed", { toolUseId: `replay-${sseSequence}`, name: entry.name });
+          continue;
+        }
         const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : entry.role === "notice" ? "desk.notice" : "turn.failed";
         sseEvent(type, { text: entry.text || "", detail: entry.detail });
       }
@@ -10561,6 +10610,9 @@ ${multiline}` : rendered;
     if (runtimeSocket) return;
     const { id, name, phase, input } = JSON.parse(event.data);
     sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
+  });
+  source.addEventListener("notice", (event) => {
+    if (!runtimeSocket) notice(JSON.parse(event.data).text);
   });
   source.addEventListener("question", (event) => {
     if (runtimeSocket) return;
@@ -10635,6 +10687,7 @@ ${multiline}` : rendered;
       promptEl.value = value;
       sizePrompt();
     }
+    if (sent) tabs?.select("chat");
     promptEl.focus();
   });
   promptEl.addEventListener("input", sizePrompt);
@@ -10648,16 +10701,24 @@ ${multiline}` : rendered;
   sheetForm.addEventListener("submit", (event) => {
     if (event.submitter?.value !== "run") return;
     if (!activeCommand) return;
+    event.preventDefault();
     const values = valuesFromForm(sheetFields);
     const problem = commandInputError(activeCommand, values);
     if (problem) {
-      event.preventDefault();
       sheetError.textContent = problem;
       sheetError.hidden = false;
       sheetFields.querySelector("input, textarea, select")?.focus();
       return;
     }
-    sendPrompt(renderCommandInvocation(activeCommand, values));
+    const command = activeCommand;
+    runStep(command.id, renderCommandInvocation(command, values)).then((sent) => {
+      if (sent) {
+        sheet.close();
+        return;
+      }
+      sheetError.textContent = REJECT_TEXT.busy;
+      sheetError.hidden = false;
+    });
   });
   stopBtn.addEventListener("click", async () => {
     if (runtimeSend({ type: "turn.interrupt" })) return;
@@ -10683,11 +10744,17 @@ ${multiline}` : rendered;
       }
     }
     hasReset = true;
+    const wasBusy = busy;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
     sseTurn = 0;
     sseTurnClosed = true;
-    setBusy(false);
+    markAction(null);
+    if (wasBusy && !runtimeSocket) {
+      statusEl.textContent = "Closing the old conversation\u2026";
+    } else {
+      setBusy(false);
+    }
     paintChat();
     jumpBtn.hidden = true;
     setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -10900,10 +10967,14 @@ ${multiline}` : rendered;
     }
   }
   bindDelegatedActions(document);
+  document.getElementById("more-steps")?.addEventListener("click", () => {
+    setMenu(false);
+    openPalette();
+  });
   var surfaceTabs = [{ id: "chat", label: "Chat" }];
   if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
   surfaceTabs.push({ id: "files", label: "Files" });
-  mountTabs(document.getElementById("surface-tabs"), {
+  var tabs = mountTabs(document.getElementById("surface-tabs"), {
     tabs: surfaceTabs,
     selectedId: "chat",
     onSelect(id) {

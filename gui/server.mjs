@@ -7,6 +7,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -93,14 +94,70 @@ const toolNames = new Map();
 
 const TRANSCRIPT_CAP = 200;
 
+// The print-mode conversation lives on disk too, so a desk that crashes or is
+// restarted mid-turn comes back with the conversation instead of a blank page.
+function transcriptPath() {
+  return join(workspace, ".claude", "desk", "transcript.json");
+}
+
+let transcriptSaveTimer = null;
+function saveTranscript() {
+  clearTimeout(transcriptSaveTimer);
+  transcriptSaveTimer = setTimeout(() => {
+    try {
+      mkdirSync(join(workspace, ".claude", "desk"), { recursive: true });
+      writeFileSync(transcriptPath(), JSON.stringify(transcript.slice(-TRANSCRIPT_CAP)));
+    } catch {
+      // A read-only folder just loses replay after a restart.
+    }
+  }, 150);
+  transcriptSaveTimer.unref?.();
+}
+
+function loadTranscript() {
+  transcript.length = 0;
+  try {
+    if (!existsSync(transcriptPath())) return;
+    const rows = JSON.parse(readFileSync(transcriptPath(), "utf8"));
+    if (!Array.isArray(rows)) return;
+    for (const row of rows) {
+      if (row && typeof row.role === "string") transcript.push(row);
+    }
+    // A conversation that ended on the person's message was cut off by a
+    // restart; say so instead of leaving a question that looks ignored.
+    const last = transcript.at(-1);
+    if (last?.role === "user") {
+      transcript.push({ role: "error", text: "The desk restarted while Claude was working on this. Send the message again." });
+    }
+  } catch {
+    transcript.length = 0;
+  }
+}
+
 // Keep the replayed conversation self-explanatory: trim on a "You" boundary
 // so a reload never opens with a reply to a question that is no longer shown.
 function pushTranscript(row) {
   transcript.push(row);
-  if (transcript.length <= TRANSCRIPT_CAP) return;
-  transcript.splice(0, transcript.length - TRANSCRIPT_CAP);
-  while (transcript.length && transcript[0].role !== "user") transcript.shift();
-  transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+  if (transcript.length > TRANSCRIPT_CAP) {
+    transcript.splice(0, transcript.length - TRANSCRIPT_CAP);
+    while (transcript.length && transcript[0].role !== "user") transcript.shift();
+    transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+  }
+  saveTranscript();
+}
+
+// A plain-language note the page shows as a card and replays after a reload.
+function sendNotice(text) {
+  send("notice", { text });
+  pushTranscript({ role: "notice", text });
+}
+
+// Text streamed before a tool call becomes its own row, and the tool its own
+// chip, so a reload shows the same shape the person watched live.
+function flushTurnText() {
+  if (!turnText.trim()) return;
+  pushTranscript({ role: "assistant", text: turnText });
+  turnText = "";
 }
 
 function send(event, data) {
@@ -153,8 +210,20 @@ function emitTools(message) {
       continue;
     }
     if (block?.type === "tool_use" && block.name) {
+      const known = toolNames.has(block.id);
       if (block.id) toolNames.set(block.id, block.name);
       send("tool", { id: block.id, name: block.name, phase: "start", input: block.input ?? {} });
+      if (!known) {
+        flushTurnText();
+        pushTranscript({ role: "tool", name: block.name, input: block.input ?? {} });
+      } else {
+        // The stream start had no input; the full message carries it.
+        const row = [...transcript].reverse().find((item) => item.role === "tool" && item.name === block.name && !Object.keys(item.input || {}).length);
+        if (row) {
+          row.input = block.input ?? {};
+          saveTranscript();
+        }
+      }
     }
     if (block?.type === "tool_result") {
       send("tool", { id: block.tool_use_id, name: toolNames.get(block.tool_use_id) || "tool", phase: "done" });
@@ -203,6 +272,8 @@ function handleStreamLine(line) {
       const block = inner.content_block;
       if (block.id && block.name) toolNames.set(block.id, block.name);
       send("tool", { id: block.id, name: block.name || "tool", phase: "start", input: block.input ?? {} });
+      flushTurnText();
+      pushTranscript({ role: "tool", name: block.name || "tool", input: block.input ?? {} });
     }
     if (inner.type === "content_block_start" && /^(redacted_)?thinking$/.test(inner.content_block?.type || "")) {
       // No thinking text leaves the process; the page only needs to know
@@ -221,8 +292,10 @@ function handleStreamLine(line) {
   if (event.type === "result") {
     if (event.is_error) {
       // One card, once: the error text is not also a reply, and the exit-code
-      // card below stays quiet when this one exists.
+      // card below stays quiet when this one exists. The streamed reply is
+      // stored first so a reload keeps reply-then-problem order.
       reportedError = true;
+      flushTurnText();
       sendTurnError(event.result || "Claude reported an error.");
       return;
     }
@@ -231,6 +304,16 @@ function handleStreamLine(line) {
       send("result", { text: event.result });
     }
   }
+}
+
+function clearErrorLine(tail) {
+  const lines = String(tail || "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const last = lines.at(-1) || "";
+  const match = /^(?:\[?(?:error|api error|fatal)\]?:?\s*)?(.{8,200})$/i.exec(last);
+  if (!match) return "";
+  const text = match[1];
+  if (/\bat\s+\S+\s*\(|node:internal|^\s*\{/.test(text)) return "";
+  return text;
 }
 
 function stopProcess(proc, group) {
@@ -443,7 +526,7 @@ function runClaude(prompt, { retried = false } = {}) {
     if (!stopRequested && shouldRetryWithoutResume({ code, sawInit, usedResume, retried })) {
       sessionId = null;
       clearDeskSession(workspace);
-      send("status", { text: "The saved session was stale. Starting a fresh one." });
+      sendNotice("Claude could not continue the earlier conversation, so this is a fresh start. It will not remember previous chats.");
       send("session", { sessionId: null, chromeGroup: snapshot().chromeGroup });
       runClaude(prompt, { retried: true });
       return;
@@ -460,7 +543,15 @@ function runClaude(prompt, { retried = false } = {}) {
       if (signal) failure = `Claude stopped unexpectedly (${signal}).`;
       else if (!code && !hadReply) failure = "Claude finished without sending a reply. Try sending the message again.";
     }
-    if (failure) sendTurnError(failure, errTail);
+    if (failure) {
+      // When stderr ends with one clear sentence, lead with it; the generic
+      // exit text becomes the detail instead of contradicting it.
+      const said = clearErrorLine(errTail);
+      if (said) sendTurnError(`Claude reported: ${said}`, `${failure}\n\n${errTail}`);
+      else sendTurnError(failure, errTail);
+    }
+    if (stopRequested && hadReply) sendNotice("Stopped. Claude's reply was cut off here.");
+    else if (stopRequested) sendNotice("Stopped before Claude replied.");
     send("idle", snapshot());
   });
 }
@@ -855,6 +946,7 @@ async function handleRequest(req, res) {
       );
       sessionId = null;
       transcript.length = 0;
+      saveTranscript();
       turnText = "";
       clearDeskSession(workspace);
       send("session", { sessionId: null, chromeGroup: snapshot().chromeGroup });
@@ -951,7 +1043,7 @@ export async function startDesk(options = {}) {
   turnText = "";
   turnGen = 0;
   resetGen = 0;
-  transcript.length = 0;
+  loadTranscript();
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
   let runtime = options.runtime || null;
@@ -987,10 +1079,20 @@ export async function startDesk(options = {}) {
   function stopOnSignal() {
     stop(true);
   }
+  function stopOnExit() {
+    stopClaude("Desk closed");
+    stopHelper();
+  }
   process.off("SIGINT", stopOnSignal);
   process.off("SIGTERM", stopOnSignal);
+  process.off("SIGHUP", stopOnSignal);
   process.on("SIGINT", stopOnSignal);
   process.on("SIGTERM", stopOnSignal);
+  // Closing the terminal window sends SIGHUP; the startup text promises that
+  // stops Claude, and a detached child would otherwise keep editing files.
+  process.on("SIGHUP", stopOnSignal);
+  process.off("exit", stopOnExit);
+  process.on("exit", stopOnExit);
 
   const preferred = options.port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
   let bound = preferred;

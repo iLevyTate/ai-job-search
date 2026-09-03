@@ -51,7 +51,10 @@ test("the paste box turns a link into the url argument and anything else into th
   assert.equal(commandInputError(commands[2], { paste: "  " }), "Paste a job link or the posting text first.");
   assert.equal(commandInputError(commands[2], { paste: "https://jobs.example/1" }), "");
   assert.equal(commandInputError(commands[4], { url: "" }), "Link is required.");
-  assert.equal(commandInputError(commands[4], { url: "boards.example/1" }), "That link should start with http:// or https://.");
+  assert.match(commandInputError(commands[4], { url: "not a link" }), /does not look like a web link/);
+  assert.equal(commandInputError(commands[4], { url: "boards.example.com/jobs/1" }), "", "a bare domain is accepted");
+  assert.equal(renderCommandInvocation(commands[4], { url: "boards.example.com/jobs/1" }), "/autofill https://boards.example.com/jobs/1");
+  assert.equal(renderCommandInvocation(commands[2], { paste: "boards.example.com/jobs/1" }), "/apply https://boards.example.com/jobs/1");
   assert.equal(commandInputError(commands[4], { url: "https://boards.example/1" }), "");
 });
 
@@ -200,7 +203,7 @@ test("print mode shows a read-only question and permission cards use the SDK tit
   renderChat(root, state);
   const question = root.querySelector('[data-card-id="tool-q"]');
   assert.equal(question.querySelector("form"), null, "nothing to submit in print mode");
-  assert.ok(question.textContent.includes("Reply in the message box"));
+  assert.ok(question.textContent.includes("message box at the bottom"));
   assert.ok(question.querySelector(".q-list li strong")?.textContent === "Healthcare", "choices listed plainly");
   const permission = root.querySelector('[data-card-id="req-p"]');
   assert.ok(permission.textContent.includes("Claude wants to run rm -rf build"));

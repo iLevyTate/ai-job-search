@@ -66,6 +66,10 @@ function toRenderableCard(event, id) {
 
 function mergeCard(existing, event) {
   const next = { ...existing, payload: { ...existing.payload, ...event.payload } };
+  // A completion carries no input; keep the file name the start announced.
+  if (event.payload?.input && !Object.keys(event.payload.input).length && existing.payload.input && Object.keys(existing.payload.input).length) {
+    next.payload.input = existing.payload.input;
+  }
   if (event.type === "question.requested" || event.type === "permission.requested") {
     // A request announced after a plain tool chip for the same id (older
     // producers) becomes the form, not a chip labelled "Using AskUserQuestion".
@@ -207,7 +211,9 @@ export function reduceDeskEvent(state, event) {
   const card = existing ? mergeCard(existing, event) : toRenderableCard(event, id);
   if (event.type === "question.requested") {
     card.entered = false;
-    next.pendingQuestionId = id;
+    // A read-only question (print mode) cannot be answered in place, so it
+    // must not switch the page into "waiting for you".
+    if (!card.payload.readOnly) next.pendingQuestionId = id;
   }
   if (event.type === "permission.requested") {
     card.entered = false;

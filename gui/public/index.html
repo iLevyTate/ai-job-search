@@ -56,7 +56,7 @@
       </div>
     </header>
     <p class="dock-rule" aria-hidden="true">The day’s work</p>
-    <nav class="steps" aria-label="Workflow">
+    <nav class="steps" aria-label="Steps">
       <button type="button" data-action="setup">
         <span class="n">01</span>
         <span>
@@ -107,6 +107,7 @@
         </span>
       </button>
     </nav>
+    <button type="button" id="more-steps" class="ghost more-steps">More steps… <span class="kbd">Ctrl+K</span></button>
     <div class="dock-foot">
       <p>Everything Claude finds or writes is saved in your job-search folder on this computer.</p>
       <p class="account" id="account-label">localhost only</p>
@@ -154,7 +155,7 @@
     <footer class="composer">
       <div class="composer-meta">
         <p id="status" class="status" aria-live="polite">Ready</p>
-        <p class="hint">Enter to send · Shift+Enter for a new line · type /apply, /scrape… or click a step</p>
+        <p class="hint">Enter to send · Shift+Enter for a new line · Ctrl+K for every step</p>
       </div>
       <form id="compose">
         <label class="sr-only" for="prompt">Message</label>
@@ -165,7 +166,7 @@
   </main>
 
   <dialog id="sheet" class="sheet" aria-labelledby="sheet-title">
-    <form method="dialog" id="sheet-form">
+    <form method="dialog" id="sheet-form" novalidate>
       <p class="kicker" id="sheet-kicker">Command</p>
       <h2 id="sheet-title">Apply</h2>
       <p id="sheet-copy"></p>

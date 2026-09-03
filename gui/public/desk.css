@@ -271,6 +271,20 @@ body.working .workline {
   font-size: 0.74rem;
 }
 
+.more-steps {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.86rem;
+  text-align: left;
+}
+.more-steps .kbd {
+  float: right;
+  color: var(--fade);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+}
+
 .dock-foot {
   margin-top: auto;
   padding-top: 1.25rem;
@@ -1212,7 +1226,7 @@ body.gated .stage {
   }
   body.menu-open .dock { transform: none; visibility: visible; transition: transform 280ms var(--ease), visibility 0s 0s; }
   .choice-grid { grid-template-columns: 1fr; }
-  .composer-meta .hint { display: none; }
+  .composer-meta .hint { font-size: 0.6rem; }
   .clock { display: none; }
   .bar, .log, .composer { padding-left: 1rem; padding-right: 1rem; }
   .bar { flex-wrap: wrap; align-items: start; }

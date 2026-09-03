@@ -124,9 +124,19 @@ function emptyMarkup(kind) {
   </div>`;
 }
 
+let purifyHooked = false;
 function markdown(text) {
   if (window.marked && window.DOMPurify) {
-    return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }));
+    if (!purifyHooked) {
+      purifyHooked = true;
+      window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+        if (node.tagName === "A" && node.getAttribute("href")) {
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+      });
+    }
+    return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), { FORBID_TAGS: ["img", "svg", "picture", "video", "audio"] });
   }
   return String(text || "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`).replace(/\n/g, "<br>");
 }
@@ -178,9 +188,21 @@ function announce(text) {
 }
 
 function paintChat() {
+  paintScheduled = false;
   renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : undefined) });
   paintMode();
   scrollLog();
+}
+
+// Streaming used to paint on every token, and each paint re-ran markdown over
+// the whole reply, so a long answer froze the page. Now at most one paint per
+// frame.
+let paintScheduled = false;
+function schedulePaint() {
+  if (paintScheduled) return;
+  paintScheduled = true;
+  if (document.hidden || typeof requestAnimationFrame !== "function") window.setTimeout(paintChat, 60);
+  else requestAnimationFrame(paintChat);
 }
 
 function setBusy(next) {
@@ -226,7 +248,8 @@ function paintFiles() {
 function ingest(event) {
   const wasBusy = state.busy;
   state = reduceDeskEvent(state, event);
-  paintChat();
+  if (event.type === "assistant.delta" || event.type === "assistant.thinking") schedulePaint();
+  else paintChat();
   if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
   if (!replayingTranscript) {
     if (event.type === "turn.completed") announce("Claude replied.");
@@ -362,7 +385,10 @@ async function sendPrompt(prompt) {
     runtimeSend({ type: "user.message", messageId, text });
     return true;
   }
-  if (busy) return false;
+  if (busy) {
+    notice(REJECT_TEXT.busy);
+    return false;
+  }
   if (sendPending) return false;
   sendPending = true;
   try {
@@ -431,19 +457,28 @@ function handleRejected(message) {
   notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
 }
 
+async function runStep(name, prompt) {
+  const sent = await sendPrompt(prompt);
+  if (sent) {
+    markAction(name);
+    tabs?.select("chat");
+  }
+  return sent;
+}
+
 function runAction(name) {
   const command = commands.find((item) => item.id === name);
-  markAction(name);
   setMenu(false);
+  if (busy && !runtimeSocket) {
+    notice(REJECT_TEXT.busy);
+    return;
+  }
   if (!command) {
-    if (name === "setup") sendPrompt("/setup");
-    else if (name === "rank") sendPrompt("/rank");
-    else if (name === "interview") sendPrompt("/interview");
-    else if (name === "outcome") sendPrompt("/outcome");
+    if (["setup", "rank", "interview", "outcome"].includes(name)) runStep(name, `/${name}`);
     return;
   }
   if (!commandNeedsInput(command)) {
-    sendPrompt(command.invocation);
+    runStep(name, command.invocation);
     return;
   }
   openCommandSheet(command);
@@ -541,6 +576,11 @@ source.addEventListener("hello", (event) => {
   replayingTranscript = true;
   try {
     for (const entry of data.transcript || []) {
+      if (entry.role === "tool") {
+        sseEvent("tool.started", { toolUseId: `replay-${sseSequence + 1}`, name: entry.name, input: entry.input || {} });
+        sseEvent("tool.completed", { toolUseId: `replay-${sseSequence}`, name: entry.name });
+        continue;
+      }
       const type = entry.role === "assistant" ? "assistant.message"
         : entry.role === "user" ? "user.message"
           : entry.role === "notice" ? "desk.notice"
@@ -575,6 +615,9 @@ source.addEventListener("tool", (event) => {
   if (runtimeSocket) return;
   const { id, name, phase, input } = JSON.parse(event.data);
   sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
+});
+source.addEventListener("notice", (event) => {
+  if (!runtimeSocket) notice(JSON.parse(event.data).text);
 });
 source.addEventListener("question", (event) => {
   if (runtimeSocket) return;
@@ -657,6 +700,7 @@ form.addEventListener("submit", async (event) => {
     promptEl.value = value;
     sizePrompt();
   }
+  if (sent) tabs?.select("chat");
   promptEl.focus();
 });
 
@@ -672,16 +716,26 @@ promptEl.addEventListener("keydown", (event) => {
 sheetForm.addEventListener("submit", (event) => {
   if (event.submitter?.value !== "run") return;
   if (!activeCommand) return;
+  // Always keep the sheet open until the message is actually sent, so a
+  // pasted posting is never thrown away.
+  event.preventDefault();
   const values = valuesFromForm(sheetFields);
   const problem = commandInputError(activeCommand, values);
   if (problem) {
-    event.preventDefault();
     sheetError.textContent = problem;
     sheetError.hidden = false;
     sheetFields.querySelector("input, textarea, select")?.focus();
     return;
   }
-  sendPrompt(renderCommandInvocation(activeCommand, values));
+  const command = activeCommand;
+  runStep(command.id, renderCommandInvocation(command, values)).then((sent) => {
+    if (sent) {
+      sheet.close();
+      return;
+    }
+    sheetError.textContent = REJECT_TEXT.busy;
+    sheetError.hidden = false;
+  });
 });
 
 stopBtn.addEventListener("click", async () => {
@@ -708,11 +762,19 @@ resetBtn.addEventListener("click", async () => {
     }
   }
   hasReset = true;
+  const wasBusy = busy;
   state = createDeskState({ permissionMode: state.permissionMode });
   sseSequence = 0;
   sseTurn = 0;
   sseTurnClosed = true;
-  setBusy(false);
+  markAction(null);
+  if (wasBusy && !runtimeSocket) {
+    // The server keeps the old turn busy until Claude has really stopped
+    // (idle arrives then); saying Ready now would only earn a rejected send.
+    statusEl.textContent = "Closing the old conversation…";
+  } else {
+    setBusy(false);
+  }
   paintChat();
   jumpBtn.hidden = true;
   setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -936,10 +998,14 @@ async function releaseTerminal() {
 }
 
 bindDelegatedActions(document);
+document.getElementById("more-steps")?.addEventListener("click", () => {
+  setMenu(false);
+  openPalette();
+});
 const surfaceTabs = [{ id: "chat", label: "Chat" }];
 if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
 surfaceTabs.push({ id: "files", label: "Files" });
-mountTabs(document.getElementById("surface-tabs"), {
+const tabs = mountTabs(document.getElementById("surface-tabs"), {
   tabs: surfaceTabs,
   selectedId: "chat",
   onSelect(id) {

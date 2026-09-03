@@ -75,6 +75,19 @@ function looksLikeUrl(value) {
   return /^https?:\/\/\S+$/i.test(String(value || "").trim());
 }
 
+// "boards.greenhouse.io/acme/jobs/1" pasted from an address bar that hides
+// the scheme is a link too.
+function looksLikeBareDomain(value) {
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(String(value || "").trim());
+}
+
+function asUrl(value) {
+  const text = String(value || "").trim();
+  if (looksLikeUrl(text)) return text;
+  if (looksLikeBareDomain(text)) return `https://${text}`;
+  return "";
+}
+
 export function normalizeCommandValues(command, values = {}) {
   if (!commandTakesPaste(command)) return { ...values };
   const { [PASTE_FIELD]: pasted, ...rest } = values;
@@ -82,7 +95,8 @@ export function normalizeCommandValues(command, values = {}) {
   if (!text) return rest;
   const urlArgument = (command.arguments || []).find((argument) => argument.kind === "url");
   const postingArgument = (command.arguments || []).find((argument) => argument.kind === "multiline");
-  if (looksLikeUrl(text)) return { ...rest, [urlArgument.name]: text };
+  const url = /\s/.test(text) ? "" : asUrl(text);
+  if (url) return { ...rest, [urlArgument.name]: url };
   return { ...rest, [postingArgument.name]: text };
 }
 
@@ -100,7 +114,7 @@ export function commandInputError(command, values = {}) {
     if (!argument.required) continue;
     const value = values[argument.name];
     if (value == null || String(value).trim() === "") return `${labelFor(argument)} is required.`;
-    if (argument.kind === "url" && !looksLikeUrl(value)) return "That link should start with http:// or https://.";
+    if (argument.kind === "url" && !asUrl(value)) return "That does not look like a web link. Paste the address from your browser, for example https://boards.greenhouse.io/company/jobs/123.";
   }
   return "";
 }
@@ -120,11 +134,12 @@ export function renderCommandInvocation(command, values = {}) {
       multiline = String(value);
       continue;
     }
+    const text = argument.kind === "url" ? (asUrl(value) || String(value)) : String(value);
     if (argument.flag) {
-      parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, String(value));
+      parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, text);
       continue;
     }
-    parts.push(String(value));
+    parts.push(text);
   }
   const rendered = parts.join(" ").trim();
   return multiline ? `${rendered}\n${multiline}` : rendered;
@@ -302,7 +317,7 @@ function renderQuestionBody(card) {
       const options = (question.options || []).map((option) => `<li><strong>${escapeHtml(option.label)}</strong>${option.description ? `<em>${escapeHtml(option.description)}</em>` : ""}</li>`).join("");
       return `<p class="q-text">${escapeHtml(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
     }).join("");
-    return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Reply in the message box at the bottom of the page, for example with the number or the name of the option you want.</p></div>`;
+    return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Claude will repeat this question in a moment. Answer it then in the message box at the bottom, for example with the name of the option you want.</p></div>`;
   }
   const footer = card.entered
     ? `<p class="hint">${card.payload.answered === false ? (card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered.") : "Answered."}</p>`
