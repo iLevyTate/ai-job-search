@@ -17,30 +17,30 @@
     <p class="mark" aria-hidden="true">D</p>
     <p class="brand">Desk</p>
     <p class="brand-sub">US job search</p>
-    <h2>Choose a job-search folder</h2>
-    <p class="lede">Desk and Claude Code both write scrapes, CVs, and applications into the same folder. Nothing leaves this computer.</p>
-    <p id="browse-hint" class="hint">This build looks in the usual git folders for this system. Open a folder that already has AGENTS.md and gui/.</p>
+    <h2>Where should your job search live?</h2>
+    <p class="lede">Desk keeps everything it finds and writes (job lists, CVs, cover letters) in one folder on this computer. Nothing leaves your machine.</p>
+    <p id="browse-hint" class="hint">First time here? Choose Start a new job search. If you already have a Job Search Desk folder from before, open it.</p>
     <div id="found-list" class="found-list" hidden></div>
     <div class="choice-grid">
-      <button type="button" id="open-folder" class="choice">
-        <span class="n">01</span>
-        <strong>Open existing folder</strong>
-        <em id="open-folder-hint">Opens the folder picker in this system's usual git folder</em>
-      </button>
       <button type="button" id="clone-folder" class="choice">
+        <span class="n">01</span>
+        <strong>Start a new job search</strong>
+        <em>Creates a job-search folder on this computer and downloads the files Desk needs. Needs an internet connection.</em>
+      </button>
+      <button type="button" id="open-folder" class="choice">
         <span class="n">02</span>
-        <strong>Create a new copy</strong>
-        <em>Downloads the public US framework. Git is optional.</em>
+        <strong>Open a folder from before</strong>
+        <em id="open-folder-hint">A job-search folder you set up earlier</em>
       </button>
       <button type="button" id="open-cli" class="choice wide">
         <span class="n">03</span>
-        <strong>Open in Claude Code</strong>
-        <em>Terminal CLI in the same folder Desk will use</em>
+        <strong>Open in a terminal instead</strong>
+        <em>For people who prefer typing commands. Everything Desk does also works there.</em>
       </button>
     </div>
     <p id="claude-prep" class="hint">Getting Claude Code ready…</p>
     <p id="first-run-status" class="status first-run-status">Pick a folder to continue.</p>
-    <p class="seal">Local only · Claude stays on this machine</p>
+    <p class="seal">Local only · your files stay on this computer</p>
   </main>
   <script>
     const status = document.getElementById("first-run-status");
@@ -79,10 +79,10 @@
       setBusy(true);
       status.textContent =
         kind === "open"
-          ? "Pick the folder that contains AGENTS.md and gui/."
+          ? "Pick the job-search folder you set up earlier."
           : kind === "cli"
-            ? "Pick the folder to open in Claude Code. Desk will use the same files."
-            : "Choose where to create the folder, then wait while it downloads.";
+            ? "Pick the job-search folder to open in a terminal. Desk uses the same files."
+            : "Choose where to put your job-search folder, then wait while it downloads.";
       try {
         const result =
           kind === "open"
@@ -92,10 +92,10 @@
               : await desk.cloneWorkspace();
         if (result?.error) status.textContent = result.error;
         else if (kind === "cli" && result?.ok) {
-          status.textContent = `Claude Code is using ${result.root}. Scrapes, CVs, and applications stay in that folder.`;
+          status.textContent = `A terminal opened in ${result.root}. Desk is opening the same folder.`;
         }
       } catch (err) {
-        status.textContent = err.message || "The folder dialog did not open.";
+        status.textContent = err.message || "The folder window did not open. Try again.";
       } finally {
         setBusy(false);
       }
@@ -122,10 +122,10 @@
         const result = kind === "cli" ? await desk.openCli(root) : await desk.openWorkspace(root);
         if (result?.error) status.textContent = result.error;
         else if (kind === "cli" && result?.ok) {
-          status.textContent = `Claude Code is using ${result.root}. Scrapes, CVs, and applications stay in that folder.`;
+          status.textContent = `A terminal opened in ${result.root}. Desk is opening the same folder.`;
         }
       } catch (err) {
-        status.textContent = err.message || "Could not open that folder.";
+        status.textContent = err.message || "Could not open that folder. Try again.";
       } finally {
         setBusy(false);
       }
@@ -187,9 +187,9 @@
       const prep = document.getElementById("claude-prep");
       if (!desk?.ensureClaude || !prep) return;
       const label = (info) => {
-        if (info?.status === "ready") return "Claude Code is installed. Pick a folder and the desk will sign in if needed.";
-        if (info?.status === "installing") return "Installing Claude Code so first run is ready…";
-        if (info?.status === "failed") return "Claude Code did not install yet. You can still pick a folder and retry from the desk.";
+        if (info?.status === "ready") return "Claude Code is ready. Pick where your job search lives and Desk will sign you in if needed.";
+        if (info?.status === "installing") return "Installing Claude Code in the background. This can take a minute or two…";
+        if (info?.status === "failed") return "Claude Code did not install yet. Pick a folder anyway; Desk will try again there.";
         return "Getting Claude Code ready…";
       };
       try {

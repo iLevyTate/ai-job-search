@@ -20,6 +20,8 @@ import {
   sharedWorkspacePath,
   windowsCliLaunch,
   workspaceLocationPlan,
+  humanWorkspaceError,
+  NOT_A_WORKSPACE_TEXT,
 } from "../workspace.mjs";
 
 test("sameWorkspace treats Windows paths as the same folder", () => {
@@ -192,4 +194,14 @@ test("resolveGit finds git.exe in a search dir when PATH is empty", (t) => {
     SystemRoot: "C:\\Windows",
   });
   assert.equal(found, join(cmd, "git.exe"));
+});
+
+test("download and clone failures become sentences a first-time user can act on", () => {
+  assert.match(humanWorkspaceError("fatal: unable to access https://github.com/x.git/: Could not resolve host: github.com"), /reach the internet/);
+  assert.match(humanWorkspaceError("getaddrinfo ENOTFOUND github.com"), /reach the internet/);
+  assert.match(humanWorkspaceError("EACCES: permission denied, mkdir '/root/x'"), /not allowed to write/);
+  assert.match(humanWorkspaceError("ENOSPC: no space left on device"), /disk space/);
+  assert.match(humanWorkspaceError(""), /did not finish/);
+  assert.match(humanWorkspaceError("spawn unzip ENOENT"), /did not finish\. Try again\. \(spawn unzip ENOENT\)/);
+  assert.doesNotMatch(NOT_A_WORKSPACE_TEXT, /AGENTS\.md|gui\//);
 });

@@ -26,7 +26,7 @@ test("artifacts group by turn and render empty, loading, and error states", () =
   ]);
   const root = document().createElement("section");
   renderArtifactView(root, createArtifactViewState({ status: "empty" }));
-  assert.equal(root.querySelector("[data-state='empty'] h2").textContent, "No artifacts yet.");
+  assert.equal(root.querySelector("[data-state='empty'] h2").textContent, "No files yet.");
   renderArtifactView(root, createArtifactViewState({ status: "loading" }));
   assert.equal(root.querySelector("[data-state='loading']").textContent.includes("Loading"), true);
   renderArtifactView(root, createArtifactViewState({ status: "error", error: "Nope" }));

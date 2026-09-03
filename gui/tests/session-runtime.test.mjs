@@ -37,8 +37,7 @@ function createFakeAdapter() {
     },
     failStream(error) {
       closed = true;
-      while (waiters.length) waiters.shift(null, error);
-      for (const waiter of waiters) waiter(null, error);
+      while (waiters.length) waiters.shift()(null, error);
     },
     create: () => {
       started += 1;
@@ -274,14 +273,296 @@ test("stale handoff IDs, timeouts, and late input keep exactly one controller", 
 });
 
 test("reset drops late events from the previous epoch", async () => {
-  await withRuntime(async ({ runtime, fake, published }) => {
+  // One fake per adapter: reset replaces the adapter, and a shared stream
+  // would be closed under the replacement too.
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published }) => {
     await runtime.reset({ expectedControllerGeneration: 1 });
     const before = published.length;
-    fake.emit({
+    fakes[0].emit({
       type: "stream_event",
       event: { type: "content_block_delta", delta: { type: "text_delta", text: "late" } },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(published.length, before);
+  }, { adapterFactory: factory });
+});
+
+test("a submitted message is persisted as user.message and starts the turn", async () => {
+  await withRuntime(async ({ runtime, fake, published }) => {
+    const result = await runtime.submitMessage({ messageId: "m-user", text: "rank these", expectedControllerGeneration: 1 });
+    assert.equal(result.ok, true);
+    const echoed = published.find((event) => event.type === "user.message");
+    assert.ok(echoed, "the page paints You from this event; there is no local copy");
+    assert.equal(echoed.payload.messageId, "m-user");
+    assert.equal(echoed.payload.text, "rank these");
+    assert.equal(echoed.turnId, "m-user");
+    assert.equal(runtime.snapshot().busy, true);
+    assert.ok(runtime.eventsAfter(0).some((event) => event.type === "user.message"), "replay includes it after a reload");
+
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Ranked." } } });
+    await waitUntil(() => published.some((event) => event.type === "assistant.delta"));
+    assert.equal(published.find((event) => event.type === "assistant.delta").turnId, "m-user");
   });
+});
+
+test("a follow-up sent during a turn becomes its own turn when Claude reaches it", async () => {
+  await withRuntime(async ({ runtime, fake, published }) => {
+    await runtime.submitMessage({ messageId: "m-first", text: "one", expectedControllerGeneration: 1 });
+    await runtime.submitMessage({ messageId: "m-second", text: "two", expectedControllerGeneration: 1 });
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "A" } } });
+    fake.emit({ type: "result", subtype: "success", result: "A" });
+    await waitUntil(() => published.some((event) => event.type === "turn.completed"));
+    assert.equal(runtime.snapshot().busy, false);
+
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "B" } } });
+    await waitUntil(() => published.filter((event) => event.type === "assistant.delta").length >= 2);
+    const deltas = published.filter((event) => event.type === "assistant.delta");
+    assert.equal(deltas[0].turnId, "m-first");
+    assert.equal(deltas[1].turnId, "m-second");
+    assert.equal(runtime.snapshot().busy, true);
+  });
+});
+
+function adapterWithPermissions(fake) {
+  const captured = {};
+  return {
+    captured,
+    factory: (options) => {
+      captured.onPermissionRequest = options.onPermissionRequest;
+      return fake.create(options);
+    },
+  };
+}
+
+test("a Safe-mode permission prompt reaches the page and the decision settles the callback", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-p", text: "write it", expectedControllerGeneration: 1 });
+    const decision = wired.captured.onPermissionRequest({
+      requestId: "req-1",
+      toolUseId: "tool-w",
+      toolName: "Write",
+      input: { file_path: "cv/main.tex" },
+      suggestions: [{ type: "addRules", destination: "localSettings", behavior: "allow", rules: [] }],
+      title: "Claude wants to write cv/main.tex",
+    });
+    await waitUntil(() => published.some((event) => event.type === "permission.requested"));
+    const asked = published.find((event) => event.type === "permission.requested");
+    assert.equal(asked.payload.entityId, "req-1");
+    assert.equal(asked.payload.toolName, "Write");
+    assert.equal(asked.payload.title, "Claude wants to write cv/main.tex");
+    assert.equal(asked.turnId, "m-p");
+
+    const resolved = await runtime.resolvePermission({ requestId: "req-1", decision: "allow-once", expectedControllerGeneration: 1 });
+    assert.equal(resolved.ok, true);
+    const result = await decision;
+    assert.equal(result.behavior, "allow");
+    assert.deepEqual(result.updatedInput, { file_path: "cv/main.tex" });
+    await waitUntil(() => published.some((event) => event.type === "permission.resolved"));
+    assert.equal(published.find((event) => event.type === "permission.resolved").payload.decision, "allow");
+  }, { adapterFactory: wired.factory });
+});
+
+test("AskUserQuestion is answered through the callback with answers keyed by question text", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-q", text: "apply", expectedControllerGeneration: 1 });
+    const questions = [{ question: "Which lane?", header: "Lane", options: [{ label: "Healthcare", description: "" }, { label: "Defense", description: "" }], multiSelect: false }];
+    const decision = wired.captured.onPermissionRequest({
+      requestId: "req-q",
+      toolUseId: "tool-q",
+      toolName: "AskUserQuestion",
+      input: { questions },
+    });
+    await waitUntil(() => published.some((event) => event.type === "question.requested"));
+    const asked = published.find((event) => event.type === "question.requested");
+    assert.equal(asked.payload.entityId, "req-q");
+    assert.equal(asked.payload.questions[0].question, "Which lane?");
+    assert.equal(fake.sent.length, 1, "no chat message is sent for the question itself");
+
+    const answered = await runtime.respondToQuestion({
+      requestId: "req-q",
+      answers: { "Which lane?": "Healthcare" },
+      expectedControllerGeneration: 1,
+    });
+    assert.equal(answered.ok, true);
+    const result = await decision;
+    assert.equal(result.behavior, "allow");
+    assert.deepEqual(result.updatedInput.answers, { "Which lane?": "Healthcare" });
+    assert.deepEqual(result.updatedInput.questions, questions);
+    assert.equal(fake.sent.length, 1, "the answer is not sent as a chat message");
+    await waitUntil(() => published.some((event) => event.type === "question.resolved"));
+  }, { adapterFactory: wired.factory });
+});
+
+test("New chat restarts the adapter so later replies are published, and reports the new generation", async () => {
+  // One fake per adapter: a shared fake would close both streams at once.
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-a", text: "one", expectedControllerGeneration: 1 });
+    const reset = await runtime.reset({ expectedControllerGeneration: 1 });
+    assert.equal(reset.ok, true);
+    assert.equal(reset.snapshot.controllerGeneration, 2);
+    assert.equal(reset.snapshot.sessionId, null);
+    assert.equal(fakes.length, 2, "a fresh adapter runs under the new epoch");
+    await runtime.submitMessage({ messageId: "m-b", text: "two", expectedControllerGeneration: 2 });
+    fakes[1].emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "after reset" } } });
+    await waitUntil(() => published.some((event) => event.type === "assistant.delta" && event.payload.text === "after reset"));
+    assert.equal(runtime.eventsAfter(0).some((event) => event.type === "assistant.delta"), true);
+  }, { adapterFactory: factory });
+});
+
+test("a turn left open by a previous launch is closed on start", async () => {
+  const fake = createFakeAdapter();
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-")) });
+  const conversation = await store.createConversation();
+  await store.transact(conversation.id, (next) => {
+    next.partialTurn = { id: "old-turn", eventId: "old-turn" };
+  });
+  const runtime = createSessionRuntime({ workspace: "unused", conversationId: conversation.id, store, adapterFactory: fake.create });
+  const snapshot = await runtime.start();
+  assert.equal(snapshot.busy, false);
+  assert.equal(runtime.eventsAfter(0).at(-1).type, "turn.interrupted");
+  await runtime.stop();
+});
+
+test("a stream that ends mid-turn closes the turn visibly and restarts the adapter once", async () => {
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-dead", text: "go", expectedControllerGeneration: 1 });
+    fakes[0].closeStream();
+    await waitUntil(() => published.some((event) => event.type === "turn.failed"));
+    assert.match(published.find((event) => event.type === "turn.failed").payload.text, /stopped unexpectedly/);
+    assert.equal(runtime.snapshot().busy, false);
+    await waitUntil(() => fakes.length === 2);
+    const next = await runtime.submitMessage({ messageId: "m-next", text: "again", expectedControllerGeneration: 1 });
+    assert.equal(next.ok, true);
+    fakes[1].emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "back" } } });
+    await waitUntil(() => published.some((event) => event.type === "assistant.delta" && event.payload.text === "back"));
+  }, { adapterFactory: factory });
+});
+
+test("a sign-in failure does not loop restarts; sends are refused until New chat", async () => {
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-auth", text: "go", expectedControllerGeneration: 1 });
+    fakes[0].failStream(new Error("authentication_failed: please log in"));
+    await waitUntil(() => published.some((event) => event.type === "session.status" && event.payload.phase === "stopped"));
+    assert.equal(fakes.length, 1);
+    const refused = await runtime.submitMessage({ messageId: "m-refused", text: "again", expectedControllerGeneration: 1 });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, "closed");
+    const reset = await runtime.reset({ expectedControllerGeneration: 1 });
+    assert.equal(reset.ok, true);
+    assert.equal(fakes.length, 2);
+    const after = await runtime.submitMessage({ messageId: "m-after", text: "fresh", expectedControllerGeneration: 2 });
+    assert.equal(after.ok, true);
+  }, { adapterFactory: factory });
+});
+
+test("the turn is claimed before the prompt reaches Claude, so a fast first token lands on it", async () => {
+  const fake = createFakeAdapter();
+  let turnAtSend = null;
+  const factory = (options) => {
+    const api = fake.create(options);
+    const send = api.send;
+    api.send = (message) => {
+      turnAtSend = store.get(conversation.id)?.partialTurn?.id ?? null;
+      return send(message);
+    };
+    return api;
+  };
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-")) });
+  const conversation = await store.createConversation();
+  const runtime = createSessionRuntime({ workspace: "unused", conversationId: conversation.id, store, adapterFactory: factory });
+  await runtime.start();
+  await runtime.submitMessage({ messageId: "m-fast", text: "go", expectedControllerGeneration: 1 });
+  assert.equal(turnAtSend, "m-fast");
+  await runtime.stop();
+});
+
+test("follow-ups queued behind a crashed turn are reported and the restart budget returns after a good turn", async () => {
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published, store, conversation }) => {
+    await runtime.submitMessage({ messageId: "m-1", text: "one", expectedControllerGeneration: 1 });
+    await runtime.submitMessage({ messageId: "m-2", text: "two", expectedControllerGeneration: 1 });
+    fakes[0].closeStream();
+    await waitUntil(() => published.filter((event) => event.type === "turn.failed").length >= 2);
+    const lost = published.find((event) => event.type === "turn.failed" && event.turnId === "m-2");
+    assert.match(lost.payload.text, /before reaching this message/);
+    await waitUntil(() => fakes.length === 2);
+    assert.equal(store.get(conversation.id).recoveryAttempts, 1);
+    await runtime.submitMessage({ messageId: "m-3", text: "three", expectedControllerGeneration: 1 });
+    fakes[1].emit({ type: "result", subtype: "success", result: "ok" });
+    await waitUntil(() => published.some((event) => event.type === "turn.completed"));
+    await waitUntil(() => store.get(conversation.id).recoveryAttempts === 0);
+    fakes[1].closeStream();
+    await waitUntil(() => fakes.length === 3, 2000);
+  }, { adapterFactory: factory });
+});
+
+test("questions and approvals wait as long as the person needs by default", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-wait", text: "go", expectedControllerGeneration: 1 });
+    const decision = wired.captured.onPermissionRequest({ requestId: "req-wait", toolUseId: "t", toolName: "Bash", input: { command: "ls" } });
+    await waitUntil(() => published.some((event) => event.type === "permission.requested"));
+    let settled = false;
+    decision.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(settled, false);
+    await runtime.resolvePermission({ requestId: "req-wait", decision: "deny", expectedControllerGeneration: 1 });
+    await waitUntil(() => settled);
+  }, { adapterFactory: wired.factory });
+});
+
+test("multi-select answers reach the SDK joined with ', ' and an unanswered question is a deny", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-multi", text: "go", expectedControllerGeneration: 1 });
+    const questions = [{ question: "Which boards?", header: "Boards", options: [{ label: "LinkedIn", description: "" }, { label: "Ashby", description: "" }], multiSelect: true }];
+    const decision = wired.captured.onPermissionRequest({ requestId: "req-multi", toolUseId: "t-multi", toolName: "AskUserQuestion", input: { questions } });
+    await waitUntil(() => published.some((event) => event.type === "question.requested"));
+    await runtime.respondToQuestion({ requestId: "req-multi", answers: { "Which boards?": ["LinkedIn", "Ashby"] }, expectedControllerGeneration: 1 });
+    const result = await decision;
+    assert.equal(result.updatedInput.answers["Which boards?"], "LinkedIn, Ashby");
+
+    const second = wired.captured.onPermissionRequest({ requestId: "req-none", toolUseId: "t-none", toolName: "AskUserQuestion", input: { questions } });
+    await waitUntil(() => published.filter((event) => event.type === "question.requested").length === 2);
+    runtime.disconnectInteractions();
+    const denied = await second;
+    assert.equal(denied.behavior, "deny");
+    assert.match(denied.message, /did not answer/);
+    await waitUntil(() => published.some((event) => event.type === "question.resolved" && event.payload.answered === false));
+  }, { adapterFactory: wired.factory });
 });

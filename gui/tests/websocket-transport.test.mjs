@@ -249,3 +249,77 @@ test("permission, interrupt, and reconnect during an active turn", async () => {
     server.close();
   }
 });
+
+test("events after a reset are delivered even though their sequence numbers start over", async () => {
+  const runtime = fakeRuntime();
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(received.filter((m) => m.type === "event").length, 2);
+  ws.send(JSON.stringify({ type: "conversation.reset" }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(received.some((m) => m.type === "snapshot" && m.snapshot), "reset pushes a snapshot");
+  runtime.emit({ sequence: 1, type: "user.message", payload: { messageId: "m-after", text: "again" } });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const after = received.filter((m) => m.type === "event").map((m) => m.event.payload.text);
+  assert.deepEqual(after, ["A", "B", "again"]);
+  ws.close();
+  await transport.close();
+  server.close();
+});
+
+test("a runtime command that throws answers the page with a rejection instead of crashing", async () => {
+  const runtime = fakeRuntime();
+  runtime.interrupt = async () => { throw new Error("ProcessTransport is not ready for writing"); };
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  ws.send(JSON.stringify({ type: "turn.interrupt" }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const rejected = received.find((m) => m.type === "command.rejected");
+  assert.equal(rejected?.reason, "error");
+  assert.equal(rejected?.command, "turn.interrupt");
+  ws.close();
+  await transport.close();
+  server.close();
+});
+
+test("the page can switch between Safe and Autonomous and gets the new snapshot back", async () => {
+  const runtime = fakeRuntime();
+  runtime.setPermissionMode = async (message) => {
+    runtime.calls.push(["setPermissionMode", message]);
+    return { ok: true, permissionMode: message.mode };
+  };
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  ws.send(JSON.stringify({ type: "permission.mode", mode: "autonomous", expectedControllerGeneration: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(runtime.calls.some((call) => call[0] === "setPermissionMode" && call[1].mode === "autonomous"));
+  assert.ok(received.some((m) => m.type === "command.accepted" && m.command === "permission.mode"));
+  assert.equal(received.filter((m) => m.type === "snapshot").length, 2, "a fresh snapshot follows the change");
+  ws.send(JSON.stringify({ type: "permission.mode", mode: "bypassPermissions" }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(received.some((m) => m.type === "protocol.error" && /safe or autonomous/.test(m.error)));
+  ws.close();
+  await transport.close();
+  server.close();
+});

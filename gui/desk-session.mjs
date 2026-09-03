@@ -3,6 +3,7 @@ import { createAutofillBridge } from "./autofill-bridge.mjs";
 import { createConversationStore } from "./conversation-store.mjs";
 import { createPermissionPolicy } from "./permission-policy.mjs";
 import { createSessionRuntime } from "./session-runtime.mjs";
+import { systemOpener } from "./desk-data.mjs";
 
 export async function createDeskSession({
   workspace,
@@ -28,7 +29,7 @@ export async function createDeskSession({
   }
   const permissionPolicy = createPermissionPolicy({ workspace });
   await permissionPolicy.load();
-  const artifacts = artifactService || createArtifactService({ workspace });
+  const artifacts = artifactService || createArtifactService({ workspace, openImpl: systemOpener });
   const runtime = createSessionRuntime({
     workspace,
     conversationId,

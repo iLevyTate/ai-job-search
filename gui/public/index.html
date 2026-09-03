@@ -20,17 +20,19 @@
   <div class="workline" aria-hidden="true"></div>
 
   <div id="gate" class="gate" hidden inert aria-hidden="true">
-    <div class="gate-card">
+    <div class="gate-card" role="dialog" aria-labelledby="gate-title" tabindex="-1">
       <p class="mark" aria-hidden="true">D</p>
       <p class="brand">Desk</p>
       <p class="brand-sub">Connect Claude</p>
       <h2 id="gate-title">Starting Claude Code</h2>
-      <p id="gate-copy">The desk starts Claude Code as soon as it opens. Use the same Claude account you already use in Chrome. It installs Claude Code if needed, then opens the claude.ai login.</p>
-      <ol class="gate-steps" aria-label="What this button does">
+      <p id="gate-copy">The desk starts Claude Code as soon as it opens. Sign in with your Claude subscription, the same account you use on claude.ai. It installs Claude Code if needed, then opens one claude.ai sign-in tab.</p>
+      <p class="hint">Claude Code needs a paid Claude plan (Pro, Max, Team, or Enterprise). A free claude.ai account cannot sign in here.</p>
+      <ol class="gate-steps" aria-label="What happens next">
         <li>Install Claude Code if it is missing</li>
-        <li>Sign in with your Chrome Claude subscription</li>
-        <li>Open the conversation</li>
+        <li>Sign in on claude.ai in the tab that opens. If it shows you a code, paste it below.</li>
+        <li>Come back here; the conversation opens by itself</li>
       </ol>
+      <p id="gate-link-wrap" class="gate-link-wrap" hidden>Tab did not appear? <a id="gate-link" href="#" target="_blank" rel="noreferrer">Open the sign-in page</a></p>
       <pre id="gate-log" class="gate-log" hidden></pre>
       <label id="gate-code-wrap" hidden>
         <span>Paste the login code from the browser</span>
@@ -39,7 +41,7 @@
       <div class="empty-actions">
         <button type="button" id="gate-action">Start desk</button>
         <button type="button" id="gate-cancel" class="ghost" hidden>Cancel</button>
-        <a id="gate-chrome" class="ghost-link" href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn" target="_blank" rel="noreferrer">Optional: Claude in Chrome</a>
+        <a id="gate-chrome" class="ghost-link" href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn" target="_blank" rel="noreferrer">Optional: Claude's Chrome extension</a>
       </div>
     </div>
   </div>
@@ -55,7 +57,7 @@
       </div>
     </header>
     <p class="dock-rule" aria-hidden="true">The day’s work</p>
-    <nav class="steps" aria-label="Workflow">
+    <nav class="steps" aria-label="Steps">
       <button type="button" data-action="setup">
         <span class="n">01</span>
         <span>
@@ -106,8 +108,14 @@
         </span>
       </button>
     </nav>
+    <button type="button" id="more-steps" class="ghost more-steps">More steps… <span class="kbd">Ctrl+K</span></button>
+    <div class="dock-tools">
+      <button type="button" id="add-documents" class="ghost">Add your CV or documents</button>
+      <button type="button" id="open-tools" class="ghost">Tools check</button>
+      <input type="file" id="doc-input" multiple accept=".pdf,.tex,.txt,.md,.docx,.doc,.rtf,.odt,.png,.jpg,.jpeg" hidden>
+    </div>
     <div class="dock-foot">
-      <p>Same files as the CLI. Scrapes, CVs, and applications stay in this folder.</p>
+      <p>Everything Claude finds or writes is saved in your job-search folder on this computer.</p>
       <p class="account" id="account-label">localhost only</p>
     </div>
   </aside>
@@ -119,16 +127,16 @@
           Steps
         </button>
         <div>
-          <p class="kicker">Workspace</p>
+          <p class="kicker">Your job search</p>
           <h1>Conversation</h1>
-          <p id="session-label" class="session">New session</p>
-          <p id="workspace-label" class="workspace-path">Same folder as the CLI</p>
-          <p id="mode-label" class="mode-label" data-mode="autonomous">Autonomous</p>
+          <p id="session-label" class="session">New conversation</p>
+          <p id="workspace-label" class="workspace-path">Your job-search folder</p>
+          <p class="mode-row"><span id="mode-label" class="mode-label" data-mode="autonomous" title="Claude may create and change files in your job-search folder without asking first.">Works on its own</span> <button type="button" id="mode-toggle" class="link" hidden>Change</button></p>
         </div>
       </div>
       <div class="bar-actions">
         <time id="clock" class="clock" datetime=""></time>
-        <button type="button" id="open-cli" class="ghost">Open CLI</button>
+        <button type="button" id="open-cli" class="ghost" title="For people who prefer typing commands. Everything here works without it.">Open in Terminal</button>
         <button type="button" id="stop" hidden>Stop</button>
         <button type="button" id="reset" class="ghost">New chat</button>
       </div>
@@ -136,12 +144,15 @@
 
     <div class="surface">
       <div id="surface-tabs" class="surface-tabs"></div>
-      <section id="panel-chat" class="log" aria-live="polite"></section>
+      <section id="panel-chat" class="log"></section>
+      <p id="announce" class="sr-only" aria-live="polite"></p>
+      <section id="panel-jobs" class="surface-panel" hidden></section>
+      <section id="panel-applications" class="surface-panel" hidden></section>
       <section id="panel-terminal" class="surface-panel" hidden>
         <div class="empty">
           <p class="kicker">Terminal</p>
           <h2>Claude Code, same conversation.</h2>
-          <p>The embedded terminal attaches after Chat can hand off the session.</p>
+          <p>Attaching the terminal…</p>
         </div>
       </section>
       <section id="panel-files" class="surface-panel artifact-view" hidden></section>
@@ -152,7 +163,7 @@
     <footer class="composer">
       <div class="composer-meta">
         <p id="status" class="status" aria-live="polite">Ready</p>
-        <p class="hint">Enter to send · Shift+Enter for a line · / to focus</p>
+        <p class="hint">Enter to send · Shift+Enter for a new line · Ctrl+K for every step</p>
       </div>
       <form id="compose">
         <label class="sr-only" for="prompt">Message</label>
@@ -162,12 +173,13 @@
     </footer>
   </main>
 
-  <dialog id="sheet" class="sheet">
-    <form method="dialog" id="sheet-form">
+  <dialog id="sheet" class="sheet" aria-labelledby="sheet-title">
+    <form method="dialog" id="sheet-form" novalidate>
       <p class="kicker" id="sheet-kicker">Command</p>
       <h2 id="sheet-title">Apply</h2>
       <p id="sheet-copy"></p>
       <div id="sheet-fields" class="sheet-fields"></div>
+      <p id="sheet-error" class="sheet-error" role="alert" hidden></p>
       <div class="sheet-actions">
         <button type="submit" value="run" id="sheet-run">Run</button>
         <button type="submit" value="cancel" class="ghost">Cancel</button>
@@ -175,10 +187,39 @@
     </form>
   </dialog>
 
-  <dialog id="palette" class="sheet palette">
+  <dialog id="tools" class="sheet" aria-labelledby="tools-title">
+    <form method="dialog">
+      <p class="kicker">This computer</p>
+      <h2 id="tools-title">Tools check</h2>
+      <p>Each step needs a few programs on this computer. Green means ready. For a red one, follow the line under it, then click Check again.</p>
+      <div id="tools-list"></div>
+      <div class="sheet-actions">
+        <button type="button" id="tools-refresh">Check again</button>
+        <button type="submit" value="cancel" class="ghost">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mode-sheet" class="sheet" aria-labelledby="mode-title">
+    <form method="dialog">
+      <p class="kicker">How much Claude asks</p>
+      <h2 id="mode-title">Before acting…</h2>
+      <div class="choice-grid">
+        <button type="button" class="choice" data-mode-choice="safe"><strong>Asks before acting</strong><em>Claude asks you before it changes a file or runs a command. Slower, and you see every step.</em></button>
+        <button type="button" class="choice" data-mode-choice="autonomous"><strong>Works on its own</strong><em>Claude creates and changes files in your job-search folder without asking. Faster; it never sends an application for you.</em></button>
+      </div>
+      <div class="sheet-actions">
+        <button type="submit" value="cancel" class="ghost">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="dropzone" class="dropzone" hidden aria-hidden="true"><p>Drop your CV or other documents here</p></div>
+
+  <dialog id="palette" class="sheet palette" aria-labelledby="palette-title">
     <form method="dialog">
       <p class="kicker">Commands</p>
-      <h2>Run a workflow</h2>
+      <h2 id="palette-title">Run a step</h2>
       <label>
         <span class="sr-only">Filter commands</span>
         <input id="palette-query" type="search" placeholder="Search setup, scrape, apply…">

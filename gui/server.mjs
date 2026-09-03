@@ -7,6 +7,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -36,6 +37,17 @@ import { ARTIFACT_HTML_CSP, createArtifactService } from "./artifacts.mjs";
 import { createAutofillBridge } from "./autofill-bridge.mjs";
 import { attachWebSocketTransport } from "./websocket-transport.mjs";
 import { createCommandRegistry } from "./command-registry.mjs";
+import {
+  checkTools,
+  MAX_DOCUMENT_BYTES,
+  readApplications,
+  readJobs,
+  readProgress,
+  resolveWorkspaceFile,
+  saveDocument,
+  setJobMark,
+  systemOpener,
+} from "./desk-data.mjs";
 
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
@@ -65,6 +77,11 @@ let busy = false;
 let sessionId = null;
 let child = null;
 let helper = null;
+// What the running install/login helper has shown so far, so a page that
+// reloads mid sign-in can pick the link and code box up again.
+let helperState = null;
+// Why the installed app's session runtime is not running, if it failed to start.
+let runtimeError = "";
 let streamedText = false;
 let sawInit = false;
 let stopRequested = false;
@@ -77,18 +94,134 @@ let resetGen = 0;
 // Rendered conversation, replayed to a client that reconnects (page refresh).
 const transcript = [];
 let turnText = "";
+// The tail of Claude's stderr for the running turn, shown with the error card
+// when the child exits badly; without it the page only ever said "exit code 1".
+let errTail = "";
+// Set when a result event already produced an error card, so the exit-code
+// card does not restate it.
+let reportedError = false;
+// True once this turn produced any reply text, even text already moved into
+// a transcript row by a tool call.
+let repliedThisTurn = false;
 // tool_use id -> tool name, so "done" chips can show the name, not the id.
 const toolNames = new Map();
+
+// Rows are capped by conversation turns, not raw rows: one tool-heavy turn
+// can add dozens of chips, which must never evict the message that asked.
+const TRANSCRIPT_CAP = 600;
+const TRANSCRIPT_KEEP_TURNS = 40;
+
+// Only what the page shows is stored: describeTool reads these fields, and a
+// full Write input or Bash command would put file contents on disk twice.
+const TOOL_INPUT_KEYS = ["file_path", "path", "notebook_path", "description", "query", "url", "pattern", "skill"];
+function summarizeToolInput(input = {}) {
+  const out = {};
+  for (const key of TOOL_INPUT_KEYS) {
+    if (typeof input?.[key] === "string" && input[key]) out[key] = input[key].slice(0, 200);
+  }
+  return out;
+}
+
+// The print-mode conversation lives on disk too, so a desk that crashes or is
+// restarted mid-turn comes back with the conversation instead of a blank page.
+function transcriptPath() {
+  return join(workspace, ".claude", "desk", "transcript.json");
+}
+
+let transcriptSaveTimer = null;
+function writeTranscriptNow() {
+  clearTimeout(transcriptSaveTimer);
+  transcriptSaveTimer = null;
+  try {
+    const dir = join(workspace, ".claude", "desk");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Write whole, then rename: a crash mid-write never leaves half a file.
+    const tmp = `${transcriptPath()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(transcript.slice(-TRANSCRIPT_CAP)), { mode: 0o600 });
+    renameSync(tmp, transcriptPath());
+  } catch {
+    // A read-only folder just loses replay after a restart.
+  }
+}
+function saveTranscript() {
+  clearTimeout(transcriptSaveTimer);
+  transcriptSaveTimer = setTimeout(writeTranscriptNow, 150);
+  transcriptSaveTimer.unref?.();
+}
+// Shutdown paths call this so the last 150 ms of conversation are not lost.
+function flushTranscript() {
+  if (transcriptSaveTimer) writeTranscriptNow();
+}
+
+function loadTranscript() {
+  transcript.length = 0;
+  try {
+    if (!existsSync(transcriptPath())) return;
+    const rows = JSON.parse(readFileSync(transcriptPath(), "utf8"));
+    if (!Array.isArray(rows)) return;
+    for (const row of rows) {
+      if (row && typeof row.role === "string") transcript.push(row);
+    }
+    // A conversation that did not end on a reply, an error, or a note was
+    // cut off by a restart (mid-turn it usually ends on a tool row); say so
+    // instead of leaving a message that looks ignored.
+    const last = transcript.at(-1);
+    if (last && !["assistant", "error", "notice"].includes(last.role)) {
+      transcript.push({ role: "error", text: "The desk restarted while Claude was working on this. Send the message again." });
+    }
+  } catch {
+    transcript.length = 0;
+  }
+}
+
+// Keep the replayed conversation self-explanatory: trim on a "You" boundary
+// so a reload never opens with a reply to a question that is no longer shown.
+function pushTranscript(row) {
+  transcript.push(row);
+  if (transcript.length > TRANSCRIPT_CAP) {
+    // Keep the last TRANSCRIPT_KEEP_TURNS exchanges whole.
+    let turns = 0;
+    let cut = 0;
+    for (let index = transcript.length - 1; index >= 0; index -= 1) {
+      if (transcript[index].role === "user") {
+        turns += 1;
+        if (turns === TRANSCRIPT_KEEP_TURNS) {
+          cut = index;
+          break;
+        }
+      }
+    }
+    if (cut > 0) {
+      transcript.splice(0, cut);
+      transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+    }
+  }
+  saveTranscript();
+}
+
+// A plain-language note the page shows as a card and replays after a reload.
+function sendNotice(text) {
+  send("notice", { text });
+  pushTranscript({ role: "notice", text });
+}
+
+// Text streamed before a tool call becomes its own row, and the tool its own
+// chip, so a reload shows the same shape the person watched live.
+function flushTurnText() {
+  if (!turnText.trim()) return;
+  repliedThisTurn = true;
+  pushTranscript({ role: "assistant", text: turnText });
+  turnText = "";
+}
 
 function send(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(payload);
 }
 
-function sendTurnError(text) {
-  send("turn-error", { text });
-  transcript.push({ role: "error", text });
-  if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+function sendTurnError(text, detail = "") {
+  send("turn-error", { text, detail });
+  pushTranscript({ role: "error", text, detail });
 }
 
 function snapshot(withTranscript = false) {
@@ -97,11 +230,15 @@ function snapshot(withTranscript = false) {
     busy,
     chromeGroup: chromeEnabled() ? DESK_SESSION_NAME : null,
     workspace,
+    runtime: Boolean(deskRuntime),
+    runtimeError,
   };
-  if (withTranscript) {
-    const rows = transcript.slice(-200);
+  if (withTranscript && !deskRuntime) {
+    const rows = transcript.slice(-TRANSCRIPT_CAP);
     if (busy && turnText) rows.push({ role: "assistant", text: turnText, partial: true });
     base.transcript = rows;
+  } else if (withTranscript) {
+    base.transcript = [];
   }
   return base;
 }
@@ -120,12 +257,32 @@ function emitTools(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return;
   for (const block of content) {
-    if (block?.type === "tool_use" && block.name) {
+    if (block?.type === "tool_use" && block.name === "AskUserQuestion") {
+      // Print mode cannot answer the tool (no permission callback, so the CLI
+      // denies it and Claude re-asks in text). Show the question anyway, so
+      // the person knows what Claude wanted and can answer in the composer.
       if (block.id) toolNames.set(block.id, block.name);
-      send("tool", { name: block.name, phase: "start" });
+      send("question", { id: block.id, questions: block.input?.questions ?? [] });
+      continue;
+    }
+    if (block?.type === "tool_use" && block.name) {
+      const known = toolNames.has(block.id);
+      if (block.id) toolNames.set(block.id, block.name);
+      send("tool", { id: block.id, name: block.name, phase: "start", input: block.input ?? {} });
+      if (!known) {
+        flushTurnText();
+        pushTranscript({ role: "tool", id: block.id, name: block.name, input: summarizeToolInput(block.input) });
+      } else {
+        // The stream start had no input; the full message carries it.
+        const row = [...transcript].reverse().find((item) => item.role === "tool" && item.id === block.id);
+        if (row) {
+          row.input = summarizeToolInput(block.input);
+          saveTranscript();
+        }
+      }
     }
     if (block?.type === "tool_result") {
-      send("tool", { name: toolNames.get(block.tool_use_id) || "tool", phase: "done" });
+      send("tool", { id: block.tool_use_id, name: toolNames.get(block.tool_use_id) || "tool", phase: "done" });
     }
   }
 }
@@ -146,7 +303,7 @@ function handleStreamLine(line) {
 
   if (event.type === "system" && event.subtype === "init") {
     sawInit = true;
-    send("status", { text: "Claude is in the repo" });
+    send("status", { text: "Claude is working in your job-search folder" });
     return;
   }
 
@@ -167,10 +324,17 @@ function handleStreamLine(line) {
 
   if (event.type === "stream_event") {
     const inner = event.event || {};
-    if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+    if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use" && inner.content_block.name !== "AskUserQuestion") {
       const block = inner.content_block;
       if (block.id && block.name) toolNames.set(block.id, block.name);
-      send("tool", { name: block.name || "tool", phase: "start" });
+      send("tool", { id: block.id, name: block.name || "tool", phase: "start", input: block.input ?? {} });
+      flushTurnText();
+      pushTranscript({ role: "tool", id: block.id, name: block.name || "tool", input: summarizeToolInput(block.input) });
+    }
+    if (inner.type === "content_block_start" && /^(redacted_)?thinking$/.test(inner.content_block?.type || "")) {
+      // No thinking text leaves the process; the page only needs to know
+      // Claude is thinking so it can say so instead of sitting silent.
+      send("thinking", {});
     }
     const delta = inner.delta;
     if (delta?.type === "text_delta" && delta.text) {
@@ -182,14 +346,33 @@ function handleStreamLine(line) {
   }
 
   if (event.type === "result") {
+    if (event.is_error) {
+      // One card, once: the error text is not also a reply, and the exit-code
+      // card below stays quiet when this one exists. The streamed reply is
+      // stored first so a reload keeps reply-then-problem order.
+      reportedError = true;
+      flushTurnText();
+      sendTurnError(event.result || "Claude reported an error.");
+      return;
+    }
     if (typeof event.result === "string" && event.result && !streamedText) {
       if (!turnText.trim()) turnText = event.result;
       send("result", { text: event.result });
     }
-    if (event.is_error) {
-      sendTurnError(event.result || "Claude reported an error.");
-    }
   }
+}
+
+// Exported for tests: the last stderr line when it reads as one sentence
+// meant for a person, or "" when it is a warning, a stack frame, or JSON.
+export function clearErrorLine(tail) {
+  const lines = String(tail || "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const last = lines.at(-1) || "";
+  if (/^\(use `node|^npm warn|^warning|^deprecat|^\(node:\d+\)/i.test(last)) return "";
+  const match = /^(?:\[?(?:error|api error|fatal)\]?:?\s*)?(.{8,200})$/i.exec(last);
+  if (!match) return "";
+  const text = match[1];
+  if (/\bat\s+\S+\s*\(|node:internal|^\s*[{[]|^\s*at /.test(text)) return "";
+  return text;
 }
 
 function stopProcess(proc, group) {
@@ -217,28 +400,56 @@ function stopProcess(proc, group) {
   proc.kill("SIGTERM");
 }
 
+const KILL_GRACE_MS = 5000;
+
 function stopClaude(reason = "Stopped") {
   if (!child) return;
+  const target = child;
   stopRequested = true;
-  stopProcess(child, !IS_WIN);
+  stopProcess(target, !IS_WIN);
   send("status", { text: reason });
+  // A child that ignores SIGTERM (a hung tool, a trapped signal) would keep
+  // the desk busy forever; escalate so Stop always stops.
+  const escalate = setTimeout(() => forceKill(target), KILL_GRACE_MS);
+  escalate.unref?.();
+}
+
+function forceKill(target) {
+  if (!target?.pid || target.exitCode !== null || target.signalCode !== null) return;
+  try {
+    if (!IS_WIN) process.kill(-target.pid, "SIGKILL");
+    else target.kill("SIGKILL");
+  } catch {
+    try { target.kill("SIGKILL"); } catch { /* already gone */ }
+  }
 }
 
 function stopHelper() {
   if (!helper) return;
   stopProcess(helper, !IS_WIN);
   helper = null;
+  helperState = null;
 }
 
 function attachHelperOutput(proc, kind) {
+  const announced = new Set();
   const onChunk = (chunk) => {
     const text = chunk.toString("utf8");
     if (!text.trim()) return;
     send("auth-log", { kind, text: text.trim() });
-    for (const url of extractHttpsUrls(text)) {
-      send("auth-url", { kind, url });
+    if (helperState?.proc === proc) helperState.log = `${helperState.log}${text}`.slice(-4000);
+    // Only the login prints a sign-in link; installer output can carry URLs
+    // of its own (docs, error pages) that must not be offered as one.
+    if (kind === "login") {
+      for (const url of extractHttpsUrls(text)) {
+        if (announced.has(url)) continue;
+        announced.add(url);
+        if (helperState?.proc === proc) helperState.urls.push(url);
+        send("auth-url", { kind, url });
+      }
     }
     if (kind === "login" && loginNeedsCode(text)) {
+      if (helperState?.proc === proc) helperState.needsCode = true;
       send("auth-code", { needed: true });
     }
     if (kind === "login" && loginSucceeded(text)) {
@@ -260,6 +471,7 @@ function runHelper(kind, factory) {
   }
   const proc = factory();
   helper = proc;
+  helperState = { kind, proc, urls: [], needsCode: false, log: "" };
   // A write to a stdin the helper already closed must not crash the desk.
   proc.stdin?.on("error", () => {});
   send("auth-log", { kind, text: kind === "install" ? "Installing Claude Code…" : "Opening Claude login…" });
@@ -269,12 +481,14 @@ function runHelper(kind, factory) {
     // live one: only the process that still owns `helper` may clear it.
     if (helper !== proc) return;
     helper = null;
+    helperState = null;
     send("auth-log", { kind, text: err.message });
     send("auth-done", { kind, ok: false, error: err.message });
   });
   proc.on("close", async (code) => {
     if (helper !== proc) return;
     helper = null;
+    helperState = null;
     const health = await getClaudeHealth(workspace);
     const ok = kind === "install" ? health.installed : health.loggedIn;
     send("auth-done", { kind, ok, code: code ?? 0, health });
@@ -284,7 +498,9 @@ function runHelper(kind, factory) {
 
 function runClaude(prompt, { retried = false } = {}) {
   if (busy) {
-    sendTurnError("Claude is already working. Stop the turn, or wait.");
+    // Transient: a message typed while the old turn is still closing must
+    // not persist an error into the conversation.
+    send("turn-error", { text: "Claude is still working on the last message. Wait for it to finish, or press Stop." });
     return false;
   }
 
@@ -302,6 +518,9 @@ function runClaude(prompt, { retried = false } = {}) {
   sawInit = false;
   stopRequested = false;
   turnText = "";
+  errTail = "";
+  reportedError = false;
+  repliedThisTurn = false;
   toolNames.clear();
   const gen = ++turnGen;
   let settled = false;
@@ -309,11 +528,20 @@ function runClaude(prompt, { retried = false } = {}) {
   send("status", { text: turnStatusText({ resuming: Boolean(sessionId) }) });
   if (!retried) {
     send("user", { text: prompt });
-    transcript.push({ role: "user", text: prompt });
-    if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+    pushTranscript({ role: "user", text: prompt });
   }
 
-  child = spawnClaude(args, { cwd: workspace, detached: !IS_WIN });
+  try {
+    child = spawnClaude(args, { cwd: workspace, detached: !IS_WIN });
+  } catch (err) {
+    // A synchronous spawn failure used to leave the desk busy forever with
+    // nothing on screen.
+    busy = false;
+    child = null;
+    sendTurnError(err.message || MISSING_CLAUDE_TEXT);
+    send("idle", snapshot());
+    return;
+  }
   // Print mode receives its prompt as an argument and waits for a piped stdin
   // to close. Leaving this stream open makes the Desk appear busy forever.
   child.stdin?.on("error", () => {});
@@ -332,7 +560,9 @@ function runClaude(prompt, { retried = false } = {}) {
   child.stderr.on("data", (chunk) => {
     if (superseded()) return;
     const text = chunk.toString("utf8").trim();
-    if (text) send("log", { text });
+    if (!text) return;
+    errTail = `${errTail}${errTail ? "\n" : ""}${text}`.slice(-1500);
+    send("log", { text });
   });
   child.on("error", (err) => {
     if (gen !== turnGen) return;
@@ -343,7 +573,7 @@ function runClaude(prompt, { retried = false } = {}) {
     sendTurnError(err.code === "ENOENT" ? MISSING_CLAUDE_TEXT : err.message);
     send("idle", snapshot());
   });
-  child.on("close", (code) => {
+  child.on("close", (code, signal) => {
     if (gen !== turnGen) return;
     if (settled) return;
     settled = true;
@@ -360,18 +590,32 @@ function runClaude(prompt, { retried = false } = {}) {
     if (!stopRequested && shouldRetryWithoutResume({ code, sawInit, usedResume, retried })) {
       sessionId = null;
       clearDeskSession(workspace);
-      send("status", { text: "The saved session was stale. Starting a fresh one." });
+      sendNotice("Claude could not continue the earlier conversation, so this is a fresh start. It will not remember previous chats.");
       send("session", { sessionId: null, chromeGroup: snapshot().chromeGroup });
       runClaude(prompt, { retried: true });
       return;
     }
+    const hadReply = Boolean(turnText.trim()) || repliedThisTurn;
     if (turnText.trim()) {
-      transcript.push({ role: "assistant", text: turnText });
-      if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+      pushTranscript({ role: "assistant", text: turnText });
       turnText = "";
     }
-    const failure = exitErrorText(code, stopRequested);
-    if (failure) sendTurnError(failure);
+    let failure = reportedError ? null : exitErrorText(code, stopRequested);
+    if (!failure && !reportedError && !stopRequested) {
+      // A child killed by a signal exits with code null; without this the
+      // turn ended silently as though the message had been ignored.
+      if (signal) failure = `Claude stopped unexpectedly (${signal}).`;
+      else if (!code && !hadReply) failure = "Claude finished without sending a reply. Try sending the message again.";
+    }
+    if (failure) {
+      // When stderr ends with one clear sentence, lead with it; the generic
+      // exit text becomes the detail instead of contradicting it.
+      const said = clearErrorLine(errTail);
+      if (said) sendTurnError(`Claude reported: ${said}`, `${failure}\n\n${errTail}`);
+      else sendTurnError(failure, errTail);
+    }
+    if (stopRequested && hadReply) sendNotice("Stopped. Claude's reply was cut off here.");
+    else if (stopRequested) sendNotice("Stopped before Claude replied.");
     send("idle", snapshot());
   });
 }
@@ -405,6 +649,123 @@ function readBody(req) {
       if (!tooLarge) reject(new Error("request stream error"));
     });
   });
+}
+
+// Uploads (a CV) are larger than any JSON body the desk takes.
+function readRawBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > limit) {
+        req.destroy();
+        const err = new Error("request too large");
+        err.tooLarge = true;
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", () => reject(new Error("request stream error")));
+  });
+}
+
+// `which` per tool costs a process each; the answer rarely changes.
+let toolsCache = null;
+function toolsStatus() {
+  if (toolsCache && Date.now() - toolsCache.at < 30000) return toolsCache.value;
+  const value = checkTools({ workspace });
+  toolsCache = { at: Date.now(), value };
+  return value;
+}
+
+const TEXT_PREVIEW_TYPES = { ".tex": "text/plain", ".md": "text/plain", ".txt": "text/plain", ".csv": "text/plain", ".json": "text/plain" };
+
+async function handleDeskDataRequest(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/jobs") {
+    json(res, 200, { jobs: readJobs(workspace) });
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/jobs/mark") {
+    const body = await readJson(req);
+    if (!body) {
+      json(res, 400, { ok: false, error: "invalid JSON body" });
+      return true;
+    }
+    try {
+      setJobMark(workspace, body.key, body.mark ?? null);
+      json(res, 200, { ok: true, jobs: readJobs(workspace) });
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message });
+    }
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/applications") {
+    json(res, 200, { applications: readApplications(workspace) });
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/progress") {
+    json(res, 200, readProgress(workspace));
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/tools") {
+    if (url.searchParams.get("refresh") === "1") toolsCache = null;
+    json(res, 200, toolsStatus());
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/documents") {
+    let bytes;
+    try {
+      bytes = await readRawBody(req, MAX_DOCUMENT_BYTES);
+    } catch (err) {
+      json(res, err?.tooLarge ? 413 : 400, { ok: false, error: err?.tooLarge ? "That file is larger than 25 MB." : "The upload did not finish." });
+      return true;
+    }
+    try {
+      const saved = saveDocument(workspace, { name: url.searchParams.get("name") || "", kind: url.searchParams.get("kind") || "cv", bytes });
+      json(res, 200, { ok: true, ...saved, progress: readProgress(workspace) });
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message });
+    }
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/workspace-file") {
+    const found = resolveWorkspaceFile(workspace, url.searchParams.get("path") || "");
+    if (!found) {
+      res.writeHead(404).end("not found");
+      return true;
+    }
+    const ext = extname(found.absolutePath).toLowerCase();
+    const type = ext === ".pdf" ? "application/pdf" : TEXT_PREVIEW_TYPES[ext];
+    if (!type) {
+      res.writeHead(415).end("no preview for this file type");
+      return true;
+    }
+    const data = await readFile(found.absolutePath);
+    res.writeHead(200, {
+      "Content-Type": type === "text/plain" ? "text/plain; charset=utf-8" : type,
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": "inline",
+    });
+    res.end(data);
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/workspace-file/open") {
+    const body = await readJson(req);
+    const found = body && resolveWorkspaceFile(workspace, body.path || "");
+    if (!found) {
+      json(res, 404, { ok: false, error: "That file is not in your job-search folder any more." });
+      return true;
+    }
+    if (body.reveal) systemOpener.reveal(found.absolutePath);
+    else systemOpener.open(found.absolutePath);
+    json(res, 200, { ok: true, path: found.relativePath });
+    return true;
+  }
+  return false;
 }
 
 async function readJson(req) {
@@ -517,6 +878,8 @@ async function handleRequest(req, res) {
       json(res, 200, { commands: registry.list() });
       return;
     }
+
+    if (await handleDeskDataRequest(req, res, url)) return;
 
     if (url.pathname === "/artifacts" || url.pathname.startsWith("/artifacts/")) {
       if (req.headers.origin && !originAllowed(req.headers.origin)) {
@@ -680,7 +1043,7 @@ async function handleRequest(req, res) {
 
     if (req.method === "POST" && url.pathname === "/auth/install") {
       const started = runHelper("install", () => spawnOfficialInstall());
-      json(res, started ? 202 : 409, { ok: started });
+      json(res, started ? 202 : 409, started ? { ok: true } : { ok: false, running: true, kind: helperState?.kind || "install" });
       return;
     }
 
@@ -692,7 +1055,12 @@ async function handleRequest(req, res) {
       }
       const email = typeof body.email === "string" ? body.email.trim() : "";
       const started = runHelper("login", () => spawnSubscriptionLogin({ cwd: workspace, email }));
-      json(res, started ? 202 : 409, { ok: started });
+      if (!started) {
+        // A reloaded page joins the sign-in already in progress.
+        json(res, 409, { ok: false, running: true, kind: helperState?.kind || "login", urls: helperState?.urls || [], needsCode: Boolean(helperState?.needsCode) });
+        return;
+      }
+      json(res, 202, { ok: true });
       return;
     }
 
@@ -739,7 +1107,13 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/stop") {
-      stopClaude("Stopped this turn");
+      if (!child) {
+        // Nothing to stop: make sure the page is not stuck showing busy.
+        busy = false;
+        send("idle", snapshot());
+      } else {
+        stopClaude("Stopped this turn");
+      }
       json(res, 200, { ok: true });
       return;
     }
@@ -755,6 +1129,7 @@ async function handleRequest(req, res) {
       );
       sessionId = null;
       transcript.length = 0;
+      saveTranscript();
       turnText = "";
       clearDeskSession(workspace);
       send("session", { sessionId: null, chromeGroup: snapshot().chromeGroup });
@@ -809,6 +1184,28 @@ function openBrowser(href) {
   linuxChrome.unref();
 }
 
+// One set of process handlers for the life of the process; a folder switch
+// only re-points them at the current desk.
+let currentStop = null;
+let handlersInstalled = false;
+function installProcessHandlers() {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  const onSignal = () => currentStop?.(true);
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  // Closing the terminal window sends SIGHUP; the startup text promises that
+  // stops Claude, and a detached child would otherwise keep editing files.
+  process.on("SIGHUP", onSignal);
+  process.on("exit", () => {
+    const target = child;
+    stopClaude("Desk closed");
+    forceKill(target);
+    stopHelper();
+    flushTranscript();
+  });
+}
+
 function listen(server, host, port) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -833,56 +1230,67 @@ export async function startDesk(options = {}) {
     throw new Error(existingWorkspaceHint());
   }
   rememberWorkspace(workspace);
-  // A workspace switch must not carry the previous desk's turn state into the
-  // new folder: a dying child's close handler would otherwise save the old
-  // session id into the new workspace's desk-session.json.
+  // A previous desk in this process (a folder switch) may still own a Claude
+  // turn or a sign-in helper. Stop them and mark the turn superseded: its
+  // close handler then releases busy without writing into the new folder,
+  // and the SIGKILL escalation still finds its child.
+  stopClaude("Switching folders");
+  stopHelper();
+  resetGen = turnGen;
   sessionId = loadDeskSession(workspace);
-  child = null;
-  busy = false;
-  helper = null;
   streamedText = false;
   sawInit = false;
-  stopRequested = false;
   turnText = "";
-  turnGen = 0;
-  resetGen = 0;
-  transcript.length = 0;
+  loadTranscript();
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
   let runtime = options.runtime || null;
   if (!runtime && options.runtimeFactory) {
     try {
       runtime = await options.runtimeFactory({ workspace });
+      runtimeError = "";
     } catch (error) {
       if (!options.allowRuntimeFailure) throw error;
       runtime = null;
+      runtimeError = error?.message || String(error);
+      console.error(`Desk runtime failed to start; using print mode instead: ${runtimeError}`);
     }
   }
   deskRuntime = runtime;
   deskAutofill = options.autofill || runtime?.autofillBridge || createAutofillBridge();
-  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace });
+  deskArtifacts = options.artifacts || runtime?.artifactService || createArtifactService({ workspace, openImpl: systemOpener });
+  toolsCache = null;
   let transport = null;
 
   const stop = (exitProcess = false) => {
+    const target = child;
     stopClaude("Desk closed");
     stopHelper();
+    // Keep whatever Claude had said so far; the restart note follows it.
+    flushTurnText();
+    flushTranscript();
     runtime?.stop?.();
     transport?.close?.();
     server.close(() => {
-      if (exitProcess) process.exit(0);
+      if (exitProcess && !target) process.exit(0);
     });
-    if (exitProcess) setTimeout(() => process.exit(0), 500).unref();
+    if (exitProcess) {
+      // Leave only once Claude is really gone: SIGTERM first, SIGKILL if it
+      // is still there after the grace period, then exit.
+      const bound = setTimeout(() => {
+        forceKill(target);
+        process.exit(0);
+      }, target ? KILL_GRACE_MS : 500);
+      bound.unref();
+      target?.once?.("close", () => {
+        clearTimeout(bound);
+        process.exit(0);
+      });
+    }
   };
 
-  // Signal handlers accumulate if startDesk runs again (workspace switch), so
-  // each registration removes itself before re-adding.
-  function stopOnSignal() {
-    stop(true);
-  }
-  process.off("SIGINT", stopOnSignal);
-  process.off("SIGTERM", stopOnSignal);
-  process.on("SIGINT", stopOnSignal);
-  process.on("SIGTERM", stopOnSignal);
+  currentStop = stop;
+  installProcessHandlers();
 
   const preferred = options.port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
   let bound = preferred;

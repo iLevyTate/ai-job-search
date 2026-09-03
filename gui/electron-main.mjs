@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isJobSearchWorkspace } from "./claude.mjs";
 import { createClaudeBootstrap } from "./claude-bootstrap.mjs";
@@ -13,6 +13,7 @@ import {
   defaultBrowseDir,
   existingWorkspaceHint,
   findExistingWorkspaces,
+  NOT_A_WORKSPACE_TEXT,
   openFolderHint,
   readSharedWorkspace,
   rememberWorkspace,
@@ -114,7 +115,10 @@ function createWindow() {
       sandbox: false,
     },
   });
+  // Show something at once: a second click on the shortcut during a slow
+  // start otherwise finds nothing on screen and looks like a failed launch.
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.loadFile(join(HERE, "public", "starting.html")).catch(() => {});
   // claude.ai logins and the Chrome Web Store need the user's real browser,
   // with its cookies and extension support, never a bare Electron window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -170,15 +174,27 @@ ipcMain.handle("open-cli", async (_event, chosen) => {
     root = picked.filePaths[0];
   }
   if (!isJobSearchWorkspace(root)) {
-    return { error: "That folder is not a job-search repo. It needs AGENTS.md and gui/." };
+    return { error: NOT_A_WORKSPACE_TEXT };
   }
-  writeWorkspace(root);
-  return startCli(root);
+  const prep = claudeBootstrap.snapshot();
+  if (prep.status === "installing") {
+    return { error: "Claude Code is still installing. Wait for the message above to say it is ready, then try again." };
+  }
+  const started = startCli(root);
+  if (started.error) return started;
+  // The desk shows the same folder the terminal is using, instead of leaving
+  // the person parked on the first-run page.
+  try {
+    await openDesk(root);
+  } catch (err) {
+    return { ...started, error: err.message || "The terminal opened, but the desk could not start in that folder." };
+  }
+  return started;
 });
 
 ipcMain.handle("open-workspace", async (_event, root) => {
   if (typeof root !== "string" || !isJobSearchWorkspace(root)) {
-    return { error: "That folder is not a job-search repo. It needs AGENTS.md and gui/." };
+    return { error: NOT_A_WORKSPACE_TEXT };
   }
   try {
     await openDesk(root);
@@ -197,7 +213,7 @@ ipcMain.handle("open-folder", async () => {
   if (picked.canceled || !picked.filePaths[0]) return { error: "No folder selected." };
   const root = picked.filePaths[0];
   if (!isJobSearchWorkspace(root)) {
-    return { error: "That folder is not a job-search repo. It needs AGENTS.md and gui/." };
+    return { error: NOT_A_WORKSPACE_TEXT };
   }
   try {
     await openDesk(root);
@@ -226,9 +242,24 @@ ipcMain.handle("terminal-start", async (_event, payload = {}) => {
       });
       pty.start({ cols, rows });
       pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
-      pty.onExit((info) => {
-        if (activePty?.id === pty.id) activePty = null;
-        mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code });
+      pty.onExit(async (info) => {
+        const wasActive = activePty?.id === pty.id;
+        if (wasActive) activePty = null;
+        // Claude Code closing in the terminal must hand the conversation back
+        // to Chat, or every later message is rejected until the app restarts.
+        // A pty replaced by a newer one must not hand back the newer one's turn.
+        let snapshot = null;
+        const current = desk?.runtime?.snapshot?.();
+        if (wasActive && desk?.controllers && current?.controller === "terminal") {
+          const handoff = await switchToChat({
+            controllers: desk.controllers,
+            expectedControllerGeneration: current.controllerGeneration,
+            terminalId: pty.id,
+            disposePty: async () => {},
+          }).catch(() => null);
+          if (handoff?.ok) snapshot = handoff.snapshot;
+        }
+        mainWindow?.webContents.send("terminal-exit", { terminalId: pty.id, code: info.code, snapshot });
       });
       activePty = pty;
       return pty;
@@ -283,7 +314,12 @@ ipcMain.handle("clone-workspace", async () => {
   if (destParent.canceled || !destParent.filePaths[0]) {
     return { error: "No folder selected." };
   }
-  const dest = join(destParent.filePaths[0], "ai-job-search");
+  const picked = destParent.filePaths[0];
+  let dest = join(picked, "ai-job-search");
+  // Someone who already has a Desk folder, or made an empty ai-job-search
+  // folder themselves, will pick that folder; do not nest a copy inside it.
+  if (isJobSearchWorkspace(picked)) dest = picked;
+  else if (basename(picked) === "ai-job-search" && readdirSync(picked).length === 0) dest = picked;
   const created = await createWorkspace(dest);
   if (created.error) return created;
   try {

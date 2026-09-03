@@ -23,7 +23,7 @@ export function createSessionRuntime({
   autofillBridge = createAutofillBridge(),
   maxQueuedMessages = 8,
   interruptGraceMs = 3000,
-  interactionTimeoutMs = 5 * 60 * 1000,
+  interactionTimeoutMs = 0,
   handoffTimeoutMs = 0,
 } = {}) {
   const subscribers = new Set();
@@ -37,6 +37,13 @@ export function createSessionRuntime({
   let pumping = null;
   let pendingHandoff = null;
   let stopRequested = false;
+  // True when the SDK stream ended and no replacement could be started; sends
+  // are refused with "closed" so the page can say so instead of hanging.
+  let adapterDead = false;
+  // Messages accepted while a turn was still running. Each becomes its own
+  // turn when Claude reaches it, so its reply gets its own card and its
+  // artifacts settle against the snapshot taken when it was submitted.
+  const pendingTurns = [];
 
   function conversation() {
     return store.get(conversationId);
@@ -80,12 +87,29 @@ export function createSessionRuntime({
     };
   }
 
+  const TURN_BEARING = new Set(["assistant", "stream_event", "user"]);
+
+  async function ensureTurnFor(sdkMessage) {
+    if (conversation()?.partialTurn || !TURN_BEARING.has(sdkMessage?.type)) return;
+    const id = pendingTurns.shift() ?? randomUUID();
+    await store.transact(conversationId, (next) => {
+      next.partialTurn = { id, eventId: id };
+    });
+  }
+
   async function publishSdkMessage(sdkMessage, currentEpoch) {
+    if (currentEpoch !== epoch) return;
+    await ensureTurnFor(sdkMessage);
     if (currentEpoch !== epoch) return;
     const drafts = normalize(sdkMessage, eventContext());
     for (const draft of drafts) {
       if (currentEpoch !== epoch) return;
       const persisted = await store.appendEvent(conversationId, draft);
+      if (persisted.type === "turn.completed" && conversation()?.recoveryAttempts) {
+        await store.transact(conversationId, (next) => {
+          next.recoveryAttempts = 0;
+        });
+      }
       if ((persisted.type === "turn.completed" || persisted.type === "turn.failed") && artifactService) {
         const found = await artifactService.settleTurn(persisted.turnId || conversation()?.partialTurn?.id);
         if (found.length) {
@@ -126,39 +150,74 @@ export function createSessionRuntime({
   }
 
   async function pump(currentAdapter, currentEpoch) {
+    let failure = null;
     try {
       for await (const sdkMessage of currentAdapter.messages()) {
         await publishSdkMessage(sdkMessage, currentEpoch);
       }
     } catch (error) {
-      const current = conversation();
-      const classification = recoveryPolicy.classify(error, { stopRequested });
-      if (recoveryPolicy.shouldResume({
-        classification,
-        sessionId: current?.claudeSessionId,
-        recoveryAttempts: current?.recoveryAttempts ?? 0,
-        controller: current?.controller,
-      })) {
-        await store.transact(conversationId, (next) => {
-          next.recoveryAttempts += 1;
-        });
-        try {
-          await startAdapter();
-        } catch {
-          // Recovery failed; the pump stays dead and the next submitMessage
-          // surfaces the failure instead of an unhandled rejection here.
-        }
+      failure = error;
+    }
+    // A pump superseded by reset, stop, or a forced interrupt has nothing to
+    // clean up; its replacement owns the conversation now.
+    if (currentEpoch !== epoch || adapter !== currentAdapter) return;
+    const current = conversation();
+    const wasStop = stopRequested;
+    stopRequested = false;
+    const classification = recoveryPolicy.classify(failure ?? new Error("stream ended"), { stopRequested: wasStop });
+    // The stream is gone. Whatever turn was open can never finish on its own,
+    // so end it visibly instead of leaving the page on "Working" forever.
+    if (current?.partialTurn) {
+      const reason = failure ? String(failure.message || failure) : "";
+      const text = wasStop
+        ? "Stopped."
+        : reason
+          ? `Claude stopped unexpectedly (${reason}). Send your message again.`
+          : "Claude stopped unexpectedly. Send your message again.";
+      await publishEvent({ type: wasStop ? "turn.interrupted" : "turn.failed", payload: { text, reason: classification } }).catch(() => {});
+    }
+    // Follow-ups handed to the dead adapter never reach Claude.
+    const lost = pendingTurns.splice(0, pendingTurns.length);
+    for (const id of lost) {
+      await publishEvent({ type: "turn.failed", turnId: id, payload: { text: "Claude stopped before reaching this message. Send it again." } }).catch(() => {});
+      artifactService?.settleTurn?.(id).catch?.(() => {});
+    }
+    const attempts = current?.recoveryAttempts ?? 0;
+    const resumable = recoveryPolicy.shouldResume({
+      classification,
+      sessionId: current?.claudeSessionId,
+      recoveryAttempts: attempts,
+      controller: current?.controller,
+    });
+    // One restart for a crash or a clean end; a sign-in or install failure
+    // would only loop, so it stays down until the person starts a new chat.
+    const authFailure = classification === "fatal" && /authentication|not installed|login|unauthorized/i.test(String(failure?.message || ""));
+    if ((resumable || (!authFailure && attempts === 0)) && (current?.controller ?? "chat") === "chat") {
+      await store.transact(conversationId, (next) => {
+        next.recoveryAttempts += 1;
+      });
+      try {
+        await startAdapter();
+        return;
+      } catch {
+        // Fall through: the adapter is dead and sends are refused below.
       }
     }
+    adapterDead = true;
+    await publishEvent({
+      type: "session.status",
+      payload: { phase: "stopped", detail: failure ? String(failure.message || failure) : "" },
+    }).catch(() => {});
   }
 
   async function startAdapter() {
     const current = conversation();
+    adapterDead = false;
     adapter = adapterFactory({
       cwd: workspace,
       sessionId: current?.claudeSessionId,
       permissionMode: permissionPolicy?.get() ?? current?.permissionMode ?? "safe",
-      onPermissionRequest: (request) => broker.beginPermission?.(request),
+      onPermissionRequest: (request) => handlePermissionRequest(request),
     });
     await adapter.start();
     const currentEpoch = epoch;
@@ -218,10 +277,79 @@ export function createSessionRuntime({
     return commandResult(true, snapshot());
   }
 
-  async function publishAutofillEvent(draft) {
+  async function publishEvent(draft) {
     const persisted = await store.appendEvent(conversationId, draft);
     for (const listener of subscribers) listener(persisted);
     return persisted;
+  }
+  const publishAutofillEvent = publishEvent;
+
+  // Everything Claude needs from the person arrives through the SDK's
+  // canUseTool callback: tool approvals in Safe mode, and AskUserQuestion in
+  // every mode (the SDK routes it to the callback even under bypass). The page
+  // only sees what is published here, so each request becomes an event, and
+  // the answer travels back as the callback's return value.
+  function handlePermissionRequest(request = {}) {
+    const requestId = request.requestId || request.toolUseId;
+    if (!requestId) return Promise.resolve({ behavior: "deny", message: "Permission request had no id" });
+    const requestEpoch = epoch;
+    const publishIfCurrent = (draft) => (requestEpoch === epoch ? publishEvent(draft) : Promise.resolve(null));
+    if (request.toolName === "AskUserQuestion") {
+      const questions = Array.isArray(request.input?.questions) ? request.input.questions : [];
+      const pending = broker.beginQuestion({ requestId, toolUseId: request.toolUseId, questions, signal: request.signal });
+      publishEvent({
+        type: "question.requested",
+        payload: { entityId: requestId, requestId, toolUseId: request.toolUseId, questions },
+      }).catch(() => {});
+      return Promise.resolve(pending).then((result) => {
+        const answered = result && !result.cancelled && result.answers && Object.keys(result.answers).length > 0;
+        publishIfCurrent({
+          type: "question.resolved",
+          payload: { entityId: requestId, requestId, toolUseId: request.toolUseId, answered: Boolean(answered), reason: result?.reason },
+        }).catch(() => {});
+        if (!answered) {
+          return { behavior: "deny", message: result?.reason === "timeout" ? "The user did not answer in time." : "The user did not answer." };
+        }
+        const answers = Object.fromEntries(Object.entries(result.answers).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : value]));
+        return { behavior: "allow", updatedInput: { ...(request.input || {}), questions, answers } };
+      });
+    }
+    const pending = broker.beginPermission({ ...request, requestId });
+    publishEvent({
+      type: "permission.requested",
+      payload: {
+        entityId: requestId,
+        requestId,
+        toolUseId: request.toolUseId,
+        toolName: request.toolName,
+        input: request.input ?? {},
+        suggestions: Array.isArray(request.suggestions) ? request.suggestions : [],
+        title: request.title,
+        description: request.description,
+        displayName: request.displayName,
+        decisionReason: request.decisionReason,
+      },
+    }).catch(() => {});
+    return Promise.resolve(pending).then((result) => {
+      publishIfCurrent({
+        type: "permission.resolved",
+        payload: {
+          entityId: requestId,
+          requestId,
+          toolUseId: request.toolUseId,
+          name: request.toolName,
+          decision: result?.behavior === "allow" ? "allow" : "deny",
+          reason: /timed out/i.test(String(result?.message || "")) ? "timeout" : undefined,
+        },
+      }).catch(() => {});
+      return result;
+    });
+  }
+
+  async function closeOpenTurn(reason) {
+    const current = conversation();
+    if (!current?.partialTurn) return;
+    await publishEvent({ type: "turn.interrupted", payload: { reason } });
   }
 
   const api = {
@@ -231,6 +359,9 @@ export function createSessionRuntime({
       if (!conversation()) await store.load();
       if (!conversation()) throw new Error(`Unknown conversation ${conversationId}`);
       autofillBridge.cancelOrphaned();
+      // A turn left open when the app last closed would glue the next reply
+      // onto the old half-reply; nothing can finish it, so close it now.
+      await closeOpenTurn("app-restarted");
       await startAdapter();
       return snapshot();
     },
@@ -248,14 +379,35 @@ export function createSessionRuntime({
       if (conversation().controller !== "chat") {
         return commandResult(false, { reason: "wrong-controller" });
       }
-      const accepted = adapter.send({ id: messageId, text });
-      if (!accepted.accepted) return commandResult(false, { reason: accepted.reason });
-      if (artifactService) {
-        await artifactService.beginTurn(messageId);
+      if (adapterDead || !adapter) return commandResult(false, { reason: "closed" });
+      // A Stop from an earlier turn must not colour how this turn's failures
+      // are classified.
+      stopRequested = false;
+      // Claim the turn before anything is sent: a fast first token must find
+      // this id, not a random one, and the artifact snapshot must predate
+      // any write Claude makes.
+      const queued = Boolean(conversation().partialTurn) || pendingTurns.length > 0;
+      if (queued) pendingTurns.push(messageId);
+      else {
         await store.transact(conversationId, (next) => {
           next.partialTurn = { id: messageId, eventId: messageId };
         });
       }
+      if (artifactService) await artifactService.beginTurn(messageId);
+      const accepted = adapter.send({ id: messageId, text });
+      if (!accepted.accepted) {
+        if (queued) pendingTurns.splice(pendingTurns.indexOf(messageId), 1);
+        else await store.transact(conversationId, (next) => { next.partialTurn = null; });
+        return commandResult(false, { reason: accepted.reason });
+      }
+      // The page paints "You" from this event alone (it keeps no local copy),
+      // and a reload replays it with the rest of the conversation.
+      const persisted = await store.appendEvent(conversationId, {
+        type: "user.message",
+        turnId: messageId,
+        payload: { messageId, text },
+      });
+      for (const listener of subscribers) listener(persisted);
       return commandResult(true, { messageId });
     },
     async resolvePermission({ requestId, decision, update, reason, expectedControllerGeneration } = {}) {
@@ -281,12 +433,7 @@ export function createSessionRuntime({
         expectedControllerGeneration,
       });
       if (result && !result.ok) return result;
-      const payload = result?.answers ?? value ?? answers;
-      const accepted = adapter.send({
-        id: requestId,
-        text: typeof payload === "string" ? payload : JSON.stringify(payload),
-      });
-      return accepted.accepted ? commandResult(true, { requestId }) : commandResult(false, { reason: accepted.reason });
+      return commandResult(true, { requestId });
     },
     async setPermissionMode({ mode, expectedControllerGeneration } = {}) {
       const blocked = requireGeneration(expectedControllerGeneration);
@@ -307,6 +454,19 @@ export function createSessionRuntime({
         session: adapter,
         graceMs: interruptGraceMs,
       });
+      if (result?.outcome === "force-closed") {
+        // The SDK session is gone: end the turn the page is watching and bring
+        // up a fresh adapter on the same Claude session so the next message works.
+        epoch += 1;
+        pendingTurns.length = 0;
+        await closeOpenTurn("stopped");
+        stopRequested = false;
+        try {
+          await startAdapter();
+        } catch {
+          // The next submitMessage surfaces the failure.
+        }
+      }
       return commandResult(true, result);
     },
     beginTerminalHandoff({ expectedControllerGeneration, timeoutMs } = {}) {
@@ -376,6 +536,8 @@ export function createSessionRuntime({
       const blocked = requireGeneration(expectedControllerGeneration);
       if (blocked) return blocked;
       epoch += 1;
+      pendingTurns.length = 0;
+      broker.abortAll?.("conversation-reset");
       await store.transact(conversationId, (next) => {
         next.partialTurn = null;
         next.queue = [];
@@ -384,8 +546,21 @@ export function createSessionRuntime({
         next.events = [];
         next.nextSequence = 1;
         next.controllerGeneration += 1;
+        // A new conversation gets a new Claude session.
+        next.claudeSessionId = null;
+        next.recoveryAttempts = 0;
       });
-      return commandResult(true, snapshot());
+      // The running pump was started under the old epoch and would drop every
+      // reply from now on; replace the adapter so a new pump runs.
+      const previous = adapter;
+      stopRequested = false;
+      try {
+        await startAdapter();
+      } catch {
+        // The next submitMessage surfaces the failure.
+      }
+      previous?.close?.();
+      return commandResult(true, { snapshot: snapshot() });
     },
     disconnectInteractions() {
       return broker.disconnect?.() ?? 0;

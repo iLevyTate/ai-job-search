@@ -9151,35 +9151,91 @@ ${h2.join(`
       controller: seed.controller ?? "chat",
       controllerGeneration: seed.controllerGeneration ?? 1,
       conversationId: seed.conversationId ?? null,
+      sessionId: seed.sessionId ?? null,
       busy: Boolean(seed.busy),
+      // True between Claude opening a thinking block and the first visible
+      // output (text or a tool call). The chat shows "Thinking" while it holds.
+      thinking: false,
+      // Reply text is split into a new card after every tool call, question, or
+      // permission prompt, so an answer that follows a file read lands below
+      // the tool chip instead of being appended to the text above it.
+      segment: 0,
+      // The turn the reply cards currently belong to; a new turn id starts
+      // segment numbering again.
+      activeTurnId: null,
       pendingQuestionId: null,
       pendingPermissionId: null
     };
   }
-  function cardIdFor(event) {
+  var QUIET_TYPES = /* @__PURE__ */ new Set([
+    "assistant.thinking",
+    "diagnostic.unknown_sdk_event",
+    "usage",
+    "hook.activity",
+    "mcp.status",
+    "session.status",
+    "turn.interrupted"
+  ]);
+  var MERGE_ONLY_TYPES = /* @__PURE__ */ new Set(["permission.resolved", "question.resolved", "autofill.resolved", "tool.completed"]);
+  var TURN_END_TYPES = /* @__PURE__ */ new Set(["turn.completed", "turn.failed", "turn.interrupted"]);
+  function cardIdFor(event, segment = 0) {
     const payload = event?.payload ?? {};
     if (payload.entityId) return payload.entityId;
     if (payload.toolUseId) return payload.toolUseId;
     if (payload.requestId) return payload.requestId;
     if (payload.messageId) return payload.messageId;
-    if (event?.type === "assistant.delta" || event?.type === "assistant.message") {
-      return `assistant:${event.turnId || "current"}`;
+    if (event?.type === "assistant.delta" || event?.type === "assistant.message" || event?.type === "turn.completed") {
+      return `assistant:${event.turnId || "current"}${segment ? `:${segment}` : ""}`;
+    }
+    if (event?.type === "subagent.activity") {
+      return `subagent:${payload.parentToolUseId || event.turnId || "current"}`;
     }
     return event?.eventId;
   }
   function toRenderableCard(event, id) {
+    const type = event.type === "assistant.delta" || event.type === "turn.completed" ? "assistant.message" : event.type;
     return {
       id,
-      type: event.type === "assistant.delta" ? "assistant.message" : event.type,
+      type,
       payload: { ...event.payload },
       entered: false
     };
   }
   function mergeCard(existing, event) {
     const next = { ...existing, payload: { ...existing.payload, ...event.payload } };
+    if (event.payload?.input && !Object.keys(event.payload.input).length && existing.payload.input && Object.keys(existing.payload.input).length) {
+      next.payload.input = existing.payload.input;
+    }
+    if (event.type === "question.requested" || event.type === "permission.requested") {
+      next.type = event.type;
+      next.entered = false;
+      return next;
+    }
+    if (event.type === "tool.completed" && (existing.type.startsWith("question") || existing.type.startsWith("permission"))) {
+      next.entered = true;
+      return next;
+    }
     if (event.type === "assistant.delta") {
       next.type = "assistant.message";
       next.payload.text = `${existing.payload.text || ""}${event.payload?.text || ""}`;
+    }
+    if (event.type === "assistant.message") {
+      const incoming = event.payload?.text || "";
+      const current = existing.payload.text || "";
+      next.type = "assistant.message";
+      if (current.includes(incoming)) next.payload.text = current;
+      else if (incoming.includes(current)) next.payload.text = incoming;
+      else next.payload.text = `${current}
+
+${incoming}`;
+    }
+    if (event.type === "turn.completed") {
+      next.type = "assistant.message";
+      next.payload.text = existing.payload.text || event.payload?.text || "";
+    }
+    if (event.type === "subagent.activity") {
+      const incoming = event.payload?.text || "";
+      next.payload.text = incoming ? `${existing.payload.text || ""}${existing.payload.text ? "\n\n" : ""}${incoming}` : existing.payload.text || "";
     }
     if (event.type === "tool.completed") {
       next.type = "tool.completed";
@@ -9189,14 +9245,31 @@ ${h2.join(`
       next.entered = true;
       next.payload.decision = event.payload?.decision;
     }
+    if (event.type === "question.resolved") {
+      next.entered = true;
+      next.payload.answered = event.payload?.answered !== false;
+      next.payload.reason = event.payload?.reason;
+    }
     return next;
   }
+  function restatesEarlierSegment(cards, event, segment) {
+    if (event.type !== "assistant.message" || segment === 0) return false;
+    const incoming = (event.payload?.text || "").trim();
+    if (!incoming) return true;
+    for (let index = segment - 1; index >= 0; index -= 1) {
+      const earlier = cards.get(cardIdFor(event, index));
+      if (earlier?.payload?.text && earlier.payload.text.includes(incoming)) return true;
+    }
+    return false;
+  }
   function reduceDeskEvent(state2, event) {
-    if (!event || typeof event.sequence !== "number" || event.sequence <= state2.lastSequence) {
+    if (!event) return state2;
+    const local = event.local === true;
+    if (!local && (typeof event.sequence !== "number" || event.sequence <= state2.lastSequence)) {
       return state2;
     }
     const next = structuredClone(state2);
-    next.lastSequence = event.sequence;
+    if (!local) next.lastSequence = event.sequence;
     if (event.type === "user.queued") {
       next.queued.push({
         id: event.payload?.messageId || event.eventId,
@@ -9207,11 +9280,15 @@ ${h2.join(`
     if (typeof event.payload?.permissionMode === "string") {
       next.permissionMode = event.payload.permissionMode;
     }
+    if (typeof event.payload?.sessionId === "string" && event.payload.sessionId) {
+      next.sessionId = event.payload.sessionId;
+    }
     if (event.type === "session.status" && event.payload?.controller) {
       next.controller = event.payload.controller;
     }
-    if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
+    if (TURN_END_TYPES.has(event.type)) {
       next.busy = false;
+      next.thinking = false;
       next.pendingQuestionId = null;
       next.pendingPermissionId = null;
       if (event.type === "turn.failed" || event.type === "turn.interrupted") {
@@ -9223,19 +9300,39 @@ ${h2.join(`
         }
       }
     }
-    if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "tool.started") {
+    if (event.type === "assistant.thinking") {
       next.busy = true;
+      next.thinking = true;
+    }
+    if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "assistant.message" || event.type === "tool.started") {
+      next.busy = true;
+      next.thinking = false;
       if (event.payload?.messageId) {
         next.queued = next.queued.filter((item) => item.id !== event.payload.messageId);
       }
     }
-    const id = cardIdFor(event);
+    if ((event.type === "assistant.delta" || event.type === "assistant.message" || event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested" || event.type === "turn.completed") && event.turnId && event.turnId !== next.activeTurnId) {
+      next.activeTurnId = event.turnId;
+      next.segment = 0;
+    }
+    if (event.type === "question.resolved" && next.pendingQuestionId === cardIdFor(event)) next.pendingQuestionId = null;
+    if (event.type === "permission.resolved" && next.pendingPermissionId === cardIdFor(event)) next.pendingPermissionId = null;
+    if (QUIET_TYPES.has(event.type)) return next;
+    if (event.type === "turn.completed" && !(event.payload?.text || "").trim() && !next.cards.has(cardIdFor(event, next.segment))) {
+      return next;
+    }
+    const id = cardIdFor(event, next.segment);
     if (!id) return next;
     const existing = next.cards.get(id);
+    if (!existing && MERGE_ONLY_TYPES.has(event.type)) return next;
+    if (!existing && restatesEarlierSegment(next.cards, event, next.segment)) return next;
+    if (!existing && (event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested")) {
+      next.segment += 1;
+    }
     const card = existing ? mergeCard(existing, event) : toRenderableCard(event, id);
     if (event.type === "question.requested") {
       card.entered = false;
-      next.pendingQuestionId = id;
+      if (!card.payload.readOnly) next.pendingQuestionId = id;
     }
     if (event.type === "permission.requested") {
       card.entered = false;
@@ -9259,13 +9356,18 @@ ${h2.join(`
     if (snapshot.controller) next.controller = snapshot.controller;
     if (snapshot.controllerGeneration != null) next.controllerGeneration = snapshot.controllerGeneration;
     if (snapshot.conversationId) next.conversationId = snapshot.conversationId;
-    if (snapshot.busy != null) next.busy = Boolean(snapshot.busy);
+    if ("sessionId" in snapshot) next.sessionId = snapshot.sessionId ?? null;
+    if (snapshot.busy != null) {
+      next.busy = Boolean(snapshot.busy);
+      if (!next.busy) next.thinking = false;
+    }
     return next;
   }
   function queueFollowUp(state2, { messageId, text }) {
     return reduceDeskEvent(state2, {
       eventId: messageId,
       sequence: state2.lastSequence + 1,
+      local: true,
       type: "user.queued",
       payload: { messageId, text }
     });
@@ -9316,7 +9418,6 @@ ${h2.join(`
     const document2 = container.ownerDocument;
     container.replaceChildren();
     container.classList.add("artifact-view");
-    container.tabIndex = 0;
     if (state2.status === "loading") {
       container.innerHTML = `<div class="empty" data-state="loading"><p class="kicker">${escapeHtml(title)}</p><h2>Loading files\u2026</h2></div>`;
       return;
@@ -9326,17 +9427,17 @@ ${h2.join(`
       return;
     }
     if (state2.status === "empty" || !state2.artifacts.length) {
-      container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No artifacts yet.</h2><p>Generated CVs, letters, and reports will appear here.</p></div>`;
+      container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No files yet.</h2><p>When Claude writes a CV, cover letter, or report, it shows up here.</p></div>`;
       return;
     }
     const list = document2.createElement("div");
     list.className = "artifact-list";
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", "Artifacts");
-    for (const group of groupArtifactsByTurn(state2.artifacts)) {
+    groupArtifactsByTurn(state2.artifacts).forEach((group, index) => {
       const heading = document2.createElement("p");
       heading.className = "kicker";
-      heading.textContent = `Turn ${group.turnId}`;
+      heading.textContent = `Reply ${index + 1}`;
       list.append(heading);
       for (const artifact of group.items) {
         const button = document2.createElement("button");
@@ -9349,7 +9450,7 @@ ${h2.join(`
         button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
         list.append(button);
       }
-    }
+    });
     const preview = document2.createElement("div");
     preview.className = "artifact-preview";
     preview.dataset.kind = state2.preview?.kind || "none";
@@ -9362,7 +9463,7 @@ ${h2.join(`
     }
     const actions = document2.createElement("div");
     actions.className = "artifact-actions";
-    for (const [action, label] of [["preview", "Preview"], ["compare", "Compare"], ["open", "Open"], ["reveal", "Reveal"]]) {
+    for (const [action, label] of [["preview", "Preview"], ["compare", "What changed"], ["open", "Open"], ["reveal", "Show in folder"]]) {
       const button = document2.createElement("button");
       button.type = "button";
       button.dataset.artifactAction = action;
@@ -9375,7 +9476,7 @@ ${h2.join(`
       const confirm2 = document2.createElement("div");
       confirm2.className = "artifact-confirm";
       confirm2.dataset.confirm = state2.confirm.action;
-      confirm2.innerHTML = `<p>${state2.confirm.action === "open" ? "Open this file with the operating system?" : "Reveal this file in the file manager?"}</p>
+      confirm2.innerHTML = `<p>${state2.confirm.action === "open" ? "Open this file in its usual app (for example Word or your PDF viewer)?" : "Show this file in its folder?"}</p>
       <button type="button" data-confirm="yes">Continue</button>
       <button type="button" class="ghost" data-confirm="no">Cancel</button>`;
       actions.append(confirm2);
@@ -9400,7 +9501,7 @@ ${h2.join(`
     { id: "files", label: "Files" }
   ];
   function mountTabs(container, {
-    tabs = DEFAULT_TABS,
+    tabs: tabs2 = DEFAULT_TABS,
     selectedId = "chat",
     onSelect
   } = {}) {
@@ -9409,7 +9510,7 @@ ${h2.join(`
     list.className = "tablist";
     list.setAttribute("role", "tablist");
     list.setAttribute("aria-label", "Desk surfaces");
-    const buttons = tabs.map((tab) => {
+    const buttons = tabs2.map((tab) => {
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
       button.className = "tab";
@@ -9437,7 +9538,7 @@ ${h2.join(`
       }
     }
     function select(id, { focus = false } = {}) {
-      if (!tabs.some((tab) => tab.id === id)) return current;
+      if (!tabs2.some((tab) => tab.id === id)) return current;
       current = id;
       paint();
       if (focus) buttons.find((button) => button.dataset.tab === id)?.focus();
@@ -9452,16 +9553,16 @@ ${h2.join(`
       const index = buttons.findIndex((button) => button.dataset.tab === current);
       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
         event.preventDefault();
-        select(tabs[(index + 1) % tabs.length].id, { focus: true });
+        select(tabs2[(index + 1) % tabs2.length].id, { focus: true });
       } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
         event.preventDefault();
-        select(tabs[(index - 1 + tabs.length) % tabs.length].id, { focus: true });
+        select(tabs2[(index - 1 + tabs2.length) % tabs2.length].id, { focus: true });
       } else if (event.key === "Home") {
         event.preventDefault();
-        select(tabs[0].id, { focus: true });
+        select(tabs2[0].id, { focus: true });
       } else if (event.key === "End") {
         event.preventDefault();
-        select(tabs[tabs.length - 1].id, { focus: true });
+        select(tabs2[tabs2.length - 1].id, { focus: true });
       }
     });
     paint();
@@ -9474,6 +9575,176 @@ ${h2.join(`
         container.replaceChildren();
       }
     };
+  }
+
+  // public/src/desk-views.js
+  function escapeHtml2(text) {
+    return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+  }
+  var JOB_FILTERS = [
+    { id: "open", label: "To look at" },
+    { id: "interested", label: "Interested" },
+    { id: "applied", label: "Applied" },
+    { id: "ignored", label: "Ignored" },
+    { id: "all", label: "All" }
+  ];
+  function filterJobs(jobs, filter = "open", query = "") {
+    const needle = String(query || "").trim().toLowerCase();
+    return (jobs || []).filter((job) => {
+      if (filter === "open" && job.bucket !== "new" && job.bucket !== "interested") return false;
+      if (filter !== "open" && filter !== "all" && job.bucket !== filter) return false;
+      if (!needle) return true;
+      return [job.title, job.company, job.location, job.portal].filter(Boolean).join(" ").toLowerCase().includes(needle);
+    });
+  }
+  function countBuckets(jobs) {
+    const counts = { open: 0, interested: 0, applied: 0, ignored: 0, all: jobs.length };
+    for (const job of jobs) {
+      if (job.bucket === "new" || job.bucket === "interested") counts.open += 1;
+      if (counts[job.bucket] != null && job.bucket !== "new") counts[job.bucket] += 1;
+    }
+    return counts;
+  }
+  function rankBadge(job) {
+    if (job.rankScore == null) return job.fit ? `<span class="pill">${escapeHtml2(job.fit)} fit</span>` : "";
+    const band = job.rankScore >= 75 ? "good" : job.rankScore >= 50 ? "mid" : "low";
+    return `<span class="pill pill-${band}" title="${escapeHtml2(job.rankVerdict || "Fit score from Rank")}">${escapeHtml2(String(job.rankScore))} / 100${job.rankVerdict ? ` \xB7 ${escapeHtml2(job.rankVerdict)}` : ""}</span>`;
+  }
+  function jobMeta(job) {
+    const bits = [job.company, job.location, job.portal ? `via ${job.portal}` : "", job.firstSeen ? `found ${job.firstSeen}` : ""].filter(Boolean);
+    return bits.map(escapeHtml2).join(" \xB7 ");
+  }
+  function renderJobs(container, { jobs = [], filter = "open", query = "", status = "ready", error = "" } = {}) {
+    const document2 = container.ownerDocument;
+    container.replaceChildren();
+    if (status === "loading") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>Loading\u2026</h2></div>`;
+      return;
+    }
+    if (status === "error") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>Could not load the jobs.</h2><p>${escapeHtml2(error || "Try again.")}</p></div>`;
+      return;
+    }
+    if (!jobs.length) {
+      container.innerHTML = `<div class="empty"><p class="kicker">Jobs</p><h2>No jobs found yet.</h2><p>Click <strong>Find Jobs</strong> in the left column and Claude searches the job boards for openings that match you. They show up here, ready to apply to.</p><div class="empty-actions"><button type="button" data-action="scrape">Find jobs now</button></div></div>`;
+      return;
+    }
+    const counts = countBuckets(jobs);
+    const toolbar = document2.createElement("div");
+    toolbar.className = "list-toolbar";
+    toolbar.innerHTML = `<div class="filters" role="tablist" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
+    <label class="search"><span class="sr-only">Search jobs</span><input type="search" data-job-search placeholder="Search title, company, place" value="${escapeHtml2(query)}"></label>`;
+    container.append(toolbar);
+    const shown = filterJobs(jobs, filter, query);
+    const list = document2.createElement("div");
+    list.className = "job-list";
+    if (!shown.length) {
+      list.innerHTML = `<p class="list-empty">Nothing here${query ? " for that search" : ""}.</p>`;
+    }
+    for (const job of shown) {
+      const row = document2.createElement("article");
+      row.className = `job-row bucket-${job.bucket}`;
+      row.dataset.jobKey = job.key;
+      const title = job.url ? `<a href="${escapeHtml2(job.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml2(job.title || "Untitled posting")}</a>` : escapeHtml2(job.title || "Untitled posting");
+      const notes = job.strengths.length || job.gaps.length ? `<details class="job-notes"><summary>Why this score</summary>${job.strengths.length ? `<p><strong>For you:</strong> ${job.strengths.map(escapeHtml2).join(" \xB7 ")}</p>` : ""}${job.gaps.length ? `<p><strong>Gaps:</strong> ${job.gaps.map(escapeHtml2).join(" \xB7 ")}</p>` : ""}</details>` : "";
+      const applied = job.bucket === "applied" ? `<span class="pill pill-applied">Applied${job.applicationStatus ? ` \xB7 ${escapeHtml2(job.applicationStatus)}` : ""}</span>` : "";
+      const actions = job.bucket === "applied" ? "" : `<div class="row-actions">
+          ${job.url ? `<button type="button" data-job-action="apply">Apply</button>` : `<button type="button" data-job-action="apply" title="No link was saved for this posting; Claude will ask you to paste it">Apply</button>`}
+          ${job.url ? `<button type="button" class="ghost" data-job-action="autofill">Autofill</button>` : ""}
+          ${job.bucket === "interested" ? `<button type="button" class="ghost" data-job-action="unmark">Not interested after all</button>` : job.bucket === "ignored" ? `<button type="button" class="ghost" data-job-action="unmark">Bring back</button>` : `<button type="button" class="ghost" data-job-action="interested">Interested</button><button type="button" class="ghost" data-job-action="ignore">Ignore</button>`}
+        </div>`;
+      row.innerHTML = `<div class="job-head"><h3>${title}</h3>${rankBadge(job)}${applied}</div><p class="job-meta">${jobMeta(job)}${job.deadline ? ` \xB7 <strong>deadline ${escapeHtml2(job.deadline)}</strong>` : ""}</p>${notes}${actions}`;
+      list.append(row);
+    }
+    container.append(list);
+  }
+  var STATUS_LABELS = {
+    applied: "Applied",
+    in_progress: "In progress",
+    interview: "Interviewing",
+    interviewing: "Interviewing",
+    offer: "Offer",
+    hired: "Hired",
+    rejected: "Rejected",
+    no_response: "No response",
+    "no response": "No response",
+    offer_declined: "Declined",
+    "offer declined": "Declined",
+    withdrawn: "Withdrawn",
+    interview_only: "Interviewed"
+  };
+  function statusLabel(status) {
+    const key = String(status || "").toLowerCase().trim();
+    return STATUS_LABELS[key] || (key ? key.replace(/_/g, " ") : "Unknown");
+  }
+  function renderApplications(container, { applications = [], status = "ready", error = "", preview = null } = {}) {
+    const document2 = container.ownerDocument;
+    container.replaceChildren();
+    if (status === "loading") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Loading\u2026</h2></div>`;
+      return;
+    }
+    if (status === "error") {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Could not load your applications.</h2><p>${escapeHtml2(error || "Try again.")}</p></div>`;
+      return;
+    }
+    if (!applications.length) {
+      container.innerHTML = `<div class="empty"><p class="kicker">Applications</p><h2>Nothing applied to yet.</h2><p>When you apply to a job, Claude records it here with its CV, cover letter, and what happened next.</p></div>`;
+      return;
+    }
+    const list = document2.createElement("div");
+    list.className = "app-list";
+    const sorted = [...applications].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+    for (const app of sorted) {
+      const row = document2.createElement("article");
+      row.className = `app-row${app.open ? " open" : ""}`;
+      row.dataset.appId = app.id;
+      row.dataset.company = app.company;
+      row.dataset.role = app.role;
+      const files = [
+        app.cvFile ? `<button type="button" class="ghost" data-file="${escapeHtml2(app.cvFile)}">CV</button>` : "",
+        app.coverLetterFile ? `<button type="button" class="ghost" data-file="${escapeHtml2(app.coverLetterFile)}">Cover letter</button>` : "",
+        app.archive ? `<button type="button" class="ghost" data-reveal="${escapeHtml2(app.archive)}">Show folder</button>` : ""
+      ].filter(Boolean).join("");
+      row.innerHTML = `<div class="job-head"><h3>${escapeHtml2(app.company || "Unknown company")} \xB7 ${escapeHtml2(app.role || "role")}</h3><span class="pill${app.open ? " pill-open" : ""}">${escapeHtml2(statusLabel(app.status))}</span></div>
+      <p class="job-meta">${[app.date ? `applied ${app.date}` : "", app.channel, app.fit ? `fit ${app.fit}` : "", app.deadline ? `<strong>deadline ${escapeHtml2(app.deadline)}</strong>` : ""].filter(Boolean).map((bit) => bit.startsWith("<strong>") ? bit : escapeHtml2(bit)).join(" \xB7 ")}</p>
+      ${app.notes ? `<p class="app-notes">${escapeHtml2(app.notes)}</p>` : ""}
+      <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button></div>`;
+      list.append(row);
+    }
+    container.append(list);
+    if (preview) {
+      const pane = document2.createElement("div");
+      pane.className = "file-preview";
+      pane.innerHTML = `<div class="file-preview-head"><strong>${escapeHtml2(preview.path)}</strong><button type="button" class="ghost" data-open-file="${escapeHtml2(preview.path)}">Open in its usual app</button><button type="button" class="ghost" data-close-preview>Close</button></div>${preview.kind === "pdf" ? `<iframe class="artifact-pdf" src="${escapeHtml2(preview.src)}" title="Preview"></iframe>` : `<pre class="artifact-text">${escapeHtml2(preview.text || "")}</pre>`}`;
+      container.append(pane);
+    }
+  }
+  function renderChecklist(progress, tools) {
+    if (!progress?.steps?.length) return "";
+    const items = progress.steps.map((step, index) => {
+      const current = progress.next === step.id;
+      return `<li class="${step.done ? "done" : current ? "current" : ""}"><span class="tick" aria-hidden="true">${step.done ? "\u2713" : index + 1}</span><div><strong>${escapeHtml2(step.title)}</strong><em>${escapeHtml2(step.hint)}</em>${current ? `<button type="button" data-checklist-action="${escapeHtml2(step.action)}">${step.action === "documents" ? "Add files" : step.action === "scrape" ? "Find jobs" : step.action === "apply" ? "Pick a job" : "Start setup"}</button>` : ""}</div></li>`;
+    }).join("");
+    const missing = (tools?.tools || []).filter((tool) => !tool.installed && tool.requiredFor !== "optional" && tool.id !== "claude");
+    const warning = missing.length ? `<p class="tools-warning">Some steps need tools this computer does not have yet: ${missing.map((tool) => escapeHtml2(tool.name)).join(", ")}. <button type="button" class="link" data-open-tools>See what to install</button></p>` : "";
+    return `<ol class="checklist" aria-label="Getting started">${items}</ol>${warning}`;
+  }
+  function renderTools(container, info) {
+    container.replaceChildren();
+    if (!info?.tools) {
+      container.innerHTML = `<p>Checking\u2026</p>`;
+      return;
+    }
+    const list = container.ownerDocument.createElement("ul");
+    list.className = "tools-list";
+    for (const tool of info.tools) {
+      const item = container.ownerDocument.createElement("li");
+      item.className = tool.installed ? "ok" : tool.requiredFor === "optional" ? "optional" : "missing";
+      item.innerHTML = `<span class="tick" aria-hidden="true">${tool.installed ? "\u2713" : "\u2717"}</span><div><strong>${escapeHtml2(tool.name)}</strong> <span class="pill">${tool.installed ? "installed" : tool.requiredFor === "optional" ? "optional, not installed" : `needed for ${escapeHtml2(tool.requiredFor)}`}</span><em>${escapeHtml2(tool.purpose)}</em>${tool.installed ? "" : `<p class="install">${escapeHtml2(tool.install || "")}${tool.url ? ` <a href="${escapeHtml2(tool.url)}" target="_blank" rel="noopener noreferrer">Download</a>` : ""}</p>`}</div>`;
+      list.append(item);
+    }
+    container.append(list);
   }
 
   // public/src/terminal-view.js
@@ -9557,7 +9828,7 @@ ${h2.join(`
   }
 
   // public/src/chat-view.js
-  function escapeHtml2(text) {
+  function escapeHtml3(text) {
     return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
   }
   function filterCommands(commands2, query) {
@@ -9571,11 +9842,88 @@ ${h2.join(`
   function primaryCommands(commands2) {
     return commands2.filter((command) => Number.isFinite(command.primaryOrder)).sort((left, right) => left.primaryOrder - right.primaryOrder);
   }
+  var PASTE_FIELD = "paste";
+  function hasKind(command, kind) {
+    return (command.arguments || []).some((argument) => argument.kind === kind);
+  }
+  function commandTakesPaste(command) {
+    return hasKind(command, "url") && hasKind(command, "multiline");
+  }
+  function commandNeedsInput(command) {
+    if (!command) return false;
+    if (commandTakesPaste(command)) return true;
+    return (command.arguments || []).some((argument) => argument.required);
+  }
+  var FIELD_LABELS = {
+    url: "Link",
+    posting: "Posting text",
+    company: "Company or role",
+    focus: "Focus",
+    query: "What to look for",
+    section: "Section",
+    path: "File path",
+    source: "Template file",
+    use: "Template to use",
+    mode: "Mode",
+    scope: "What to reset",
+    minScore: "Minimum score",
+    top: "How many"
+  };
+  var COMMAND_PLACEHOLDERS = {
+    autofill: "https://boards.greenhouse.io/company/jobs/123",
+    apply: "Paste the job link. If the site blocks links, paste the whole posting instead.",
+    import: "Paste the job link, or the whole posting."
+  };
+  function labelFor(argument) {
+    return argument.label || FIELD_LABELS[argument.name] || argument.name;
+  }
+  function looksLikeUrl(value) {
+    return /^https?:\/\/\S+$/i.test(String(value || "").trim());
+  }
+  function looksLikeBareDomain(value) {
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(String(value || "").trim());
+  }
+  function asUrl(value) {
+    const text = String(value || "").trim();
+    if (looksLikeUrl(text)) return text;
+    if (looksLikeBareDomain(text)) return `https://${text}`;
+    return "";
+  }
+  function normalizeCommandValues(command, values = {}) {
+    if (!commandTakesPaste(command)) return { ...values };
+    const { [PASTE_FIELD]: pasted, ...rest } = values;
+    const text = String(pasted || "").trim();
+    if (!text) return rest;
+    const urlArgument = (command.arguments || []).find((argument) => argument.kind === "url");
+    const postingArgument = (command.arguments || []).find((argument) => argument.kind === "multiline");
+    const url = /\s/.test(text) ? "" : asUrl(text);
+    if (url) return { ...rest, [urlArgument.name]: url };
+    return { ...rest, [postingArgument.name]: text };
+  }
+  function commandInputError(command, values = {}) {
+    if (!command) return "";
+    if (commandTakesPaste(command)) {
+      const normalized = normalizeCommandValues(command, values);
+      const filled = (command.arguments || []).some((argument) => {
+        const value = normalized[argument.name];
+        return value != null && String(value).trim() !== "";
+      });
+      return filled ? "" : "Paste a job link or the posting text first.";
+    }
+    for (const argument of command.arguments || []) {
+      if (!argument.required) continue;
+      const value = values[argument.name];
+      if (value == null || String(value).trim() === "") return `${labelFor(argument)} is required.`;
+      if (argument.kind === "url" && !asUrl(value)) return "That does not look like a web link. Paste the address from your browser, for example https://boards.greenhouse.io/company/jobs/123.";
+    }
+    return "";
+  }
   function renderCommandInvocation(command, values = {}) {
+    const normalized = normalizeCommandValues(command, values);
     const parts = [command.invocation];
     let multiline = "";
     for (const argument of command.arguments || []) {
-      const value = values[argument.name];
+      const value = normalized[argument.name];
       if (value == null || value === "" || value === false) continue;
       if (argument.kind === "boolean") {
         parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`);
@@ -9585,31 +9933,38 @@ ${h2.join(`
         multiline = String(value);
         continue;
       }
+      const text = argument.kind === "url" ? asUrl(value) || String(value) : String(value);
       if (argument.flag) {
-        parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, String(value));
+        parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`, text);
         continue;
       }
-      parts.push(String(value));
+      parts.push(text);
     }
     const rendered = parts.join(" ").trim();
     return multiline ? `${rendered}
 ${multiline}` : rendered;
   }
   function renderCommandForm(command) {
-    const fields = (command.arguments || []).map((argument) => {
-      const name = escapeHtml2(argument.name);
+    if (commandTakesPaste(command)) {
+      const placeholder = escapeHtml3(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
+      return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
+    }
+    const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
+      const name = escapeHtml3(argument.name);
+      const label = escapeHtml3(labelFor(argument));
+      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
       if (argument.kind === "choice") {
-        const options = (argument.values || []).map((value) => `<option value="${escapeHtml2(value)}">${escapeHtml2(value)}</option>`).join("");
-        return `<label data-arg="${name}"><span>${name}</span><select name="${name}">${options}</select></label>`;
+        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
+        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
       }
       if (argument.kind === "boolean") {
-        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${name}</label>`;
+        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
       }
       if (argument.kind === "multiline") {
-        return `<label data-arg="${name}"><span>${name}</span><textarea name="${name}" rows="8"></textarea></label>`;
+        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
       }
       const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      return `<label data-arg="${name}"><span>${name}</span><input name="${name}" type="${type}"></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}" placeholder="${placeholder}"></label>`;
     });
     return fields.join("");
   }
@@ -9617,63 +9972,165 @@ ${multiline}` : rendered;
     const values = {};
     for (const field of form2.querySelectorAll("[name]")) {
       if (field.type === "checkbox") values[field.name] = field.checked;
+      else if (field.multiple) values[field.name] = [...field.selectedOptions].map((option) => option.value);
       else values[field.name] = field.value;
     }
     return values;
   }
+  function questionKey(question, index) {
+    return question.question || question.header || `q${index}`;
+  }
+  function answersFromQuestionForm(form2, questions = []) {
+    const answers = {};
+    questions.forEach((question, index) => {
+      const name = `q${index}`;
+      const other = form2.querySelector(`[name="${name}__other"]`)?.value?.trim() || "";
+      const options = question.options || [];
+      if (!options.length) {
+        const text = form2.querySelector(`[name="${name}"]`)?.value?.trim() || "";
+        if (text) answers[questionKey(question, index)] = text;
+        return;
+      }
+      const picked = [...form2.querySelectorAll(`[name="${name}"]`)].filter((input) => input.checked).map((input) => input.value);
+      if (question.multiSelect) {
+        const list = [...picked, ...other ? [other] : []];
+        if (list.length) answers[questionKey(question, index)] = list;
+      } else if (other) {
+        answers[questionKey(question, index)] = other;
+      } else if (picked[0]) {
+        answers[questionKey(question, index)] = picked[0];
+      }
+    });
+    return answers;
+  }
+  function questionAnswersError(questions = [], answers = {}) {
+    const missing = questions.filter((question, index) => answers[questionKey(question, index)] == null);
+    if (!missing.length) return "";
+    return questions.length === 1 ? "Pick an answer or type your own first." : "Answer every question first.";
+  }
   function whoFor(type) {
     if (type === "user.message") return "You";
-    if (type === "turn.failed" || type === "diagnostic.unknown_sdk_event") return "Stopped";
+    if (type === "turn.failed") return "Problem";
+    if (type === "desk.notice") return "Desk";
     if (type.startsWith("question") || type.startsWith("permission") || type.startsWith("autofill")) return "Needs you";
+    if (type === "artifact.discovered") return "Saved";
+    if (type === "subagent.activity") return "Helper";
     return "Claude";
   }
   function cardClass(card) {
     if (card.type === "user.message") return "msg user";
     if (card.type === "turn.failed") return "msg error";
+    if (card.type === "desk.notice") return "msg notice";
     if (card.type.startsWith("tool")) return "msg assistant card-tool";
+    if (card.type === "artifact.discovered") return "msg assistant card-tool card-artifact";
+    if (card.type === "subagent.activity") return "msg assistant card-subagent";
     if (card.type.startsWith("question")) return "msg assistant card-question";
     if (card.type.startsWith("permission")) return "msg assistant card-permission";
     if (card.type.startsWith("autofill")) return "msg assistant card-autofill";
     return "msg assistant";
   }
+  var TOOL_VERBS = {
+    Read: "Reading",
+    Write: "Writing",
+    Edit: "Editing",
+    MultiEdit: "Editing",
+    NotebookEdit: "Editing",
+    Bash: "Running",
+    Grep: "Searching",
+    Glob: "Searching",
+    LS: "Listing",
+    WebFetch: "Fetching",
+    WebSearch: "Searching the web",
+    Agent: "Running a helper agent",
+    Task: "Running a helper agent",
+    Skill: "Running",
+    TodoWrite: "Planning"
+  };
+  function toolDetail(input = {}) {
+    const detail = input.file_path || input.path || input.notebook_path || input.description || input.query || input.url || input.pattern || input.skill || input.command || "";
+    const text = String(detail || "").replace(/\s+/g, " ").trim();
+    return text.length > 72 ? `${text.slice(0, 71)}\u2026` : text;
+  }
+  function describeTool(name, input = {}) {
+    const verb = TOOL_VERBS[name] || `Using ${name || "a tool"}`;
+    const detail = toolDetail(input);
+    return detail ? `${verb} ${detail}` : verb;
+  }
+  function activityFor(state2) {
+    if (!state2?.busy) return "";
+    if (state2.pendingQuestionId || state2.pendingPermissionId) return "";
+    if (state2.thinking) return "Thinking";
+    const cards = [...state2.cards.values()];
+    for (let index = cards.length - 1; index >= 0; index -= 1) {
+      const card = cards[index];
+      if (card.type === "tool.started") return describeTool(card.payload.name, card.payload.input);
+      if (card.type === "assistant.message" && (card.payload.text || "").length) return "Writing";
+      if (card.type === "tool.completed") return "Working";
+      if (card.type === "user.message") break;
+    }
+    return "Working";
+  }
   function renderQuestionBody(card) {
     const questions = card.payload.questions || [];
-    const disabled = card.entered ? " disabled" : "";
-    const fields = questions.map((question, index) => {
-      const key = question.header || question.question || `q${index}`;
+    const readOnly = card.payload.readOnly === true;
+    const disabled = card.entered || readOnly ? " disabled" : "";
+    const blocks = questions.map((question, index) => {
+      const name = `q${index}`;
       const options = question.options || [];
+      const legend = question.header ? `<legend>${escapeHtml3(question.header)}</legend>` : "";
+      const text = `<p class="q-text">${escapeHtml3(question.question || question.header || "")}</p>`;
       if (!options.length) {
-        return `<label><span>${escapeHtml2(question.question || key)}</span><textarea name="${escapeHtml2(key)}"${disabled}></textarea></label>`;
+        return `<fieldset class="q" data-question="${index}">${legend}${text}<textarea name="${name}" rows="3" placeholder="Type your answer"${disabled}></textarea></fieldset>`;
       }
-      const multiple = question.multiSelect ? " multiple" : "";
-      const choices = options.map((option) => `<option value="${escapeHtml2(option.label)}">${escapeHtml2(option.label)}</option>`).join("");
-      return `<label><span>${escapeHtml2(question.question || key)}</span><select name="${escapeHtml2(key)}"${multiple}${disabled}>${choices}</select></label>`;
+      const type = question.multiSelect ? "checkbox" : "radio";
+      const choices = options.map((option) => `<label class="q-option"><input type="${type}" name="${name}" value="${escapeHtml3(option.label)}"${disabled}><span><strong>${escapeHtml3(option.label)}</strong>${option.description ? `<em>${escapeHtml3(option.description)}</em>` : ""}</span></label>`).join("");
+      const hint = question.multiSelect ? `<p class="hint">Pick all that apply.</p>` : "";
+      const other = `<label class="q-option q-other"><span>Something else</span><input type="text" name="${name}__other" placeholder="Type your own answer"${disabled}></label>`;
+      return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
     }).join("");
-    return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${fields}<button type="submit"${disabled}>Answer</button></form>`;
+    if (readOnly) {
+      const list = questions.map((question) => {
+        const options = (question.options || []).map((option) => `<li><strong>${escapeHtml3(option.label)}</strong>${option.description ? `<em>${escapeHtml3(option.description)}</em>` : ""}</li>`).join("");
+        return `<p class="q-text">${escapeHtml3(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
+      }).join("");
+      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml3(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Claude will repeat this question in a moment. Answer it then in the message box at the bottom, for example with the name of the option you want.</p></div>`;
+    }
+    const footer = card.entered ? `<p class="hint">${card.payload.answered === false ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered." : "Answered."}</p>` : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
+    return `<form class="interaction" data-kind="question" data-id="${escapeHtml3(card.id)}">${blocks}${footer}</form>`;
   }
   function renderPermissionBody(card) {
     const disabled = card.entered ? " disabled" : "";
-    const scoped = Array.isArray(card.payload.suggestions) && card.payload.suggestions.length ? `<button type="button" data-decision="allow-scoped"${disabled}>Allow for workspace</button>` : "";
-    return `<div class="interaction" data-kind="permission" data-id="${escapeHtml2(card.id)}">
-    <p>${escapeHtml2(card.payload.toolName || "Tool")} needs approval.</p>
+    const name = card.payload.displayName || card.payload.toolName || "A tool";
+    const title = card.payload.title || `Claude wants to use ${name}.`;
+    const detail = describeTool(card.payload.toolName, card.payload.input || {});
+    const description = card.payload.description ? `<p class="hint">${escapeHtml3(card.payload.description)}</p>` : "";
+    const suggestions = Array.isArray(card.payload.suggestions) ? card.payload.suggestions : [];
+    const persistent = suggestions.some((item) => item?.destination === "localSettings" || item?.destination === "projectSettings");
+    const scoped = suggestions.length ? `<button type="button" data-decision="allow-scoped"${disabled}>${persistent ? "Allow in this folder from now on" : "Allow for the rest of this chat"}</button>` : "";
+    const outcome = card.entered ? `<p class="hint">${card.payload.decision === "deny" ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without it." : "Not allowed." : "Allowed."}</p>` : "";
+    return `<div class="interaction" data-kind="permission" data-id="${escapeHtml3(card.id)}">
+    <p>${escapeHtml3(title)}</p>
+    ${detail && !card.payload.title ? `<p class="tool done">${escapeHtml3(detail)}</p>` : ""}
+    ${description}
     <div class="sheet-actions">
       <button type="button" data-decision="allow-once"${disabled}>Allow once</button>
       ${scoped}
-      <button type="button" data-decision="deny" class="ghost"${disabled}>Deny</button>
+      <button type="button" data-decision="deny" class="ghost"${disabled}>Don't allow</button>
     </div>
+    ${outcome}
   </div>`;
   }
   function renderAutofillBody(card) {
     const disabled = card.entered ? " disabled" : "";
     const rawUrl = card.payload.url || "";
-    const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml2(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml2(rawUrl)}</a></p>` : `<p>${escapeHtml2(rawUrl)}</p>` : "";
-    const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml2(card.payload.screenshot)}</p>` : "";
-    return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml2(card.id)}" data-token="${escapeHtml2(card.payload.token || "")}">
-    <p>The form is filled. Submit stays in the browser. Continue closes Autofill; Cancel stops it.</p>
+    const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml3(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml3(rawUrl)}</a></p>` : `<p>${escapeHtml3(rawUrl)}</p>` : "";
+    const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml3(card.payload.screenshot)}</p>` : "";
+    return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml3(card.id)}" data-token="${escapeHtml3(card.payload.token || "")}">
+    <p>Claude filled in the application form but did not send it. Open the form in your browser, check every field, and click the employer's own Submit button yourself. Then press Done here so Claude can log it, or Cancel to abandon this application.</p>
     ${url}
     ${shot}
     <div class="sheet-actions">
-      <button type="button" data-decision="continue"${disabled}>Continue</button>
+      <button type="button" data-decision="continue"${disabled}>Done, I submitted it</button>
       <button type="button" data-decision="cancel" class="ghost"${disabled}>Cancel</button>
     </div>
   </div>`;
@@ -9684,41 +10141,98 @@ ${multiline}` : rendered;
     if (card.type === "autofill.review" || card.type === "autofill.resolved") return renderAutofillBody(card);
     if (card.type.startsWith("tool")) {
       const phase = card.type === "tool.completed" ? "done" : "live";
-      return `<p class="tool ${phase}">${escapeHtml2(card.payload.name || "tool")} ${phase === "done" ? "done" : ""}</p>`;
+      const label = describeTool(card.payload.name, card.payload.input);
+      return `<p class="tool ${phase}" title="${escapeHtml3(card.payload.name || "tool")}">${escapeHtml3(label)}</p>`;
+    }
+    if (card.type === "artifact.discovered") {
+      return `<p class="tool done">Saved ${escapeHtml3(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
-    if (markdown2 && (card.type === "assistant.message" || card.type === "turn.completed")) {
+    if (card.type === "turn.failed" && card.payload.detail) {
+      return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml3(card.payload.detail)}</pre></details>`;
+    }
+    if (card.type === "subagent.activity") {
+      const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
+      const body = markdown2 ? markdown2(text) : `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>`;
+      return `<details class="subagent"><summary>${escapeHtml3(label)} notes</summary>${body}</details>`;
+    }
+    if (markdown2 && card.type === "assistant.message") {
       return markdown2(text);
     }
-    return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
+    return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>`;
+  }
+  function signatureFor(card) {
+    const text = card.payload.text || "";
+    return [
+      card.type,
+      card.entered ? "1" : "0",
+      card.payload.phase || "",
+      card.payload.decision || "",
+      card.type.startsWith("tool") ? describeTool(card.payload.name, card.payload.input) : "",
+      text.length,
+      text.slice(-24),
+      card.payload.questions ? JSON.stringify(card.payload.questions).length : 0
+    ].join("|");
+  }
+  function paintCard(article, card, options) {
+    article.className = `${cardClass(card)}${article.classList.contains("enter") ? " enter" : ""}`;
+    article.dataset.cardType = card.type;
+    if (card.entered) article.dataset.entered = "true";
+    else delete article.dataset.entered;
+    article.dataset.sig = signatureFor(card);
+    const body = article.querySelector(":scope > .body");
+    body.innerHTML = bodyHtml(card, options);
   }
   function renderChat(container, state2, options = {}) {
     const document2 = container.ownerDocument;
-    container.replaceChildren();
     if (!state2.cards.size && !state2.queued.length) {
+      container.replaceChildren();
       container.insertAdjacentHTML("afterbegin", options.emptyHtml || "");
       return;
     }
+    const existing = /* @__PURE__ */ new Map();
+    for (const node of [...container.children]) {
+      if (node.tagName === "ARTICLE" && node.dataset.cardId) existing.set(node.dataset.cardId, node);
+      else node.remove();
+    }
+    let cursor = container.firstElementChild;
     for (const card of state2.cards.values()) {
-      const article = document2.createElement("article");
-      article.className = cardClass(card);
-      article.dataset.cardId = card.id;
-      article.dataset.cardType = card.type;
-      if (card.entered) article.dataset.entered = "true";
-      article.innerHTML = `
-      <div class="msg-head">
-        <div class="who">${escapeHtml2(whoFor(card.type))}</div>
-      </div>
-      <div class="body">${bodyHtml(card, options)}</div>
-    `;
-      container.append(article);
+      let article = existing.get(card.id);
+      if (article) {
+        existing.delete(card.id);
+        if (article.dataset.sig !== signatureFor(card)) paintCard(article, card, options);
+      } else {
+        article = document2.createElement("article");
+        article.dataset.cardId = card.id;
+        article.innerHTML = `<div class="msg-head"><div class="who"></div></div><div class="body"></div>`;
+        paintCard(article, card, options);
+        article.classList.add("enter");
+      }
+      article.querySelector(":scope > .msg-head > .who").textContent = whoFor(card.type);
+      if (article !== cursor) container.insertBefore(article, cursor);
+      else cursor = cursor.nextElementSibling;
+    }
+    for (const stale of existing.values()) stale.remove();
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
     }
     if (state2.queued.length) {
       const queue = document2.createElement("div");
       queue.className = "queue";
       queue.setAttribute("aria-label", "Queued messages");
-      queue.innerHTML = state2.queued.map((item) => `<p data-queue-id="${escapeHtml2(item.id)}">${escapeHtml2(item.text)}</p>`).join("");
+      queue.innerHTML = `<p class="kicker">Next up</p>${state2.queued.map((item) => `<p data-queue-id="${escapeHtml3(item.id)}">${escapeHtml3(item.text)}</p>`).join("")}`;
       container.append(queue);
+    }
+    const activity = activityFor(state2);
+    if (activity) {
+      const row = document2.createElement("div");
+      row.className = "activity";
+      row.setAttribute("aria-hidden", "true");
+      row.dataset.activity = activity;
+      row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml3(activity)}\u2026</span>`;
+      container.append(row);
     }
   }
   function renderPaletteList(container, commands2) {
@@ -9728,7 +10242,7 @@ ${multiline}` : rendered;
       button.type = "button";
       button.className = "palette-item";
       button.dataset.command = command.id;
-      button.innerHTML = `<strong>${escapeHtml2(command.title)}</strong><em>${escapeHtml2(command.invocation)}</em>`;
+      button.innerHTML = `<strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.invocation)}</em>`;
       container.append(button);
     }
   }
@@ -9738,13 +10252,14 @@ ${multiline}` : rendered;
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
       button.dataset.action = command.id;
-      button.innerHTML = `<span class="n">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml2(command.title)}</strong><em>${escapeHtml2(command.description || command.invocation)}</em></span>`;
+      button.innerHTML = `<span class="n">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.description || command.invocation)}</em></span>`;
       container.append(button);
     });
   }
 
   // public/src/desk.js
   var logEl = document.getElementById("panel-chat");
+  var announceEl = document.getElementById("announce");
   var statusEl = document.getElementById("status");
   var sessionEl = document.getElementById("session-label");
   var workspaceEl = document.getElementById("workspace-label");
@@ -9761,12 +10276,22 @@ ${multiline}` : rendered;
   var sheetKicker = document.getElementById("sheet-kicker");
   var sheetCopy = document.getElementById("sheet-copy");
   var sheetFields = document.getElementById("sheet-fields");
+  var sheetError = document.getElementById("sheet-error");
   var clockEl = document.getElementById("clock");
   var menuBtn = document.getElementById("menu");
   var scrim = document.getElementById("scrim");
   var jumpBtn = document.getElementById("jump");
   var stepsEl = document.querySelector(".steps");
+  var dock = document.getElementById("dock");
   var filesEl = document.getElementById("panel-files");
+  var jobsEl = document.getElementById("panel-jobs");
+  var applicationsEl = document.getElementById("panel-applications");
+  var toolsDialog = document.getElementById("tools");
+  var toolsList = document.getElementById("tools-list");
+  var modeSheet = document.getElementById("mode-sheet");
+  var modeToggle = document.getElementById("mode-toggle");
+  var docInput = document.getElementById("doc-input");
+  var dropzone = document.getElementById("dropzone");
   var palette = document.getElementById("palette");
   var paletteQuery = document.getElementById("palette-query");
   var paletteList = document.getElementById("palette-list");
@@ -9784,12 +10309,34 @@ ${multiline}` : rendered;
   var stickToBottom = true;
   var terminalView = null;
   var terminalId = null;
+  var runtimeMode = false;
+  var hasReset = false;
+  var REJECT_TEXT = {
+    full: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+    busy: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+    "stale-controller": "The desk was out of step for a moment. Please try that again.",
+    "wrong-controller": "The Terminal tab has the conversation right now. Switch back to Chat first.",
+    "handoff-in-progress": "The desk is switching tabs. Try again in a moment.",
+    closed: "Claude is not running. Start a new chat.",
+    "unknown-request": "That question has already been answered, or it expired.",
+    malformed: "Answer every question before sending.",
+    error: "Something went wrong inside the desk while doing that. Try again; if it keeps happening, start a new chat."
+  };
+  function notice(text) {
+    const last = [...state.cards.values()].at(-1);
+    if (last?.type === "desk.notice" && last.payload.text === text) return;
+    sseEvent("desk.notice", { text });
+  }
+  function syncBusy() {
+    if (state.busy !== busy) setBusy(state.busy);
+  }
   function emptyMarkup(kind) {
     if (kind === "reset") {
       return `<div class="empty" id="empty">
       <p class="kicker">Clean slate</p>
       <h2>New conversation.</h2>
-      <p>The page is clear. Your job-search files remain in the same workspace.</p>
+      <p>The page is clear. Your files are still in your job-search folder.</p>
+      ${renderChecklist(progressInfo, toolsInfo)}
       <div class="suggestions" aria-label="Suggested starts">
         <button type="button" data-action="scrape">Find openings</button>
         <button type="button" data-action="rank">Rank what we have</button>
@@ -9797,14 +10344,15 @@ ${multiline}` : rendered;
       </div>
     </div>`;
     }
+    const checklist = renderChecklist(progressInfo, toolsInfo);
     return `<div class="empty" id="empty">
     <p class="kicker">Ready when you are</p>
     <h2>Start wherever you are.</h2>
-    <p>First day in this repo? Run <strong>Setup</strong>. Profile already filled? <strong>Scrape</strong> for roles, then talk the same way you would in the terminal.</p>
-    <div class="empty-actions">
+    <p>New here? Start with <strong>Setup</strong>: it asks a few questions about you, once. Already set up? Click <strong>Find jobs</strong> to search the job boards, or just type what you need below.</p>
+    ${checklist || `<div class="empty-actions">
       <button type="button" data-action="setup">Start with setup</button>
-      <button type="button" data-action="scrape" class="ghost">I am already set up</button>
-    </div>
+      <button type="button" data-action="scrape" class="ghost">Find jobs now</button>
+    </div>`}
     <div class="suggestions" aria-label="Suggested starts">
       <button type="button" data-prompt="Which of these roles should I prioritize this week?">Prioritize this week</button>
       <button type="button" data-action="rank">Rank what we have</button>
@@ -9812,9 +10360,23 @@ ${multiline}` : rendered;
     </div>
   </div>`;
   }
+  var purifyHooked = false;
   function markdown(text) {
     if (window.marked && window.DOMPurify) {
-      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }));
+      if (!purifyHooked) {
+        purifyHooked = true;
+        window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+          if (node.tagName === "A" && node.getAttribute("href")) {
+            node.setAttribute("target", "_blank");
+            node.setAttribute("rel", "noopener noreferrer");
+          }
+        });
+      }
+      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), {
+        ALLOW_DATA_ATTR: false,
+        FORBID_TAGS: ["img", "svg", "picture", "video", "audio", "form", "input", "button", "select", "textarea", "label", "style", "details", "summary", "dialog"],
+        FORBID_ATTR: ["class", "id", "style"]
+      });
     }
     return String(text || "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`).replace(/\n/g, "<br>");
   }
@@ -9838,28 +10400,49 @@ ${multiline}` : rendered;
     if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
   }
+  function jumpToLatest() {
+    stickToBottom = true;
+    logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+    jumpBtn.hidden = true;
+  }
   function paintMode() {
     if (!modeEl) return;
-    const label = state.permissionMode === "autonomous" ? "Autonomous" : "Safe";
-    modeEl.textContent = label;
+    const autonomous = state.permissionMode === "autonomous";
+    modeEl.textContent = autonomous ? "Works on its own" : "Asks before acting";
+    modeEl.title = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
     modeEl.dataset.mode = state.permissionMode;
   }
+  function announce(text) {
+    if (!announceEl) return;
+    announceEl.textContent = "";
+    window.setTimeout(() => {
+      announceEl.textContent = text;
+    }, 50);
+  }
   function paintChat() {
-    renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(state.cards.size ? "reset" : void 0) });
+    paintScheduled = false;
+    renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : void 0) });
     paintMode();
     scrollLog();
+  }
+  var paintScheduled = false;
+  function schedulePaint() {
+    if (paintScheduled) return;
+    paintScheduled = true;
+    if (document.hidden || typeof requestAnimationFrame !== "function") window.setTimeout(paintChat, 60);
+    else requestAnimationFrame(paintChat);
   }
   function setBusy(next) {
     busy = next;
     sendBtn.disabled = next && !runtimeSocket;
     stopBtn.hidden = !next;
     document.body.classList.toggle("working", next);
-    statusEl.textContent = next ? "Claude is working" : "Ready";
+    statusEl.textContent = next ? "Claude is working. Stop cancels this turn." : "Ready";
   }
   function setWorkspaceLabel(root) {
     if (!workspaceEl || !root) return;
     workspaceEl.textContent = root;
-    workspaceEl.title = "Desk and Claude Code both write scrapes, CVs, and applications here";
+    workspaceEl.title = "Your job-search folder. Everything Claude finds or writes is saved here.";
   }
   function setSessionLabel(data = {}) {
     setWorkspaceLabel(data.workspace);
@@ -9867,7 +10450,8 @@ ${multiline}` : rendered;
       sessionEl.textContent = data.sessionId ? `${data.chromeGroup} \xB7 Chrome group` : `${data.chromeGroup} \xB7 waiting for Chrome`;
       return;
     }
-    sessionEl.textContent = data.sessionId ? `Session ${data.sessionId.slice(0, 8)}` : "New session";
+    if (data.restored) sessionEl.textContent = "Continuing from last time";
+    else if (!data.sessionId) sessionEl.textContent = "New conversation";
   }
   function sizePrompt() {
     promptEl.style.height = "auto";
@@ -9884,8 +10468,20 @@ ${multiline}` : rendered;
   function ingest(event) {
     const wasBusy = state.busy;
     state = reduceDeskEvent(state, event);
-    paintChat();
+    if (event.type === "assistant.delta" || event.type === "assistant.thinking") schedulePaint();
+    else paintChat();
     if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
+    if (!replayingTranscript) {
+      if (event.type === "turn.completed") announce("Claude replied.");
+      else if (event.type === "turn.failed") announce(`Problem: ${event.payload?.text || "the turn failed."}`);
+      else if (event.type === "question.requested") announce("Claude has a question for you.");
+      else if (event.type === "permission.requested") announce("Claude is asking for permission.");
+      if (event.type === "turn.completed" || event.type === "turn.failed") {
+        notifyHidden(event.type === "turn.completed" ? "Claude finished." : "Claude ran into a problem.");
+        refreshDeskData();
+      } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
+      else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
+    }
     if (event.type === "artifact.discovered") {
       const incoming = {
         id: event.payload.artifactId || event.payload.entityId,
@@ -9973,7 +10569,8 @@ ${multiline}` : rendered;
     }
     ingest({
       eventId: `sse-${sseSequence}`,
-      sequence: Math.max(state.lastSequence + 1, sseSequence),
+      sequence: sseSequence,
+      local: true,
       turnId: `turn-${sseTurn}`,
       type,
       payload
@@ -10005,8 +10602,13 @@ ${multiline}` : rendered;
       runtimeSend({ type: "user.message", messageId, text });
       return true;
     }
-    if (busy) return false;
+    if (busy) {
+      lastSendError = closingOld ? "Still closing the old conversation. Try again in a moment." : REJECT_TEXT.busy;
+      notice(lastSendError);
+      return false;
+    }
     if (sendPending) return false;
+    lastSendError = "";
     sendPending = true;
     try {
       if (!lastHealth?.loggedIn) {
@@ -10016,6 +10618,7 @@ ${multiline}` : rendered;
         }
       }
       if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
+        lastSendError = "Claude Code needs to be set up first. Follow the steps on screen.";
         applyHealth(lastHealth || { installed: false });
         if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
           sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
@@ -10024,38 +10627,93 @@ ${multiline}` : rendered;
       }
       setMenu(false);
       setBusy(true);
+      requestNotificationPermission();
       const messageId = `m-${Date.now()}`;
       if (runtimeSend({ type: "user.message", messageId, text })) {
-        sseEvent("user.message", { messageId, text });
+        inFlightSends.set(messageId, text);
         return true;
       }
-      try {
-        sseEvent("user.message", { text });
-        const res = await post("/send", { prompt: text });
-        if (!res.ok) throw new Error();
-        return true;
-      } catch {
+      if (runtimeMode) {
         setBusy(false);
-        sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
+        lastSendError = "The desk is reconnecting to Claude. Try again in a moment.";
+        notice(lastSendError);
         return false;
       }
+      let res;
+      try {
+        res = await post("/send", { prompt: text });
+      } catch {
+        setBusy(false);
+        lastSendError = "The desk cannot reach its local server. Close this tab and open the desk again.";
+        sseEvent("turn.failed", { text: lastSendError });
+        return false;
+      }
+      if (res.ok) return true;
+      const body = await res.json().catch(() => ({}));
+      if (!state.busy) setBusy(false);
+      lastSendError = sendErrorText(res.status, body.error);
+      notice(lastSendError);
+      return false;
     } finally {
       sendPending = false;
     }
   }
+  function sendErrorText(status, reason) {
+    if (status === 409 || reason === "busy") return REJECT_TEXT.busy;
+    if (status === 413) return "That message is too long to send. Paste a shorter posting.";
+    if (status === 400) return "The desk could not send an empty message.";
+    return "The desk could not send that message. Try again, and if it keeps happening close this tab and open the desk again.";
+  }
+  function handleRejected(message) {
+    const reason = message.reason || "rejected";
+    if (reason === "duplicate") return;
+    if (message.command === "user.message" || !message.command) {
+      if (message.messageId) {
+        state = { ...state, queued: state.queued.filter((item) => item.id !== message.messageId) };
+        const text = inFlightSends.get(message.messageId);
+        inFlightSends.delete(message.messageId);
+        if (text && !promptEl.value.trim()) {
+          promptEl.value = text;
+          sizePrompt();
+        }
+      }
+      if (!state.busy) setBusy(false);
+    } else if (message.requestId && state.cards.has(message.requestId)) {
+      const next = structuredClone(state);
+      const card = next.cards.get(message.requestId);
+      card.entered = false;
+      if (card.type === "question.requested") next.pendingQuestionId = message.requestId;
+      if (card.type === "permission.requested") next.pendingPermissionId = message.requestId;
+      state = next;
+      paintChat();
+    }
+    notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
+  }
+  async function runStep(name, prompt) {
+    const sent = await sendPrompt(prompt);
+    if (sent) {
+      markAction(name);
+      tabs?.select("chat");
+    }
+    return sent;
+  }
   function runAction(name) {
     const command = commands.find((item) => item.id === name);
-    markAction(name);
     setMenu(false);
-    if (!command) {
-      if (name === "setup") sendPrompt("/setup");
-      else if (name === "rank") sendPrompt("/rank");
-      else if (name === "interview") sendPrompt("/interview");
-      else if (name === "outcome") sendPrompt("/outcome");
+    if (command && commandNeedsInput(command)) {
+      openCommandSheet(command);
       return;
     }
-    if (!command.arguments?.length) {
-      sendPrompt(command.invocation);
+    if (busy && !runtimeSocket) {
+      notice(closingOld ? "Still closing the old conversation. Try again in a moment." : REJECT_TEXT.busy);
+      return;
+    }
+    if (!command) {
+      if (["setup", "rank", "interview", "outcome"].includes(name)) runStep(name, `/${name}`);
+      return;
+    }
+    if (!commandNeedsInput(command)) {
+      runStep(name, command.invocation);
       return;
     }
     openCommandSheet(command);
@@ -10064,8 +10722,10 @@ ${multiline}` : rendered;
     activeCommand = command;
     sheetKicker.textContent = command.invocation;
     sheetTitle.textContent = command.title;
-    sheetCopy.textContent = command.description || "Fill the fields you need, then run.";
+    sheetCopy.textContent = command.description || "Add what the step needs, then run.";
     sheetFields.innerHTML = renderCommandForm(command);
+    sheetError.hidden = true;
+    sheetError.textContent = "";
     sheet.showModal();
     sheetFields.querySelector("input, textarea, select")?.focus();
   }
@@ -10108,20 +10768,36 @@ ${multiline}` : rendered;
         return;
       }
       if (message.type === "snapshot") {
+        if (!runtimeMode) {
+          runtimeMode = true;
+          if (modeToggle) modeToggle.hidden = false;
+          state = createDeskState({ permissionMode: state.permissionMode });
+          sseSequence = 0;
+          sseTurn = 0;
+          sseTurnClosed = true;
+        }
         state = applySnapshot(state, message.snapshot || {});
+        syncBusy();
         paintChat();
       } else if (message.type === "event" && message.event) {
         ingest(message.event);
+      } else if (message.type === "command.accepted") {
+        if (message.messageId) inFlightSends.delete(message.messageId);
+        if (message.command === "conversation.reset" && resetPending) {
+          resetPending = false;
+          clearConversation();
+          setBusy(false);
+        }
       } else if (message.type === "command.rejected") {
-        setBusy(false);
-        sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+        if (message.command === "conversation.reset") resetPending = false;
+        handleRejected(message);
       } else if (message.type === "protocol.error") {
-        setBusy(false);
-        sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
+        notice(`The desk and Claude disagreed about a message (${message.error || "protocol error"}). Try again.`);
       }
     });
     socket.addEventListener("close", () => {
       if (runtimeSocket === socket) runtimeSocket = null;
+      if (runtimeMode) window.setTimeout(connectRuntime, 2e3);
     });
     socket.addEventListener("error", () => {
       socket.close();
@@ -10130,19 +10806,36 @@ ${multiline}` : rendered;
   var source = new EventSource("/events");
   source.addEventListener("hello", (event) => {
     const data = JSON.parse(event.data);
-    setBusy(Boolean(data.busy));
-    rememberSession(data);
-    if (Array.isArray(data.transcript) && data.transcript.length && !state.cards.size) {
-      replayingTranscript = true;
-      try {
-        for (const entry of data.transcript) {
-          const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
-          sseEvent(type, { text: entry.text || "" });
+    rememberSession({ ...data, restored: Boolean(data.sessionId && (data.transcript || []).length) });
+    if (runtimeMode) return;
+    state = createDeskState({ permissionMode: state.permissionMode });
+    sseSequence = 0;
+    sseTurn = 0;
+    sseTurnClosed = true;
+    replayingTranscript = true;
+    try {
+      for (const entry of data.transcript || []) {
+        if (entry.role === "tool") {
+          sseEvent("tool.started", { toolUseId: `replay-${sseSequence + 1}`, name: entry.name, input: entry.input || {} });
+          sseEvent("tool.completed", { toolUseId: `replay-${sseSequence}`, name: entry.name });
+          continue;
         }
-      } finally {
-        replayingTranscript = false;
+        const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : entry.role === "notice" ? "desk.notice" : "turn.failed";
+        sseEvent(type, { text: entry.text || "", detail: entry.detail });
       }
+    } finally {
+      replayingTranscript = false;
     }
+    state = applySnapshot(state, { busy: Boolean(data.busy) });
+    sseTurnClosed = !data.busy;
+    setBusy(Boolean(data.busy));
+    if (data.runtimeError && window.deskApp) {
+      notice("The app's connection to Claude Code did not start, so the desk is using a simpler mode: Claude runs each message on its own and does not ask before using tools. Restarting the app usually fixes this.");
+      modeEl.textContent = "Autonomous";
+      modeEl.dataset.mode = "autonomous";
+    }
+    paintChat();
+    if (statusEl.textContent.startsWith("Reconnecting")) statusEl.textContent = busy ? "Claude is working. Stop cancels this turn." : "Ready";
   });
   source.addEventListener("session", (event) => rememberSession(JSON.parse(event.data)));
   source.addEventListener("user", (event) => {
@@ -10156,23 +10849,38 @@ ${multiline}` : rendered;
   });
   source.addEventListener("tool", (event) => {
     if (runtimeSocket) return;
-    const { name, phase } = JSON.parse(event.data);
-    sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: `tool-${name}`, name });
+    const { id, name, phase, input } = JSON.parse(event.data);
+    sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
+  });
+  source.addEventListener("notice", (event) => {
+    if (!runtimeSocket) notice(JSON.parse(event.data).text);
+  });
+  source.addEventListener("question", (event) => {
+    if (runtimeSocket) return;
+    const { id, questions } = JSON.parse(event.data);
+    sseEvent("question.requested", { entityId: id, toolUseId: id, questions: questions || [], readOnly: true });
+  });
+  source.addEventListener("thinking", () => {
+    if (!runtimeSocket) sseEvent("assistant.thinking", {});
   });
   source.addEventListener("status", (event) => {
     statusEl.textContent = JSON.parse(event.data).text;
   });
-  source.addEventListener("log", (event) => {
-    statusEl.textContent = JSON.parse(event.data).text.slice(0, 180);
+  source.addEventListener("log", () => {
   });
   source.addEventListener("turn-error", (event) => {
-    if (event.data && !runtimeSocket) sseEvent("turn.failed", { text: JSON.parse(event.data).text });
+    if (!event.data || runtimeSocket) return;
+    const data = JSON.parse(event.data);
+    sseEvent("turn.failed", { text: data.text, detail: data.detail });
+    if (/not installed/i.test(data.text || "")) checkClaude();
   });
   source.addEventListener("autofill-review", (event) => {
     const payload = JSON.parse(event.data);
     sseEvent("autofill.review", payload);
   });
   source.addEventListener("reset", () => {
+    if (runtimeMode) return;
+    hasReset = true;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
     sseTurn = 0;
@@ -10181,14 +10889,22 @@ ${multiline}` : rendered;
     jumpBtn.hidden = true;
   });
   source.addEventListener("idle", () => {
+    if (runtimeMode) return;
+    closingOld = false;
+    if (state.busy) sseEvent("turn.interrupted", {});
     sseTurnClosed = true;
     setBusy(false);
     state = applySnapshot(state, { busy: false });
     paintChat();
+    notifyHidden("Claude finished.");
+    refreshDeskData();
   });
-  source.onerror = (event) => {
-    if (event?.data) return;
-    statusEl.textContent = "Lost the local server. Run node gui/server.mjs again.";
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) {
+      statusEl.textContent = "The desk stopped. Close this tab and open the desk again.";
+    } else {
+      statusEl.textContent = "Reconnecting to the desk\u2026";
+    }
   };
   if (openCliBtn) {
     openCliBtn.addEventListener("click", async () => {
@@ -10196,9 +10912,10 @@ ${multiline}` : rendered;
       try {
         const res = await fetch("/workspace/cli", { method: "POST" });
         const data = await res.json();
-        statusEl.textContent = data.error || `Claude Code opened in ${data.root}`;
+        if (data.error) notice(data.error);
+        else statusEl.textContent = "A terminal window opened in your job-search folder. You can keep working here too.";
       } catch {
-        statusEl.textContent = "Could not open Claude Code in this folder.";
+        notice("Could not open a terminal window on this computer. You can keep working here; nothing is lost.");
       } finally {
         openCliBtn.disabled = false;
       }
@@ -10214,6 +10931,7 @@ ${multiline}` : rendered;
       promptEl.value = value;
       sizePrompt();
     }
+    if (sent) tabs?.select("chat");
     promptEl.focus();
   });
   promptEl.addEventListener("input", sizePrompt);
@@ -10227,55 +10945,169 @@ ${multiline}` : rendered;
   sheetForm.addEventListener("submit", (event) => {
     if (event.submitter?.value !== "run") return;
     if (!activeCommand) return;
-    const prompt = renderCommandInvocation(activeCommand, valuesFromForm(sheetFields));
-    if (!prompt || prompt === activeCommand.invocation && activeCommand.arguments.some((argument) => argument.kind === "url")) {
-      const values = valuesFromForm(sheetFields);
-      const needsUrl = activeCommand.arguments.some((argument) => argument.kind === "url");
-      if (needsUrl && !values.url && !values.posting) {
-        event.preventDefault();
-        statusEl.textContent = "Add a URL or paste the posting.";
+    event.preventDefault();
+    const values = valuesFromForm(sheetFields);
+    const problem = commandInputError(activeCommand, values);
+    if (problem) {
+      sheetError.textContent = problem;
+      sheetError.hidden = false;
+      sheetFields.querySelector("input, textarea, select")?.focus();
+      return;
+    }
+    const command = activeCommand;
+    runStep(command.id, renderCommandInvocation(command, values)).then((sent) => {
+      if (sent) {
+        sheet.close();
         return;
       }
-    }
-    sendPrompt(renderCommandInvocation(activeCommand, valuesFromForm(sheetFields)));
+      sheetError.textContent = lastSendError || REJECT_TEXT.busy;
+      sheetError.hidden = false;
+    });
   });
   stopBtn.addEventListener("click", async () => {
     if (runtimeSend({ type: "turn.interrupt" })) return;
     try {
       const res = await post("/stop");
-      if (!res.ok) statusEl.textContent = "Could not stop the current turn.";
+      if (!res.ok) notice("Could not stop Claude. Try Stop again, or close this tab and open the desk again.");
     } catch {
-      statusEl.textContent = "Could not stop the current turn.";
+      notice("Could not stop Claude: the desk is not reachable. Close this tab and open the desk again.");
     }
   });
-  resetBtn.addEventListener("click", async () => {
-    if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
-    if (!runtimeSend({ type: "conversation.reset" })) {
-      try {
-        const res = await post("/reset");
-        if (!res.ok) {
-          statusEl.textContent = "Could not start a new conversation.";
-          return;
-        }
-      } catch {
-        statusEl.textContent = "Could not start a new conversation.";
-        return;
-      }
+  var resetPending = false;
+  var progressInfo = null;
+  var toolsInfo = null;
+  var jobsState = { jobs: [], filter: "open", query: "", status: "loading", error: "" };
+  var applicationsState = { applications: [], status: "loading", error: "", preview: null };
+  async function loadProgress() {
+    try {
+      const res = await fetch("/progress");
+      if (res.ok) progressInfo = await res.json();
+    } catch {
     }
+    if (!state.cards.size) paintChat();
+  }
+  async function loadTools({ refresh = false } = {}) {
+    try {
+      const res = await fetch(refresh ? "/tools?refresh=1" : "/tools");
+      if (res.ok) toolsInfo = await res.json();
+    } catch {
+      toolsInfo = null;
+    }
+    if (toolsDialog?.open) renderTools(toolsList, toolsInfo);
+    if (!state.cards.size) paintChat();
+  }
+  function paintJobs() {
+    renderJobs(jobsEl, jobsState);
+  }
+  async function loadJobs() {
+    jobsState = { ...jobsState, status: jobsState.jobs.length ? "ready" : "loading" };
+    paintJobs();
+    try {
+      const res = await fetch("/jobs");
+      if (!res.ok) throw new Error("Could not read the job list.");
+      const body = await res.json();
+      jobsState = { ...jobsState, jobs: body.jobs || [], status: "ready", error: "" };
+    } catch (error) {
+      jobsState = { ...jobsState, status: "error", error: error.message };
+    }
+    paintJobs();
+  }
+  function paintApplications() {
+    renderApplications(applicationsEl, applicationsState);
+  }
+  async function loadApplications() {
+    applicationsState = { ...applicationsState, status: applicationsState.applications.length ? "ready" : "loading" };
+    paintApplications();
+    try {
+      const res = await fetch("/applications");
+      if (!res.ok) throw new Error("Could not read the tracker.");
+      const body = await res.json();
+      applicationsState = { ...applicationsState, applications: body.applications || [], status: "ready", error: "" };
+    } catch (error) {
+      applicationsState = { ...applicationsState, status: "error", error: error.message };
+    }
+    paintApplications();
+  }
+  function refreshDeskData() {
+    loadProgress();
+    if (selectedTab === "jobs") loadJobs();
+    if (selectedTab === "applications") loadApplications();
+  }
+  var BASE_TITLE = document.title;
+  var attentionFlag = false;
+  function flagAttention() {
+    if (!document.hidden) return;
+    attentionFlag = true;
+    document.title = `\u25CF ${BASE_TITLE}`;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && attentionFlag) {
+      attentionFlag = false;
+      document.title = BASE_TITLE;
+    }
+  });
+  function notifyHidden(body) {
+    flagAttention();
+    if (!document.hidden || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try {
+      const shown = new Notification("Job Search Desk", { body, tag: "desk-turn", silent: true });
+      shown.onclick = () => window.focus();
+    } catch {
+    }
+  }
+  function requestNotificationPermission() {
+    if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+    try {
+      Notification.requestPermission().catch?.(() => {
+      });
+    } catch {
+    }
+  }
+  var closingOld = false;
+  var inFlightSends = /* @__PURE__ */ new Map();
+  var lastSendError = "";
+  function clearConversation() {
+    hasReset = true;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
     sseTurn = 0;
     sseTurnClosed = true;
+    markAction(null);
     paintChat();
     jumpBtn.hidden = true;
-    setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
+    setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: null });
+  }
+  resetBtn.addEventListener("click", async () => {
+    if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
+    if (runtimeSend({ type: "conversation.reset" })) {
+      resetPending = true;
+      statusEl.textContent = "Starting a new conversation\u2026";
+      return;
+    }
+    if (!runtimeSend({ type: "conversation.reset" })) {
+      try {
+        const res = await post("/reset");
+        if (!res.ok) {
+          notice("Could not start a new conversation. Try again in a moment.");
+          return;
+        }
+      } catch {
+        notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+        return;
+      }
+    }
+    const wasBusy = busy;
+    clearConversation();
+    if (wasBusy) {
+      closingOld = true;
+      statusEl.textContent = "Closing the old conversation\u2026";
+    } else {
+      setBusy(false);
+    }
   });
   menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
   scrim.addEventListener("click", () => setMenu(false));
-  jumpBtn.addEventListener("click", () => {
-    stickToBottom = true;
-    scrollLog();
-  });
+  jumpBtn.addEventListener("click", jumpToLatest);
   logEl.addEventListener("scroll", () => {
     stickToBottom = nearBottom();
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
@@ -10285,8 +11117,19 @@ ${multiline}` : rendered;
     if (!formNode) return;
     event.preventDefault();
     const id = formNode.dataset.id;
-    if (!runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) })) {
-      statusEl.textContent = "Could not send your answer. Is the terminal still running?";
+    const questions = state.cards.get(id)?.payload.questions || [];
+    const answers = answersFromQuestionForm(formNode, questions);
+    const problem = questionAnswersError(questions, answers);
+    const errorEl = formNode.querySelector(".form-error");
+    if (problem) {
+      if (errorEl) {
+        errorEl.textContent = problem;
+        errorEl.hidden = false;
+      }
+      return;
+    }
+    if (!runtimeSend({ type: "question.response", requestId: id, answers })) {
+      notice("Could not send your answer: the desk is not connected to Claude right now.");
       return;
     }
     state = markEntered(state, id);
@@ -10319,11 +11162,28 @@ ${multiline}` : rendered;
       return;
     }
     if (!runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision })) {
-      statusEl.textContent = "Could not send that decision. Is the terminal still running?";
+      notice("Could not send that decision: the desk is not connected to Claude right now.");
       return;
     }
     state = markEntered(state, id);
     paintChat();
+  });
+  function restoreFocusAfterDialog() {
+    window.setTimeout(() => {
+      const active = document.activeElement;
+      const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
+      if (!active || active === document.body || inHiddenDock || active && !active.isConnected) {
+        (menuBtn.offsetParent ? menuBtn : promptEl).focus();
+      }
+    }, 0);
+  }
+  sheet.addEventListener("close", restoreFocusAfterDialog);
+  palette.addEventListener("close", restoreFocusAfterDialog);
+  paletteQuery?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      palette.close();
+    }
   });
   paletteQuery?.addEventListener("input", () => {
     renderPaletteList(paletteList, filterCommands(commands, paletteQuery.value));
@@ -10351,11 +11211,29 @@ ${multiline}` : rendered;
       openPalette();
     }
   });
-  async function ensureTerminal() {
+  var terminalSubscriptions = [];
+  var selectedTab = "chat";
+  function terminalPlaceholder(host, title, copy) {
+    host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>${title}</h2><p>${copy}</p></div>`;
+  }
+  var terminalStarting = null;
+  function ensureTerminal() {
+    if (terminalStarting) return terminalStarting;
+    terminalStarting = startTerminal().finally(() => {
+      terminalStarting = null;
+    });
+    return terminalStarting;
+  }
+  async function startTerminal() {
     const host = document.getElementById("panel-terminal");
     const bridge = window.deskApp?.terminal;
-    if (!host || !bridge || terminalView) {
-      terminalView?.focus();
+    if (!host || !bridge) return;
+    if (terminalView) {
+      terminalView.focus();
+      return;
+    }
+    if (!state.sessionId) {
+      terminalPlaceholder(host, "Send one message in Chat first.", "The terminal continues the same conversation, so it needs one to continue.");
       return;
     }
     let Terminal;
@@ -10384,47 +11262,263 @@ ${multiline}` : rendered;
       }
     });
     terminalView.mount(xtermHost);
-    bridge.onData((payload) => {
-      if (payload?.data) terminalView.write(payload.data);
-    });
-    bridge.onExit(() => {
-      terminalView.setInputEnabled(false);
-      releaseTerminal();
-    });
+    const view = terminalView;
+    terminalSubscriptions = [
+      bridge.onData((payload) => {
+        if (payload?.data && terminalView === view) view.write(payload.data);
+      }),
+      bridge.onExit((payload) => {
+        if (terminalView !== view) return;
+        view.setInputEnabled(false);
+        if (payload?.snapshot) {
+          state = applySnapshot(state, payload.snapshot);
+          syncBusy();
+        }
+        releaseTerminal();
+        terminalPlaceholder(host, "Claude Code closed.", "Switch to Chat to keep going, or open this tab again to start the terminal.");
+      })
+    ].filter((stop) => typeof stop === "function");
     const started = await bridge.start({
       expectedControllerGeneration: state.controllerGeneration,
       cols: 80,
       rows: 24
     });
     if (!started?.ok) {
-      terminalView.dispose();
-      terminalView = null;
-      host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>Could not attach Claude.</h2><p>Stay in Chat. Open CLI still works for the same workspace.</p></div>`;
+      disposeTerminalView();
+      terminalPlaceholder(host, "Could not attach Claude.", started?.error === "session-id-required" ? "Send one message in Chat first; the terminal continues that conversation." : "Stay in Chat; everything works there. Open in Terminal still opens Claude Code in the same folder.");
       return;
     }
     terminalId = started.terminalId;
+    if (selectedTab !== "terminal") {
+      await releaseTerminal();
+      return;
+    }
     state = applySnapshot(state, started.snapshot || { controller: "terminal" });
+    syncBusy();
     terminalView.focus();
   }
+  function disposeTerminalView() {
+    for (const stop of terminalSubscriptions) {
+      try {
+        stop();
+      } catch {
+      }
+    }
+    terminalSubscriptions = [];
+    terminalView?.dispose();
+    terminalView = null;
+  }
   async function releaseTerminal() {
+    const host = document.getElementById("panel-terminal");
+    const hadView = Boolean(terminalView);
+    disposeTerminalView();
+    if (hadView && host && !host.querySelector(".empty")) {
+      terminalPlaceholder(host, "Claude Code, same conversation.", "Attaching the terminal\u2026");
+    }
     if (!terminalId) return;
     const bridge = window.deskApp?.terminal;
     const id = terminalId;
     terminalId = null;
     try {
       const result = await bridge?.dispose({ terminalId: id });
-      if (result?.snapshot) state = applySnapshot(state, result.snapshot);
+      if (result?.snapshot) {
+        state = applySnapshot(state, result.snapshot);
+        syncBusy();
+      }
     } catch {
     }
   }
   bindDelegatedActions(document);
-  mountTabs(document.getElementById("surface-tabs"), {
+  document.getElementById("more-steps")?.addEventListener("click", () => {
+    setMenu(false);
+    openPalette();
+  });
+  var surfaceTabs = [{ id: "chat", label: "Chat" }, { id: "jobs", label: "Jobs" }, { id: "applications", label: "Applications" }];
+  if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
+  surfaceTabs.push({ id: "files", label: "Files" });
+  var tabs = mountTabs(document.getElementById("surface-tabs"), {
+    tabs: surfaceTabs,
     selectedId: "chat",
     onSelect(id) {
+      selectedTab = id;
       if (id === "files") loadArtifacts();
+      if (id === "jobs") loadJobs();
+      if (id === "applications") loadApplications();
       if (id === "terminal") ensureTerminal();
       if (id !== "terminal") releaseTerminal();
+      if (id === "chat") requestAnimationFrame(scrollLog);
     }
+  });
+  jobsEl.addEventListener("click", async (event) => {
+    const filter = event.target.closest("[data-job-filter]");
+    if (filter) {
+      jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+      paintJobs();
+      return;
+    }
+    const action = event.target.closest("[data-job-action]");
+    if (!action) return;
+    const row = action.closest("[data-job-key]");
+    const job = jobsState.jobs.find((item) => item.key === row?.dataset.jobKey);
+    if (!job) return;
+    const kind = action.dataset.jobAction;
+    if (kind === "apply") {
+      if (job.url) runStep("apply", `/apply ${job.url}`);
+      else runStep("apply", `/apply
+${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask me for the posting if you need it)`);
+      return;
+    }
+    if (kind === "autofill") {
+      runStep("autofill", `/autofill ${job.url}`);
+      return;
+    }
+    const mark = kind === "interested" ? "interested" : kind === "ignore" ? "ignored" : null;
+    action.disabled = true;
+    try {
+      const res = await post("/jobs/mark", { key: job.key, mark });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not save that.");
+      jobsState = { ...jobsState, jobs: body.jobs || jobsState.jobs };
+    } catch (error) {
+      notice(error.message || "Could not save that.");
+    }
+    paintJobs();
+  });
+  jobsEl.addEventListener("input", (event) => {
+    const search = event.target.closest("[data-job-search]");
+    if (!search) return;
+    jobsState = { ...jobsState, query: search.value };
+    const list = jobsEl.querySelector(".job-list");
+    if (list) {
+      const fresh = jobsEl.ownerDocument.createElement("section");
+      renderJobs(fresh, jobsState);
+      const next = fresh.querySelector(".job-list");
+      if (next) list.replaceWith(next);
+    }
+  });
+  applicationsEl.addEventListener("click", async (event) => {
+    const file = event.target.closest("[data-file]");
+    if (file) {
+      await previewWorkspaceFile(file.dataset.file);
+      return;
+    }
+    const reveal = event.target.closest("[data-reveal]");
+    if (reveal) {
+      if (!window.confirm("Show this application's folder on your computer?")) return;
+      post("/workspace-file/open", { path: `${reveal.dataset.reveal}/job_posting.md`, reveal: true }).catch(() => {
+      });
+      return;
+    }
+    const open = event.target.closest("[data-open-file]");
+    if (open) {
+      if (!window.confirm("Open this file in its usual app (for example Word or your PDF viewer)?")) return;
+      post("/workspace-file/open", { path: open.dataset.openFile }).catch(() => notice("Could not open that file."));
+      return;
+    }
+    if (event.target.closest("[data-close-preview]")) {
+      applicationsState = { ...applicationsState, preview: null };
+      paintApplications();
+      return;
+    }
+    const action = event.target.closest("[data-app-action]");
+    if (!action) return;
+    const row = action.closest("[data-app-id]");
+    const target = [row?.dataset.company, row?.dataset.role].filter(Boolean).join(" ");
+    if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
+    if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
+  });
+  async function previewWorkspaceFile(path) {
+    const src = `/workspace-file?path=${encodeURIComponent(path)}`;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(res.status === 415 ? "This file type has no preview; use Open instead." : "That file is not in your job-search folder any more.");
+      const type = res.headers.get("content-type") || "";
+      applicationsState = {
+        ...applicationsState,
+        preview: type.includes("pdf") ? { path, kind: "pdf", src } : { path, kind: "text", text: await res.text() }
+      };
+    } catch (error) {
+      notice(error.message);
+      return;
+    }
+    paintApplications();
+    applicationsEl.querySelector(".file-preview")?.scrollIntoView({ block: "start" });
+  }
+  document.addEventListener("click", (event) => {
+    const step = event.target.closest("[data-checklist-action]");
+    if (step) {
+      const action = step.dataset.checklistAction;
+      if (action === "documents") docInput.click();
+      else if (action === "apply") tabs?.select("jobs");
+      else runAction(action);
+      return;
+    }
+    if (event.target.closest("[data-open-tools]") || event.target.closest("#open-tools")) {
+      openTools();
+    }
+  });
+  document.getElementById("add-documents")?.addEventListener("click", () => docInput.click());
+  document.getElementById("tools-refresh")?.addEventListener("click", () => {
+    toolsList.innerHTML = "<p>Checking\u2026</p>";
+    loadTools({ refresh: true });
+  });
+  function openTools() {
+    renderTools(toolsList, toolsInfo);
+    toolsDialog.showModal();
+    if (!toolsInfo) loadTools();
+  }
+  async function uploadDocuments(files) {
+    const list = [...files || []];
+    if (!list.length) return;
+    const saved = [];
+    for (const file of list) {
+      try {
+        const kind = /linkedin/i.test(file.name) ? "linkedin" : "cv";
+        const res = await fetch(`/documents?name=${encodeURIComponent(file.name)}&kind=${kind}`, { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || "The upload did not finish.");
+        saved.push(body.relativePath);
+        if (body.progress) progressInfo = body.progress;
+      } catch (error) {
+        notice(`${file.name}: ${error.message}`);
+      }
+    }
+    if (!saved.length) return;
+    notice(`Added ${saved.length === 1 ? saved[0] : `${saved.length} files`} to your documents folder. Run Setup and Claude reads ${saved.length === 1 ? "it" : "them"}.`);
+    if (!state.cards.size) paintChat();
+  }
+  docInput?.addEventListener("change", () => {
+    uploadDocuments(docInput.files);
+    docInput.value = "";
+  });
+  var dragDepth = 0;
+  document.addEventListener("dragenter", (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    dragDepth += 1;
+    dropzone.hidden = false;
+  });
+  document.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dropzone.hidden = true;
+  });
+  document.addEventListener("dragover", (event) => {
+    if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    dragDepth = 0;
+    dropzone.hidden = true;
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    uploadDocuments(event.dataTransfer.files);
+  });
+  modeToggle?.addEventListener("click", () => modeSheet.showModal());
+  modeSheet?.addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-mode-choice]");
+    if (!choice) return;
+    modeSheet.close();
+    const mode = choice.dataset.modeChoice;
+    if (mode === state.permissionMode) return;
+    if (!runtimeSend({ type: "permission.mode", mode })) notice("The desk is not connected to Claude right now; try again in a moment.");
   });
   filesEl.addEventListener("click", (event) => {
     const item = event.target.closest("[data-artifact-id]");
@@ -10456,10 +11550,13 @@ ${multiline}` : rendered;
       event.preventDefault();
       artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
       paintFiles();
+      filesEl.querySelector(`[data-artifact-id="${CSS.escape(artifactState.selectedId || "")}"]`)?.focus();
     }
   });
   paintChat();
   paintFiles();
+  loadProgress();
+  loadTools();
   fetch("/commands").then((res) => res.json()).then((data) => {
     commands = data.commands || [];
     if (commands.length) renderSidebar(stepsEl, commands);
@@ -10477,6 +11574,8 @@ ${multiline}` : rendered;
   var gateCodeWrap = document.getElementById("gate-code-wrap");
   var gateCode = document.getElementById("gate-code");
   var gateChrome = document.getElementById("gate-chrome");
+  var gateLink = document.getElementById("gate-link");
+  var gateLinkWrap = document.getElementById("gate-link-wrap");
   var accountLabel = document.getElementById("account-label");
   var authWaiter = null;
   var lastHealth = null;
@@ -10495,7 +11594,7 @@ ${multiline}` : rendered;
     if (copy) gateCopy.textContent = copy;
     if (open) {
       setMenu(false);
-      gateAction.focus();
+      gate.querySelector(".gate-card")?.focus();
     } else {
       promptEl.focus();
     }
@@ -10536,17 +11635,18 @@ ${multiline}` : rendered;
     accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
     gateCancel.hidden = true;
     gateCodeWrap.hidden = true;
+    gateLinkWrap.hidden = true;
     if (health.loggedIn) {
       setGate(false);
       return true;
     }
     if (needsInstall(health)) {
-      setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+      setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then opens a claude.ai sign-in page. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
       gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Install and sign in";
       return false;
     }
     if (needsLogin(health)) {
-      setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+      setGate(true, "Starting Claude Code", "A claude.ai sign-in page will open in your browser. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
       gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Sign in with Claude";
       return false;
     }
@@ -10561,16 +11661,21 @@ ${multiline}` : rendered;
   }
   async function bootstrapClaude() {
     gateAction.disabled = true;
+    gateAction.textContent = "Working\u2026";
     gateCancel.hidden = false;
     try {
       let health = await readHealth();
       if (needsInstall(health)) {
-        appendGateLog("Installing Claude Code with the official installer.");
+        appendGateLog("Installing Claude Code with the official installer. This can take a minute or two.");
         if (window.deskApp?.ensureClaude) {
+          gateCancel.hidden = true;
           let info = await window.deskApp.ensureClaude();
+          let ticks = 0;
           while (info?.status === "installing") {
             await new Promise((resolve) => window.setTimeout(resolve, 1500));
             info = await window.deskApp.ensureClaude();
+            ticks += 1;
+            if (ticks % 10 === 0) appendGateLog("Still installing\u2026");
           }
           if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
           health = info?.health || await readHealth();
@@ -10583,33 +11688,55 @@ ${multiline}` : rendered;
         }
       }
       if (needsLogin(health)) {
-        appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
+        appendGateLog("Opening the claude.ai sign-in. Finish it in the browser, then return here.");
         const res = await post("/auth/login");
-        if (!res.ok) throw new Error("Login is already running.");
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          if (!body.running) throw new Error("The sign-in could not start. Try again.");
+          appendGateLog("A sign-in is already in progress in your browser.");
+          if (body.urls?.[0]) showSignInLink(body.urls[0]);
+          if (body.needsCode) {
+            gateCodeWrap.hidden = false;
+          }
+        }
         const done = await waitForAuth("login");
-        if (!done.ok) throw new Error(done.error || "Claude login did not finish.");
+        if (done.kind === "cancel") {
+          gateTitle.textContent = "Sign-in cancelled";
+          gateCopy.textContent = "No problem. Click Sign in with Claude when you are ready.";
+          gateAction.textContent = "Sign in with Claude";
+          claudeAutoStarted = false;
+          return;
+        }
+        if (!done.ok) throw new Error(done.error || "The sign-in did not finish. Try again, and use the link above if no tab opened.");
         health = done.health || await readHealth();
       }
       if (health.loggedIn || !needsLogin(health) && !needsInstall(health)) {
         applyHealth(health);
         return;
       }
-      throw new Error("Claude is installed but still signed out. Try Sign in again.");
+      throw new Error("Claude Code is installed but still signed out. Click Sign in with Claude to try again.");
     } catch (err) {
       appendGateLog(err.message);
       gateTitle.textContent = "Could not connect";
       gateCopy.textContent = err.message;
+      gateAction.textContent = "Try again";
+      claudeAutoStarted = false;
     } finally {
       gateAction.disabled = false;
-      gateCancel.hidden = Boolean(gate.hidden);
+      gateCancel.hidden = true;
     }
+  }
+  function showSignInLink(url) {
+    if (!/^https:\/\//.test(url)) return;
+    gateLink.href = url;
+    gateLinkWrap.hidden = false;
   }
   source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
   source.addEventListener("auth-url", (event) => {
-    const url = JSON.parse(event.data).url;
-    appendGateLog(`Open this login page if the browser did not appear:
-${url}`);
-    window.open(url, "_blank", "noopener");
+    const data = JSON.parse(event.data);
+    if (data.kind !== "login") return;
+    showSignInLink(data.url);
+    gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window. If claude.ai shows you a code, paste it below.";
   });
   source.addEventListener("auth-code", () => {
     gateCodeWrap.hidden = false;
@@ -10624,7 +11751,13 @@ ${url}`);
     }
     if (data.health) applyHealth(data.health);
   });
-  gateAction.addEventListener("click", () => bootstrapClaude());
+  gateAction.addEventListener("click", () => {
+    if (!lastHealth) {
+      checkClaude();
+      return;
+    }
+    bootstrapClaude();
+  });
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
   gateCode.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -10638,13 +11771,19 @@ ${url}`);
     if (meta.chromeExtensionUrl) gateChrome.href = meta.chromeExtensionUrl;
   }).catch(() => {
   });
-  readHealth().then((health) => {
-    applyHealth(health);
-    autoStartClaude(health);
-  }).catch(() => {
-    setGate(false);
-    accountLabel.textContent = "Claude status unknown";
-  });
+  function checkClaude() {
+    return readHealth().then((health) => {
+      applyHealth(health);
+      autoStartClaude(health);
+    }).catch(() => {
+      lastHealth = null;
+      accountLabel.textContent = "Claude status unknown";
+      setGate(true, "Could not check Claude Code", "The desk could not find out whether Claude Code is installed and signed in. Try again in a moment.");
+      gateAction.textContent = "Try again";
+      gateAction.disabled = false;
+    });
+  }
+  checkClaude();
   tickClock();
   window.setInterval(tickClock, 3e4);
   sizePrompt();

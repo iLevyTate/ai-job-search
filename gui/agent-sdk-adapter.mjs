@@ -57,6 +57,9 @@ export function createAgentSdkAdapter({
         input,
         suggestions: options.suggestions,
         title: options.title,
+        description: options.description,
+        displayName: options.displayName,
+        decisionReason: options.decisionReason,
         signal: options.signal,
       });
       if (notified && typeof notified.then === "function") {

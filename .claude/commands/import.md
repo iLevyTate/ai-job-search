@@ -3,7 +3,7 @@ desk:
   id: import
   invocation: /import
   title: Import
-  description: Ingest hand-found job postings into the scraper inbox.
+  description: Add a job you found yourself.
   arguments:
     - kind: url
       name: url

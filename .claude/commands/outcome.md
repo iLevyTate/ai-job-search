@@ -3,7 +3,7 @@ desk:
   id: outcome
   invocation: /outcome
   title: Outcome
-  description: Record application progress, follow-ups, and results.
+  description: Record what happened with an application.
   primaryOrder: 7
   arguments:
     - kind: text

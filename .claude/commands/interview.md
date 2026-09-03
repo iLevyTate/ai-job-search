@@ -3,7 +3,7 @@ desk:
   id: interview
   invocation: /interview
   title: Interview
-  description: Prepare answers and talking points for a scheduled interview.
+  description: Get ready for an interview you have coming up.
   primaryOrder: 6
   arguments:
     - kind: text

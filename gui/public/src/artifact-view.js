@@ -46,7 +46,6 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
   const document = container.ownerDocument;
   container.replaceChildren();
   container.classList.add("artifact-view");
-  container.tabIndex = 0;
 
   if (state.status === "loading") {
     container.innerHTML = `<div class="empty" data-state="loading"><p class="kicker">${escapeHtml(title)}</p><h2>Loading files…</h2></div>`;
@@ -57,7 +56,7 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
     return;
   }
   if (state.status === "empty" || !state.artifacts.length) {
-    container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No artifacts yet.</h2><p>Generated CVs, letters, and reports will appear here.</p></div>`;
+    container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No files yet.</h2><p>When Claude writes a CV, cover letter, or report, it shows up here.</p></div>`;
     return;
   }
 
@@ -65,10 +64,10 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
   list.className = "artifact-list";
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Artifacts");
-  for (const group of groupArtifactsByTurn(state.artifacts)) {
+  groupArtifactsByTurn(state.artifacts).forEach((group, index) => {
     const heading = document.createElement("p");
     heading.className = "kicker";
-    heading.textContent = `Turn ${group.turnId}`;
+    heading.textContent = `Reply ${index + 1}`;
     list.append(heading);
     for (const artifact of group.items) {
       const button = document.createElement("button");
@@ -81,7 +80,7 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
       button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
       list.append(button);
     }
-  }
+  });
 
   const preview = document.createElement("div");
   preview.className = "artifact-preview";
@@ -96,7 +95,7 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
 
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
-  for (const [action, label] of [["preview", "Preview"], ["compare", "Compare"], ["open", "Open"], ["reveal", "Reveal"]]) {
+  for (const [action, label] of [["preview", "Preview"], ["compare", "What changed"], ["open", "Open"], ["reveal", "Show in folder"]]) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.artifactAction = action;
@@ -110,7 +109,7 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
     const confirm = document.createElement("div");
     confirm.className = "artifact-confirm";
     confirm.dataset.confirm = state.confirm.action;
-    confirm.innerHTML = `<p>${state.confirm.action === "open" ? "Open this file with the operating system?" : "Reveal this file in the file manager?"}</p>
+    confirm.innerHTML = `<p>${state.confirm.action === "open" ? "Open this file in its usual app (for example Word or your PDF viewer)?" : "Show this file in its folder?"}</p>
       <button type="button" data-confirm="yes">Continue</button>
       <button type="button" class="ghost" data-confirm="no">Cancel</button>`;
     actions.append(confirm);

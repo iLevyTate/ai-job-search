@@ -297,7 +297,7 @@ export function clearDeskSession(root) {
   }
 }
 
-export const MISSING_CLAUDE_TEXT = "Claude Code is not installed yet. Use the Connect Claude button.";
+export const MISSING_CLAUDE_TEXT = "Claude Code is not installed on this computer yet. The desk will now show the install and sign-in screen; if it does not, reload this page.";
 
 /** A --resume that dies before Claude's init event means the saved session is stale. */
 export function shouldRetryWithoutResume({ code, sawInit, usedResume, retried }) {
@@ -307,7 +307,7 @@ export function shouldRetryWithoutResume({ code, sawInit, usedResume, retried })
 export function exitErrorText(code, stopRequested) {
   if (stopRequested || !code) return null;
   if (code === -4058) return MISSING_CLAUDE_TEXT;
-  return `Claude exited with code ${code}`;
+  return `Claude Code stopped before it finished (error ${code}). Send the message again. If it keeps happening, click New chat, or reload this page to check the installation.`;
 }
 
 export function buildInteractiveClaudeArgs({ sessionId, permissionMode, name = DESK_SESSION_NAME } = {}) {
@@ -439,6 +439,8 @@ export function spawnSubscriptionLogin({ cwd, email } = {}) {
   // If the spawn fails, stdin errors asynchronously; without a listener that
   // EPIPE is an uncaught exception in the desk process.
   child.stdin?.on("error", () => {});
-  child.stdin?.write("\n");
+  // Nothing is written to stdin here: the CLI reads its "Paste code here"
+  // prompt from it, and an eager newline was answered with "Invalid code"
+  // before the person had done anything.
   return child;
 }

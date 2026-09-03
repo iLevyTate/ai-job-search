@@ -8,7 +8,10 @@ const CLIENT_TYPES = new Set([
   "question.response",
   "turn.interrupt",
   "conversation.reset",
+  "permission.mode",
 ]);
+
+const DESK_MODES = new Set(["safe", "autonomous"]);
 
 const PERMISSION_DECISIONS = new Set(["allow-once", "allow-scoped", "deny"]);
 
@@ -61,28 +64,47 @@ export function diagnosticEvent(raw, context) {
   }, context);
 }
 
+// Stream events that carry nothing the desk shows: message envelopes, block
+// boundaries, tool-input JSON (the full input arrives on the assistant
+// message), and thinking text. Turning these into diagnostic events used to
+// paint an empty "Stopped" card per event while Claude was thinking.
+const QUIET_STREAM_EVENTS = new Set(["message_start", "message_delta", "message_stop", "content_block_stop", "ping"]);
+const QUIET_DELTAS = new Set(["thinking_delta", "input_json_delta", "signature_delta"]);
+
 function fromStreamEvent(message, context) {
   const inner = message.event || {};
   const sessionId = sessionIdOf(message);
 
-  if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
-    const block = inner.content_block;
-    return [event("tool.started", {
-      toolUseId: block.id,
-      name: block.name || "tool",
-      input: block.input ?? {},
-      sessionId,
-    }, context)];
+  if (inner.type === "content_block_start") {
+    const block = inner.content_block || {};
+    if (block.type === "tool_use") {
+      // Questions are announced from canUseTool, where they can be answered;
+      // a chip here would paint "Using AskUserQuestion" in front of the form.
+      if (block.name === "AskUserQuestion") return [];
+      return [event("tool.started", {
+        toolUseId: block.id,
+        name: block.name || "tool",
+        input: block.input ?? {},
+        sessionId,
+      }, context)];
+    }
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
+      return [event("assistant.thinking", { sessionId }, context)];
+    }
+    if (block.type === "text") return [];
+    return [diagnosticEvent(message, context)];
   }
 
-  if (inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
-    return [event("assistant.delta", { text: inner.delta.text, sessionId }, context)];
+  if (inner.type === "content_block_delta") {
+    const delta = inner.delta || {};
+    if (delta.type === "text_delta") {
+      return [event("assistant.delta", { text: typeof delta.text === "string" ? delta.text : "", sessionId }, context)];
+    }
+    if (QUIET_DELTAS.has(delta.type)) return [];
+    return [diagnosticEvent(message, context)];
   }
 
-  if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
-    return [event("assistant.delta", { text: inner.delta.text ?? "", sessionId }, context)];
-  }
-
+  if (QUIET_STREAM_EVENTS.has(inner.type)) return [];
   return [diagnosticEvent(message, context)];
 }
 
@@ -101,14 +123,15 @@ function fromAssistant(message, context) {
     return events;
   }
 
+  let sawQuestion = false;
   if (Array.isArray(content)) {
     for (const block of content) {
       if (block?.type === "tool_use" && block.name === "AskUserQuestion") {
-        events.push(event("question.requested", {
-          toolUseId: block.id,
-          questions: block.input?.questions ?? [],
-          sessionId,
-        }, context));
+        // Questions reach the desk through canUseTool (session-runtime
+        // publishes question.requested there), the only channel that can
+        // carry the answer back to Claude. Announcing the block here too would
+        // paint a second, unanswerable card.
+        sawQuestion = true;
         continue;
       }
       if (block?.type === "tool_use") {
@@ -130,7 +153,7 @@ function fromAssistant(message, context) {
     events.push(event("turn.failed", { text: String(message.error), sessionId }, context));
   }
 
-  return events.length ? events : [diagnosticEvent(message, context)];
+  return events.length || sawQuestion ? events : [diagnosticEvent(message, context)];
 }
 
 function fromUser(message, context) {
@@ -289,6 +312,9 @@ export function validateClientMessage(value) {
       if (typeof value.requestId !== "string" || !value.requestId) {
         return reject("question.response.requestId is required");
       }
+      break;
+    case "permission.mode":
+      if (!DESK_MODES.has(value.mode)) return reject("permission.mode.mode must be safe or autonomous");
       break;
     case "turn.interrupt":
     case "conversation.reset":

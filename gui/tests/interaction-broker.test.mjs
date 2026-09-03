@@ -74,12 +74,12 @@ test("single-choice answers preserve the AskUserQuestion structure", async () =>
   });
   const result = interactions.respondToQuestion({
     requestId: "q-1",
-    answers: { Lane: "Healthcare" },
+    answers: { "Which lane?": "Healthcare" },
     expectedControllerGeneration: 1,
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.answers, {
-    answers: { Lane: "Healthcare" },
+    answers: { "Which lane?": "Healthcare" },
   });
   assert.deepEqual(await pending, result.answers);
 });
@@ -92,11 +92,11 @@ test("multi-select answers preserve selected option labels", async () => {
   });
   const result = interactions.respondToQuestion({
     requestId: "q-2",
-    answers: { Boards: ["LinkedIn", "Ashby"] },
+    answers: { "Which boards?": ["LinkedIn", "Ashby"] },
     expectedControllerGeneration: 1,
   });
   assert.equal(result.ok, true);
-  assert.deepEqual((await pending).answers.Boards, ["LinkedIn", "Ashby"]);
+  assert.deepEqual((await pending).answers["Which boards?"], ["LinkedIn", "Ashby"]);
 });
 
 test("free-text answers are accepted when a question has no options", async () => {
@@ -107,11 +107,11 @@ test("free-text answers are accepted when a question has no options", async () =
   });
   const result = interactions.respondToQuestion({
     requestId: "q-3",
-    answers: { Notes: "Remote only" },
+    answers: { "Anything else?": "Remote only" },
     expectedControllerGeneration: 1,
   });
   assert.equal(result.ok, true);
-  assert.equal((await pending).answers.Notes, "Remote only");
+  assert.equal((await pending).answers["Anything else?"], "Remote only");
 });
 
 test("malformed question responses are rejected and leave the request pending until denial", async () => {
@@ -120,19 +120,25 @@ test("malformed question responses are rejected and leave the request pending un
     requestId: "q-4",
     questions: [laneQuestion],
   });
+  // Keys are the question text (the SDK contract), so the header alone is malformed.
   assert.equal(interactions.respondToQuestion({
     requestId: "q-4",
-    answers: { Lane: "Finance" },
+    answers: { Lane: "Healthcare" },
     expectedControllerGeneration: 1,
   }).reason, "malformed");
   assert.equal(interactions.respondToQuestion({
     requestId: "q-4",
-    answers: { Lane: ["Healthcare"] },
+    answers: { "Which lane?": "   " },
+    expectedControllerGeneration: 1,
+  }).reason, "malformed");
+  assert.equal(interactions.respondToQuestion({
+    requestId: "q-4",
+    answers: { "Which lane?": ["Healthcare"] },
     expectedControllerGeneration: 1,
   }).reason, "malformed");
   assert.equal(interactions.respondToQuestion({
     requestId: "q-2",
-    answers: { Boards: ["LinkedIn"] },
+    answers: { "Which boards?": ["LinkedIn"] },
     expectedControllerGeneration: 1,
   }).reason, "unknown-request");
 
@@ -330,4 +336,45 @@ test("an aborted signal denies the pending permission", async () => {
   });
   controller.abort();
   assert.equal((await pending).behavior, "deny");
+});
+
+test("a single-choice question accepts the user's own words (the SDK's Other path)", async () => {
+  const { interactions } = broker();
+  const pending = interactions.beginQuestion({ requestId: "q-5", questions: [laneQuestion] });
+  const result = interactions.respondToQuestion({
+    requestId: "q-5",
+    answers: { "Which lane?": "Climate tech, remote" },
+    expectedControllerGeneration: 1,
+  });
+  assert.equal(result.ok, true);
+  assert.equal((await pending).answers["Which lane?"], "Climate tech, remote");
+});
+
+test("with no timeout configured a pending question is never auto-cancelled", async () => {
+  const timers = createFakeTimers();
+  const interactions = createInteractionBroker({ timeoutMs: 0, timers, getControllerGeneration: () => 1 });
+  const pending = interactions.beginQuestion({ requestId: "q-forever", questions: [laneQuestion] });
+  timers.flush();
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  assert.equal(interactions.pendingCount(), 1);
+  interactions.abortAll("done");
+});
+
+test("multi-select answers may mix offered labels with the user's own words", async () => {
+  const { interactions } = broker();
+  const pending = interactions.beginQuestion({ requestId: "q-mix", questions: [multiQuestion] });
+  const result = interactions.respondToQuestion({
+    requestId: "q-mix",
+    answers: { "Which boards?": ["LinkedIn", "Wellfound"] },
+    expectedControllerGeneration: 1,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual((await pending).answers["Which boards?"], ["LinkedIn", "Wellfound"]);
+  const empty = interactions.beginQuestion({ requestId: "q-empty", questions: [multiQuestion] });
+  assert.equal(interactions.respondToQuestion({ requestId: "q-empty", answers: { "Which boards?": [] }, expectedControllerGeneration: 1 }).reason, "malformed");
+  interactions.abortAll("done");
+  await empty;
 });

@@ -13,6 +13,128 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Added
+- Job Search Desk: a **Jobs** tab (what Find Jobs found, ranked, with Apply,
+  Autofill, Interested and Ignore per row), an **Applications** tab (the
+  tracker with status, deadline, inline CV and letter preview, and buttons to
+  record an outcome or prepare an interview), a live getting-started
+  checklist on the empty chat, a **Tools check** that says which programs the
+  steps need on this computer and how to install them, **Add your CV or
+  documents** (a file picker and drag-and-drop into the documents folder), a
+  switch between "works on its own" and "asks before acting" in the installed
+  app, and a tab-title dot plus optional desktop notification when a step
+  finishes in the background. The Files tab's Open and Show in folder now
+  open the file (they were wired to no-ops).
+
+### Fixed
+- Job Search Desk first-use fixes, after walking through it as someone who has
+  never opened it. Signing in opened two claude.ai tabs: Claude Code opens the
+  browser itself and prints the same URL as a fallback, and the desk opened it
+  again; the desk now shows that URL as an "Open the sign-in page" link and
+  never opens a tab of its own. Clicking a step in the left column put up a
+  form of raw argument names (`mode`, `focus`, `url`, `posting`) before doing
+  anything; Setup, Scrape, Rank, Interview, and Outcome now run on the click,
+  Apply asks for one thing (a link, or the pasted posting), and Autofill asks
+  for the form link. The conversation could not scroll at all: the page grid
+  had no bounded row, so the log grew past the window and was clipped. Every
+  streamed token rebuilt the whole log, which re-ran each card's entrance
+  animation (the "pulse") and undid any scroll-up; cards are now updated in
+  place and only new ones animate. Nothing said Claude was working except
+  10px text in the footer; the chat now shows *Thinking*, the tool and file in
+  use (*Reading cv/main.tex*), or *Writing* until the reply lands. Thinking
+  blocks, usage, hooks, and session status painted empty cards labelled
+  "Stopped", the final result was rendered a second time under the streamed
+  text, and your own message appeared twice in browser mode; all gone. The
+  installed app never recorded your messages, so a reload replayed only
+  Claude's side, and its first event of every turn was dropped as a replay
+  because the local echo consumed its sequence number; user messages are now
+  persisted server-side and local placeholders no longer touch the cursor.
+  Follow-ups typed while a turn runs get their own turn (and their own reply
+  card) instead of merging into the previous reply. The Terminal tab is
+  hidden in the browser, where it cannot attach.
+- Job Search Desk deep audit, second pass. In the installed app, Claude's
+  questions (AskUserQuestion) and Safe-mode permission prompts never reached
+  the page: the Agent SDK delivers both through its `canUseTool` callback, the
+  runtime registered them but published nothing, questions painted as a
+  "Using AskUserQuestion" chip, permissions timed out after five minutes, and
+  answers went out as chat text the SDK ignored. They are now events the page
+  renders (options with descriptions and a "Something else" box; permission
+  cards with the SDK's own title and an honest "Allow for the rest of this
+  chat" when that is all a rule can do), and the answer returns as the
+  callback's result keyed by question text. New chat in the app silently
+  dropped every later reply and rejected every send (old pump epoch, stale
+  controller generation, and a replay cursor that outlived the reset); it now
+  restarts the adapter on a fresh Claude session and pushes the new snapshot.
+  A dead SDK stream, a forced Stop, or a turn left open by the previous launch
+  no longer leaves "Working" on screen forever. Print mode: Stop escalates to
+  SIGKILL after five seconds, a failed turn shows one Problem card carrying
+  Claude's stderr instead of "exit code 1" alone (and an error result is no
+  longer painted three times), a signal death and a synchronous spawn failure
+  are reported, the transcript trims on message boundaries with a notice, the
+  page rebuilds from the server snapshot on every reconnect, and Claude's
+  questions are shown read-only with "type your answer below". Sign-in: the
+  desk no longer feeds a newline into the login (the CLI answered "Invalid
+  code" before anyone typed), Cancel is not reported as a failure, a reload
+  rejoins a sign-in already in progress, a failed status check offers Try
+  again instead of hiding the gate, and installer URLs are never offered as
+  the sign-in link. Rejections from the runtime are plain-language notices
+  that say which message or answer they concern instead of ending the turn.
+- Job Search Desk deep audit, third pass, from finders that drove the page in
+  a browser and read every string as a first-time user. A long reply froze
+  the page because every token re-rendered the whole reply's markdown; paints
+  are now coalesced to one per frame. The browser desk keeps its conversation
+  in `.claude/desk/transcript.json`, so a crash or restart mid-turn comes back
+  with the conversation and a note instead of a blank page; tool chips and
+  reply segments survive a reload too. Closing the terminal window (SIGHUP)
+  now stops Claude as the startup text promises. Stop leaves "Stopped. Claude's
+  reply was cut off here." in the conversation; New chat during a running turn
+  says it is closing the old conversation instead of "Ready"; a step clicked
+  while Claude is busy explains why nothing happened, and a pasted posting is
+  never thrown away by a busy send. Links in replies open in a new tab and
+  remote images are not fetched. A stale saved session is reported as a card,
+  an error result no longer swaps reply and problem order after a reload, and
+  when Claude's stderr ends in a clear sentence that sentence leads the
+  Problem card. First run in the app leads with "Start a new job search" in
+  plain words, turns git and download failures into sentences, shows a
+  starting page at once, and "Open in a terminal" also opens the desk. The
+  Terminal tab works on every visit, asks for a first chat message when there
+  is nothing to continue, and hands the conversation back to Chat when Claude
+  Code exits inside it. The header says "Works on its own" or "Asks before
+  acting" with a tooltip, "Open CLI" is "Open in Terminal", the session id is
+  gone, every "repo", "workspace" and "artifact" reads as folder and files,
+  step descriptions say what a click does, and a "More steps…" button reaches
+  the nine commands that were only behind Ctrl+K. Accessibility: only turn
+  ends, questions and permissions are announced (the whole log was a live
+  region), dialogs are named, focus never lands on a disabled button or a
+  hidden drawer, Files keeps keyboard focus after arrow keys, the header wraps
+  and Files stacks on narrow screens, the Latest button sits above the
+  composer, and the status line is legible.
+- Job Search Desk review pass over the three audits above. In the installed
+  app: a send during a WebSocket reconnect no longer falls back to print mode
+  with permissions skipped; New chat clears the page only once the runtime
+  confirms, so an in-flight event cannot wedge the replay cursor (and the
+  cursor also resets on every socket, not just the one that asked); the turn
+  is claimed before the prompt reaches Claude; follow-ups queued behind a
+  crash are reported instead of lost; a good turn restores the one-restart
+  budget; questions and approvals wait as long as the person needs (no
+  five-minute auto-deny); a runtime command that throws answers the page
+  instead of crashing the process; a rejected send puts the typed text back
+  in the composer; a follow-up sent mid-turn no longer resets the reply
+  segment; a replaced terminal's exit cannot hand back the newer terminal's
+  turn. Browser mode: the transcript cap counts turns, not tool rows; tool
+  rows store only what the page shows, and the file is written whole, private
+  and flushed on shutdown; a folder switch keeps the Stop escalation armed and
+  shutdown escalates too; the "no reply" check no longer misfires after a
+  tool call; parallel same-name tools keep their own inputs; process signal
+  handlers are registered once. Markdown from Claude is sanitised without
+  forms, buttons, data attributes or ids the desk's own handlers could act
+  on. First run accepts an empty folder already named ai-job-search. Small
+  things a walkthrough caught: the Apply sheet can be prepared while Claude
+  works, a blocked click posts one notice rather than a stack of them,
+  "Continuing from last time" appears only when a conversation was restored,
+  Escape closes the palette with a filter typed, and focus is checked after
+  a dialog closes rather than before.
+
 ### Changed
 - Public README describes this US Job Search Desk product. Credit for the
   original methodology stays in Acknowledgements; Ko-fi, the upstream hiring

@@ -3,7 +3,7 @@
  * missing (common after a Start Menu launch), download the public zip instead.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, rename, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
@@ -150,10 +150,41 @@ async function downloadTemplate(dest) {
   }
 }
 
+// Git and Node print their failures for developers; the first-run screen
+// shows this text to someone who has never opened a terminal.
+export function humanWorkspaceError(raw) {
+  const text = String(raw || "");
+  if (/ENOTFOUND|ETIMEDOUT|ECONNRESET|ECONNREFUSED|Could not resolve host|unable to access|network|EAI_AGAIN/i.test(text)) {
+    return "Desk could not reach the internet to download its files. Check your connection and try again.";
+  }
+  if (/EACCES|EPERM|Permission denied/i.test(text)) {
+    return "Desk is not allowed to write in that place. Pick a folder inside your home folder, such as Documents.";
+  }
+  if (/ENOSPC/i.test(text)) return "There is not enough free disk space to download the files.";
+  if (!text) return "The download did not finish. Try again.";
+  return `The download did not finish. Try again. (${text.split("\n")[0].slice(0, 160)})`;
+}
+
 export async function createWorkspace(dest, env = process.env) {
   if (existsSync(dest)) {
     if (isJobSearchWorkspace(dest)) return { ok: true };
-    return { error: `${dest} already exists and is not a job-search repo.` };
+    let entries = null;
+    try {
+      entries = readdirSync(dest);
+    } catch {
+      entries = null;
+    }
+    // An empty folder the person made themselves is fine to fill.
+    if (!entries || entries.length) {
+      return { error: `${dest} already exists and was not created by Job Search Desk. Pick an empty place, or open the folder Desk made earlier.` };
+    }
+    // The clone and the download both create the folder; remove the empty
+    // one so a rename onto it cannot fail on Windows.
+    try {
+      rmdirSync(dest);
+    } catch {
+      // Leave it; git clone copes with an empty target.
+    }
   }
 
   const cloned = await cloneWithGit(dest, env);
@@ -181,7 +212,7 @@ export async function createWorkspace(dest, env = process.env) {
     };
   }
   return {
-    error: `${cloned.error} ${downloaded.error || ""}`.trim(),
+    error: humanWorkspaceError(`${cloned.error} ${downloaded.error || ""}`.trim()),
   };
 }
 
@@ -252,10 +283,12 @@ export function workspaceScanParents(home = homedir(), platform = process.platfo
     .filter((dir) => existsSync(dir));
 }
 
+export const NOT_A_WORKSPACE_TEXT = "That folder was not created by Job Search Desk. Pick the folder Desk made earlier, or choose Start a new job search to create one.";
+
 export function existingWorkspaceHint(home = homedir(), platform = process.platform, env = process.env) {
   const labels = [...new Set(workspaceLocationPlan(platform, home, env).parents.map((item) => item.label))];
   const browse = defaultBrowseDir(home, platform, env);
-  return `This ${platformLabel(platform)} build looks in ${formatList(labels)}. Open a folder that already has AGENTS.md and gui/. The folder picker starts in ${browse}.`;
+  return `First time here? Choose Start a new job search. Already have a Job Search Desk folder? On ${platformLabel(platform)}, Desk looks in ${formatList(labels)}; the folder picker starts in ${browse}.`;
 }
 
 export function openFolderHint(home = homedir(), platform = process.platform, env = process.env) {
@@ -333,7 +366,7 @@ export function readSharedWorkspace(home = homedir(), platform = process.platfor
 
 export function writeSharedWorkspace(root, home = homedir(), platform = process.platform, env = process.env) {
   if (!isJobSearchWorkspace(root)) {
-    return { error: "That folder is not a job-search repo. It needs AGENTS.md and gui/." };
+    return { error: NOT_A_WORKSPACE_TEXT };
   }
   const dir = sharedStateDir(home, platform, env);
   mkdirSync(dir, { recursive: true });
@@ -378,7 +411,7 @@ export function hasBinary(bin, env = process.env) {
  * pre-quoted path comes out as \" escapes that cmd.exe cannot parse.
  */
 export function windowsCliLaunch(command, ready) {
-  return ready ? command : "echo Claude Code is missing. Install it, then run claude here. Desk already uses this folder.";
+  return ready ? command : "echo Claude Code is not installed yet. Open Job Search Desk and it will install it for you.";
 }
 
 function openCliTerminal(root, command, env) {
@@ -399,7 +432,7 @@ function openCliTerminal(root, command, env) {
   if (process.platform === "darwin") {
     const script = ready
       ? `cd ${JSON.stringify(root)} && exec ${JSON.stringify(command)}`
-      : `cd ${JSON.stringify(root)} && echo Claude Code is missing. Install it, then run claude here.`;
+      : `cd ${JSON.stringify(root)} && echo Claude Code is not installed yet. Open Job Search Desk and it will install it for you.`;
     const child = spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`], {
       detached: true,
       stdio: "ignore",
@@ -422,7 +455,7 @@ function openCliTerminal(root, command, env) {
     child.unref();
     return { ok: true, root };
   }
-  return { error: "Could not open a terminal. Run node gui/server.mjs --cli from this folder." };
+  return { error: "Could not open a terminal window on this computer. You can keep working here; nothing is lost." };
 }
 
 export function startCli(root, { inherit = false, env = process.env } = {}) {
