@@ -368,6 +368,10 @@ body.working .workline {
   font-size: 0.66rem;
 }
 
+/* The status line is where Stop, New chat and reconnect problems are told;
+   10px text is not a place to say "the desk stopped". */
+.status, .first-run-status { font-size: 0.8rem; font-family: var(--sans); }
+
 .session::before,
 body.working .status::before {
   content: "";
@@ -813,10 +817,12 @@ body.working .status::before {
 
 .gate-link-wrap a { color: var(--brass); }
 
+.surface { position: relative; }
+
 .jump {
   position: absolute;
   right: 1.6rem;
-  bottom: 15.5rem;
+  bottom: 1rem;
   z-index: 4;
   padding: 0.4rem 0.7rem;
   background: rgba(22, 19, 15, 0.9);
@@ -872,7 +878,7 @@ body.working .status::before {
   transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
 }
 
-#prompt::placeholder { color: rgba(154, 141, 125, 0.72); }
+#prompt::placeholder { color: var(--fade); opacity: 0.8; }
 #prompt:focus {
   outline: 0;
   border-color: rgba(208, 138, 58, 0.72);
@@ -1209,8 +1215,13 @@ body.gated .stage {
   .composer-meta .hint { display: none; }
   .clock { display: none; }
   .bar, .log, .composer { padding-left: 1rem; padding-right: 1rem; }
-  .jump { right: 1rem; bottom: 15rem; }
+  .bar { flex-wrap: wrap; align-items: start; }
+  .bar-actions { flex-wrap: wrap; width: 100%; justify-content: flex-end; }
+  #open-cli, #reset, #stop { white-space: nowrap; }
+  .jump { right: 1rem; }
   .msg.user { max-width: 100%; }
+  .artifact-view { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .artifact-list { max-height: 40vh; }
 }
 
 .surface-tabs {
@@ -1314,7 +1325,6 @@ body.gated .stage {
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 1rem;
-  outline: none;
 }
 
 .artifact-list {
@@ -1376,6 +1386,32 @@ body.gated .stage {
   gap: 0.45rem;
   align-items: center;
 }
+
+.artifact-actions button, .artifact-confirm button {
+  font: inherit;
+  cursor: pointer;
+  background: var(--paper);
+  color: var(--ink);
+  border: 0;
+  padding: 0.5rem 0.85rem;
+  font-weight: 500;
+}
+.artifact-actions button.ghost, .artifact-confirm button.ghost {
+  background: transparent;
+  color: var(--paper);
+  border: 1px solid var(--line-strong);
+}
+.artifact-actions button:disabled { opacity: 0.42; cursor: default; }
+
+.mode-label[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 0.2em; }
+
+.q-list { margin: 0.3rem 0 0.6rem; padding-left: 1.3rem; font-family: var(--sans); font-size: 0.95rem; }
+.q-list li { margin: 0.25rem 0; }
+.q-list em { display: block; color: var(--fade); font-style: normal; font-size: 0.82rem; }
+
+.msg.error details { margin-top: 0.6rem; }
+.msg.error summary { cursor: pointer; font-size: 0.85rem; color: var(--fade); }
+.msg.error pre { margin: 0.4rem 0 0; white-space: pre-wrap; font-family: var(--mono); font-size: 0.74rem; color: var(--fade); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

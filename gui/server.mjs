@@ -108,9 +108,9 @@ function send(event, data) {
   for (const res of clients) res.write(payload);
 }
 
-function sendTurnError(text) {
-  send("turn-error", { text });
-  pushTranscript({ role: "error", text });
+function sendTurnError(text, detail = "") {
+  send("turn-error", { text, detail });
+  pushTranscript({ role: "error", text, detail });
 }
 
 function snapshot(withTranscript = false) {
@@ -460,7 +460,7 @@ function runClaude(prompt, { retried = false } = {}) {
       if (signal) failure = `Claude stopped unexpectedly (${signal}).`;
       else if (!code && !hadReply) failure = "Claude finished without sending a reply. Try sending the message again.";
     }
-    if (failure) sendTurnError(errTail ? `${failure}\n\n${errTail}` : failure);
+    if (failure) sendTurnError(failure, errTail);
     send("idle", snapshot());
   });
 }
@@ -933,6 +933,11 @@ export async function startDesk(options = {}) {
     throw new Error(existingWorkspaceHint());
   }
   rememberWorkspace(workspace);
+  // A previous desk in this process (a folder switch) may still own a Claude
+  // turn or a sign-in helper; stop them before the shared state is reset, or
+  // they would run on unobserved.
+  stopClaude("Switching folders");
+  stopHelper();
   // A workspace switch must not carry the previous desk's turn state into the
   // new folder: a dying child's close handler would otherwise save the old
   // session id into the new workspace's desk-session.json.

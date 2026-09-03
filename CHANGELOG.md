@@ -39,6 +39,33 @@ per-file diff commands.
   Follow-ups typed while a turn runs get their own turn (and their own reply
   card) instead of merging into the previous reply. The Terminal tab is
   hidden in the browser, where it cannot attach.
+- Job Search Desk deep audit, second pass. In the installed app, Claude's
+  questions (AskUserQuestion) and Safe-mode permission prompts never reached
+  the page: the Agent SDK delivers both through its `canUseTool` callback, the
+  runtime registered them but published nothing, questions painted as a
+  "Using AskUserQuestion" chip, permissions timed out after five minutes, and
+  answers went out as chat text the SDK ignored. They are now events the page
+  renders (options with descriptions and a "Something else" box; permission
+  cards with the SDK's own title and an honest "Allow for the rest of this
+  chat" when that is all a rule can do), and the answer returns as the
+  callback's result keyed by question text. New chat in the app silently
+  dropped every later reply and rejected every send (old pump epoch, stale
+  controller generation, and a replay cursor that outlived the reset); it now
+  restarts the adapter on a fresh Claude session and pushes the new snapshot.
+  A dead SDK stream, a forced Stop, or a turn left open by the previous launch
+  no longer leaves "Working" on screen forever. Print mode: Stop escalates to
+  SIGKILL after five seconds, a failed turn shows one Problem card carrying
+  Claude's stderr instead of "exit code 1" alone (and an error result is no
+  longer painted three times), a signal death and a synchronous spawn failure
+  are reported, the transcript trims on message boundaries with a notice, the
+  page rebuilds from the server snapshot on every reconnect, and Claude's
+  questions are shown read-only with "type your answer below". Sign-in: the
+  desk no longer feeds a newline into the login (the CLI answered "Invalid
+  code" before anyone typed), Cancel is not reported as a failure, a reload
+  rejoins a sign-in already in progress, a failed status check offers Try
+  again instead of hiding the gate, and installer URLs are never offered as
+  the sign-in link. Rejections from the runtime are plain-language notices
+  that say which message or answer they concern instead of ending the turn.
 
 ### Changed
 - Public README describes this US Job Search Desk product. Credit for the

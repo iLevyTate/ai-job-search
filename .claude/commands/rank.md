@@ -3,7 +3,7 @@ desk:
   id: rank
   invocation: /rank
   title: Rank
-  description: Score scraped jobs into a ranked shortlist.
+  description: Sort the jobs found so far by how well they fit you.
   primaryOrder: 3
   arguments:
     - kind: text

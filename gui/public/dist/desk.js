@@ -9151,6 +9151,7 @@ ${h2.join(`
       controller: seed.controller ?? "chat",
       controllerGeneration: seed.controllerGeneration ?? 1,
       conversationId: seed.conversationId ?? null,
+      sessionId: seed.sessionId ?? null,
       busy: Boolean(seed.busy),
       // True between Claude opening a thinking block and the first visible
       // output (text or a tool call). The chat shows "Thinking" while it holds.
@@ -9273,6 +9274,9 @@ ${incoming}`;
     if (typeof event.payload?.permissionMode === "string") {
       next.permissionMode = event.payload.permissionMode;
     }
+    if (typeof event.payload?.sessionId === "string" && event.payload.sessionId) {
+      next.sessionId = event.payload.sessionId;
+    }
     if (event.type === "session.status" && event.payload?.controller) {
       next.controller = event.payload.controller;
     }
@@ -9343,6 +9347,7 @@ ${incoming}`;
     if (snapshot.controller) next.controller = snapshot.controller;
     if (snapshot.controllerGeneration != null) next.controllerGeneration = snapshot.controllerGeneration;
     if (snapshot.conversationId) next.conversationId = snapshot.conversationId;
+    if ("sessionId" in snapshot) next.sessionId = snapshot.sessionId ?? null;
     if (snapshot.busy != null) {
       next.busy = Boolean(snapshot.busy);
       if (!next.busy) next.thinking = false;
@@ -9404,7 +9409,6 @@ ${incoming}`;
     const document2 = container.ownerDocument;
     container.replaceChildren();
     container.classList.add("artifact-view");
-    container.tabIndex = 0;
     if (state2.status === "loading") {
       container.innerHTML = `<div class="empty" data-state="loading"><p class="kicker">${escapeHtml(title)}</p><h2>Loading files\u2026</h2></div>`;
       return;
@@ -9414,7 +9418,7 @@ ${incoming}`;
       return;
     }
     if (state2.status === "empty" || !state2.artifacts.length) {
-      container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No artifacts yet.</h2><p>Generated CVs, letters, and reports will appear here.</p></div>`;
+      container.innerHTML = `<div class="empty" data-state="empty"><p class="kicker">${escapeHtml(title)}</p><h2>No files yet.</h2><p>When Claude writes a CV, cover letter, or report, it shows up here.</p></div>`;
       return;
     }
     const list = document2.createElement("div");
@@ -9450,7 +9454,7 @@ ${incoming}`;
     }
     const actions = document2.createElement("div");
     actions.className = "artifact-actions";
-    for (const [action, label] of [["preview", "Preview"], ["compare", "Compare"], ["open", "Open"], ["reveal", "Reveal"]]) {
+    for (const [action, label] of [["preview", "Preview"], ["compare", "What changed"], ["open", "Open"], ["reveal", "Show in folder"]]) {
       const button = document2.createElement("button");
       button.type = "button";
       button.dataset.artifactAction = action;
@@ -9463,7 +9467,7 @@ ${incoming}`;
       const confirm2 = document2.createElement("div");
       confirm2.className = "artifact-confirm";
       confirm2.dataset.confirm = state2.confirm.action;
-      confirm2.innerHTML = `<p>${state2.confirm.action === "open" ? "Open this file with the operating system?" : "Reveal this file in the file manager?"}</p>
+      confirm2.innerHTML = `<p>${state2.confirm.action === "open" ? "Open this file in its usual app (for example Word or your PDF viewer)?" : "Show this file in its folder?"}</p>
       <button type="button" data-confirm="yes">Continue</button>
       <button type="button" class="ghost" data-confirm="no">Cancel</button>`;
       actions.append(confirm2);
@@ -9895,7 +9899,11 @@ ${multiline}` : rendered;
       return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
     }).join("");
     if (readOnly) {
-      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${blocks}<p class="hint">Type your answer in the box below and send it.</p></div>`;
+      const list = questions.map((question) => {
+        const options = (question.options || []).map((option) => `<li><strong>${escapeHtml2(option.label)}</strong>${option.description ? `<em>${escapeHtml2(option.description)}</em>` : ""}</li>`).join("");
+        return `<p class="q-text">${escapeHtml2(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
+      }).join("");
+      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Reply in the message box at the bottom of the page, for example with the number or the name of the option you want.</p></div>`;
     }
     const footer = card.entered ? `<p class="hint">${card.payload.answered === false ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered." : "Answered."}</p>` : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
     return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${blocks}${footer}</form>`;
@@ -9928,11 +9936,11 @@ ${multiline}` : rendered;
     const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml2(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml2(rawUrl)}</a></p>` : `<p>${escapeHtml2(rawUrl)}</p>` : "";
     const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml2(card.payload.screenshot)}</p>` : "";
     return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml2(card.id)}" data-token="${escapeHtml2(card.payload.token || "")}">
-    <p>The form is filled. Submit stays in the browser. Continue closes Autofill; Cancel stops it.</p>
+    <p>Claude filled in the application form but did not send it. Open the form in your browser, check every field, and click the employer's own Submit button yourself. Then press Done here so Claude can log it, or Cancel to abandon this application.</p>
     ${url}
     ${shot}
     <div class="sheet-actions">
-      <button type="button" data-decision="continue"${disabled}>Continue</button>
+      <button type="button" data-decision="continue"${disabled}>Done, I submitted it</button>
       <button type="button" data-decision="cancel" class="ghost"${disabled}>Cancel</button>
     </div>
   </div>`;
@@ -9950,6 +9958,9 @@ ${multiline}` : rendered;
       return `<p class="tool done">Saved ${escapeHtml2(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
+    if (card.type === "turn.failed" && card.payload.detail) {
+      return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml2(card.payload.detail)}</pre></details>`;
+    }
     if (card.type === "subagent.activity") {
       const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
       const body = markdown2 ? markdown2(text) : `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
@@ -10028,7 +10039,7 @@ ${multiline}` : rendered;
     if (activity) {
       const row = document2.createElement("div");
       row.className = "activity";
-      row.setAttribute("role", "status");
+      row.setAttribute("aria-hidden", "true");
       row.dataset.activity = activity;
       row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml2(activity)}\u2026</span>`;
       container.append(row);
@@ -10058,6 +10069,7 @@ ${multiline}` : rendered;
 
   // public/src/desk.js
   var logEl = document.getElementById("panel-chat");
+  var announceEl = document.getElementById("announce");
   var statusEl = document.getElementById("status");
   var sessionEl = document.getElementById("session-label");
   var workspaceEl = document.getElementById("workspace-label");
@@ -10080,6 +10092,7 @@ ${multiline}` : rendered;
   var scrim = document.getElementById("scrim");
   var jumpBtn = document.getElementById("jump");
   var stepsEl = document.querySelector(".steps");
+  var dock = document.getElementById("dock");
   var filesEl = document.getElementById("panel-files");
   var palette = document.getElementById("palette");
   var paletteQuery = document.getElementById("palette-query");
@@ -10121,7 +10134,7 @@ ${multiline}` : rendered;
       return `<div class="empty" id="empty">
       <p class="kicker">Clean slate</p>
       <h2>New conversation.</h2>
-      <p>The page is clear. Your job-search files remain in the same workspace.</p>
+      <p>The page is clear. Your files are still in your job-search folder.</p>
       <div class="suggestions" aria-label="Suggested starts">
         <button type="button" data-action="scrape">Find openings</button>
         <button type="button" data-action="rank">Rank what we have</button>
@@ -10132,10 +10145,10 @@ ${multiline}` : rendered;
     return `<div class="empty" id="empty">
     <p class="kicker">Ready when you are</p>
     <h2>Start wherever you are.</h2>
-    <p>First day in this repo? Run <strong>Setup</strong>. Profile already filled? <strong>Scrape</strong> for roles, then talk the same way you would in the terminal.</p>
+    <p>New here? Start with <strong>Setup</strong>: it asks a few questions about you, once. Already set up? Click <strong>Find jobs</strong> to search the job boards, or just type what you need below.</p>
     <div class="empty-actions">
       <button type="button" data-action="setup">Start with setup</button>
-      <button type="button" data-action="scrape" class="ghost">I am already set up</button>
+      <button type="button" data-action="scrape" class="ghost">Find jobs now</button>
     </div>
     <div class="suggestions" aria-label="Suggested starts">
       <button type="button" data-prompt="Which of these roles should I prioritize this week?">Prioritize this week</button>
@@ -10177,9 +10190,17 @@ ${multiline}` : rendered;
   }
   function paintMode() {
     if (!modeEl) return;
-    const label = state.permissionMode === "autonomous" ? "Autonomous" : "Safe";
-    modeEl.textContent = label;
+    const autonomous = state.permissionMode === "autonomous";
+    modeEl.textContent = autonomous ? "Works on its own" : "Asks before acting";
+    modeEl.title = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
     modeEl.dataset.mode = state.permissionMode;
+  }
+  function announce(text) {
+    if (!announceEl) return;
+    announceEl.textContent = "";
+    window.setTimeout(() => {
+      announceEl.textContent = text;
+    }, 50);
   }
   function paintChat() {
     renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : void 0) });
@@ -10196,7 +10217,7 @@ ${multiline}` : rendered;
   function setWorkspaceLabel(root) {
     if (!workspaceEl || !root) return;
     workspaceEl.textContent = root;
-    workspaceEl.title = "Desk and Claude Code both write scrapes, CVs, and applications here";
+    workspaceEl.title = "Your job-search folder. Everything Claude finds or writes is saved here.";
   }
   function setSessionLabel(data = {}) {
     setWorkspaceLabel(data.workspace);
@@ -10204,7 +10225,7 @@ ${multiline}` : rendered;
       sessionEl.textContent = data.sessionId ? `${data.chromeGroup} \xB7 Chrome group` : `${data.chromeGroup} \xB7 waiting for Chrome`;
       return;
     }
-    sessionEl.textContent = data.sessionId ? `Session ${data.sessionId.slice(0, 8)}` : "New session";
+    sessionEl.textContent = data.sessionId ? "Continuing from last time" : "New conversation";
   }
   function sizePrompt() {
     promptEl.style.height = "auto";
@@ -10223,6 +10244,12 @@ ${multiline}` : rendered;
     state = reduceDeskEvent(state, event);
     paintChat();
     if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
+    if (!replayingTranscript) {
+      if (event.type === "turn.completed") announce("Claude replied.");
+      else if (event.type === "turn.failed") announce(`Problem: ${event.payload?.text || "the turn failed."}`);
+      else if (event.type === "question.requested") announce("Claude has a question for you.");
+      else if (event.type === "permission.requested") announce("Claude is asking for permission.");
+    }
     if (event.type === "artifact.discovered") {
       const incoming = {
         id: event.payload.artifactId || event.payload.entityId,
@@ -10504,7 +10531,7 @@ ${multiline}` : rendered;
     try {
       for (const entry of data.transcript || []) {
         const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : entry.role === "notice" ? "desk.notice" : "turn.failed";
-        sseEvent(type, { text: entry.text || "" });
+        sseEvent(type, { text: entry.text || "", detail: entry.detail });
       }
     } finally {
       replayingTranscript = false;
@@ -10549,7 +10576,10 @@ ${multiline}` : rendered;
   source.addEventListener("log", () => {
   });
   source.addEventListener("turn-error", (event) => {
-    if (event.data && !runtimeSocket) sseEvent("turn.failed", { text: JSON.parse(event.data).text });
+    if (!event.data || runtimeSocket) return;
+    const data = JSON.parse(event.data);
+    sseEvent("turn.failed", { text: data.text, detail: data.detail });
+    if (/not installed/i.test(data.text || "")) checkClaude();
   });
   source.addEventListener("autofill-review", (event) => {
     const payload = JSON.parse(event.data);
@@ -10586,9 +10616,10 @@ ${multiline}` : rendered;
       try {
         const res = await fetch("/workspace/cli", { method: "POST" });
         const data = await res.json();
-        statusEl.textContent = data.error || `Claude Code opened in ${data.root}`;
+        if (data.error) notice(data.error);
+        else statusEl.textContent = "A terminal window opened in your job-search folder. You can keep working here too.";
       } catch {
-        statusEl.textContent = "Could not open Claude Code in this folder.";
+        notice("Could not open a terminal window on this computer. You can keep working here; nothing is lost.");
       } finally {
         openCliBtn.disabled = false;
       }
@@ -10632,9 +10663,9 @@ ${multiline}` : rendered;
     if (runtimeSend({ type: "turn.interrupt" })) return;
     try {
       const res = await post("/stop");
-      if (!res.ok) statusEl.textContent = "Could not stop the current turn.";
+      if (!res.ok) notice("Could not stop Claude. Try Stop again, or close this tab and open the desk again.");
     } catch {
-      statusEl.textContent = "Could not stop the current turn.";
+      notice("Could not stop Claude: the desk is not reachable. Close this tab and open the desk again.");
     }
   });
   resetBtn.addEventListener("click", async () => {
@@ -10643,11 +10674,11 @@ ${multiline}` : rendered;
       try {
         const res = await post("/reset");
         if (!res.ok) {
-          statusEl.textContent = "Could not start a new conversation.";
+          notice("Could not start a new conversation. Try again in a moment.");
           return;
         }
       } catch {
-        statusEl.textContent = "Could not start a new conversation.";
+        notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
         return;
       }
     }
@@ -10724,6 +10755,15 @@ ${multiline}` : rendered;
     state = markEntered(state, id);
     paintChat();
   });
+  function restoreFocusAfterDialog() {
+    const active = document.activeElement;
+    const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
+    if (!active || active === document.body || inHiddenDock) {
+      (menuBtn.offsetParent ? menuBtn : promptEl).focus();
+    }
+  }
+  sheet.addEventListener("close", restoreFocusAfterDialog);
+  palette.addEventListener("close", restoreFocusAfterDialog);
   paletteQuery?.addEventListener("input", () => {
     renderPaletteList(paletteList, filterCommands(commands, paletteQuery.value));
   });
@@ -10750,11 +10790,21 @@ ${multiline}` : rendered;
       openPalette();
     }
   });
+  var terminalSubscriptions = [];
+  var selectedTab = "chat";
+  function terminalPlaceholder(host, title, copy) {
+    host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>${title}</h2><p>${copy}</p></div>`;
+  }
   async function ensureTerminal() {
     const host = document.getElementById("panel-terminal");
     const bridge = window.deskApp?.terminal;
-    if (!host || !bridge || terminalView) {
-      terminalView?.focus();
+    if (!host || !bridge) return;
+    if (terminalView) {
+      terminalView.focus();
+      return;
+    }
+    if (!state.sessionId) {
+      terminalPlaceholder(host, "Send one message in Chat first.", "The terminal continues the same conversation, so it needs one to continue.");
       return;
     }
     let Terminal;
@@ -10783,30 +10833,59 @@ ${multiline}` : rendered;
       }
     });
     terminalView.mount(xtermHost);
-    bridge.onData((payload) => {
-      if (payload?.data) terminalView.write(payload.data);
-    });
-    bridge.onExit(() => {
-      terminalView.setInputEnabled(false);
-      releaseTerminal();
-    });
+    const view = terminalView;
+    terminalSubscriptions = [
+      bridge.onData((payload) => {
+        if (payload?.data && terminalView === view) view.write(payload.data);
+      }),
+      bridge.onExit((payload) => {
+        if (terminalView !== view) return;
+        view.setInputEnabled(false);
+        if (payload?.snapshot) {
+          state = applySnapshot(state, payload.snapshot);
+          syncBusy();
+        }
+        releaseTerminal();
+        terminalPlaceholder(host, "Claude Code closed.", "Switch to Chat to keep going, or open this tab again to start the terminal.");
+      })
+    ].filter((stop) => typeof stop === "function");
     const started = await bridge.start({
       expectedControllerGeneration: state.controllerGeneration,
       cols: 80,
       rows: 24
     });
     if (!started?.ok) {
-      terminalView.dispose();
-      terminalView = null;
-      host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>Could not attach Claude.</h2><p>Stay in Chat. Open CLI still works for the same workspace.</p></div>`;
+      disposeTerminalView();
+      terminalPlaceholder(host, "Could not attach Claude.", started?.error === "session-id-required" ? "Send one message in Chat first; the terminal continues that conversation." : "Stay in Chat; everything works there. Open in Terminal still opens Claude Code in the same folder.");
       return;
     }
     terminalId = started.terminalId;
+    if (selectedTab !== "terminal") {
+      await releaseTerminal();
+      return;
+    }
     state = applySnapshot(state, started.snapshot || { controller: "terminal" });
     syncBusy();
     terminalView.focus();
   }
+  function disposeTerminalView() {
+    for (const stop of terminalSubscriptions) {
+      try {
+        stop();
+      } catch {
+      }
+    }
+    terminalSubscriptions = [];
+    terminalView?.dispose();
+    terminalView = null;
+  }
   async function releaseTerminal() {
+    const host = document.getElementById("panel-terminal");
+    const hadView = Boolean(terminalView);
+    disposeTerminalView();
+    if (hadView && host && !host.querySelector(".empty")) {
+      terminalPlaceholder(host, "Claude Code, same conversation.", "Attaching the terminal\u2026");
+    }
     if (!terminalId) return;
     const bridge = window.deskApp?.terminal;
     const id = terminalId;
@@ -10828,6 +10907,7 @@ ${multiline}` : rendered;
     tabs: surfaceTabs,
     selectedId: "chat",
     onSelect(id) {
+      selectedTab = id;
       if (id === "files") loadArtifacts();
       if (id === "terminal") ensureTerminal();
       if (id !== "terminal") releaseTerminal();
@@ -10863,6 +10943,7 @@ ${multiline}` : rendered;
       event.preventDefault();
       artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
       paintFiles();
+      filesEl.querySelector(`[data-artifact-id="${CSS.escape(artifactState.selectedId || "")}"]`)?.focus();
     }
   });
   paintChat();
@@ -10904,7 +10985,7 @@ ${multiline}` : rendered;
     if (copy) gateCopy.textContent = copy;
     if (open) {
       setMenu(false);
-      gateAction.focus();
+      gate.querySelector(".gate-card")?.focus();
     } else {
       promptEl.focus();
     }
@@ -10951,12 +11032,12 @@ ${multiline}` : rendered;
       return true;
     }
     if (needsInstall(health)) {
-      setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+      setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then opens a claude.ai sign-in page. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
       gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Install and sign in";
       return false;
     }
     if (needsLogin(health)) {
-      setGate(true, "Starting Claude Code", "One claude.ai tab will open in your browser. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+      setGate(true, "Starting Claude Code", "A claude.ai sign-in page will open in your browser. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
       gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Sign in with Claude";
       return false;
     }
@@ -10971,6 +11052,7 @@ ${multiline}` : rendered;
   }
   async function bootstrapClaude() {
     gateAction.disabled = true;
+    gateAction.textContent = "Working\u2026";
     gateCancel.hidden = false;
     try {
       let health = await readHealth();

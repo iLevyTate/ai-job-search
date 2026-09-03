@@ -200,7 +200,8 @@ test("print mode shows a read-only question and permission cards use the SDK tit
   renderChat(root, state);
   const question = root.querySelector('[data-card-id="tool-q"]');
   assert.equal(question.querySelector("form"), null, "nothing to submit in print mode");
-  assert.ok(question.textContent.includes("Type your answer in the box below"));
+  assert.ok(question.textContent.includes("Reply in the message box"));
+  assert.ok(question.querySelector(".q-list li strong")?.textContent === "Healthcare", "choices listed plainly");
   const permission = root.querySelector('[data-card-id="req-p"]');
   assert.ok(permission.textContent.includes("Claude wants to run rm -rf build"));
   assert.equal(permission.querySelector('[data-decision="allow-scoped"]'), null);

@@ -28,6 +28,7 @@ import {
 } from "./chat-view.js";
 
 const logEl = document.getElementById("panel-chat");
+const announceEl = document.getElementById("announce");
 const statusEl = document.getElementById("status");
 const sessionEl = document.getElementById("session-label");
 const workspaceEl = document.getElementById("workspace-label");
@@ -50,6 +51,7 @@ const menuBtn = document.getElementById("menu");
 const scrim = document.getElementById("scrim");
 const jumpBtn = document.getElementById("jump");
 const stepsEl = document.querySelector(".steps");
+const dock = document.getElementById("dock");
 const filesEl = document.getElementById("panel-files");
 const palette = document.getElementById("palette");
 const paletteQuery = document.getElementById("palette-query");
@@ -98,7 +100,7 @@ function emptyMarkup(kind) {
     return `<div class="empty" id="empty">
       <p class="kicker">Clean slate</p>
       <h2>New conversation.</h2>
-      <p>The page is clear. Your job-search files remain in the same workspace.</p>
+      <p>The page is clear. Your files are still in your job-search folder.</p>
       <div class="suggestions" aria-label="Suggested starts">
         <button type="button" data-action="scrape">Find openings</button>
         <button type="button" data-action="rank">Rank what we have</button>
@@ -109,10 +111,10 @@ function emptyMarkup(kind) {
   return `<div class="empty" id="empty">
     <p class="kicker">Ready when you are</p>
     <h2>Start wherever you are.</h2>
-    <p>First day in this repo? Run <strong>Setup</strong>. Profile already filled? <strong>Scrape</strong> for roles, then talk the same way you would in the terminal.</p>
+    <p>New here? Start with <strong>Setup</strong>: it asks a few questions about you, once. Already set up? Click <strong>Find jobs</strong> to search the job boards, or just type what you need below.</p>
     <div class="empty-actions">
       <button type="button" data-action="setup">Start with setup</button>
-      <button type="button" data-action="scrape" class="ghost">I am already set up</button>
+      <button type="button" data-action="scrape" class="ghost">Find jobs now</button>
     </div>
     <div class="suggestions" aria-label="Suggested starts">
       <button type="button" data-prompt="Which of these roles should I prioritize this week?">Prioritize this week</button>
@@ -161,9 +163,18 @@ function jumpToLatest() {
 
 function paintMode() {
   if (!modeEl) return;
-  const label = state.permissionMode === "autonomous" ? "Autonomous" : "Safe";
-  modeEl.textContent = label;
+  const autonomous = state.permissionMode === "autonomous";
+  modeEl.textContent = autonomous ? "Works on its own" : "Asks before acting";
+  modeEl.title = autonomous
+    ? "Claude may create and change files in your job-search folder without asking first."
+    : "Claude asks you before changing files or running commands.";
   modeEl.dataset.mode = state.permissionMode;
+}
+
+function announce(text) {
+  if (!announceEl) return;
+  announceEl.textContent = "";
+  window.setTimeout(() => { announceEl.textContent = text; }, 50);
 }
 
 function paintChat() {
@@ -183,7 +194,7 @@ function setBusy(next) {
 function setWorkspaceLabel(root) {
   if (!workspaceEl || !root) return;
   workspaceEl.textContent = root;
-  workspaceEl.title = "Desk and Claude Code both write scrapes, CVs, and applications here";
+  workspaceEl.title = "Your job-search folder. Everything Claude finds or writes is saved here.";
 }
 
 function setSessionLabel(data = {}) {
@@ -194,7 +205,7 @@ function setSessionLabel(data = {}) {
       : `${data.chromeGroup} · waiting for Chrome`;
     return;
   }
-  sessionEl.textContent = data.sessionId ? `Session ${data.sessionId.slice(0, 8)}` : "New session";
+  sessionEl.textContent = data.sessionId ? "Continuing from last time" : "New conversation";
 }
 
 function sizePrompt() {
@@ -217,6 +228,12 @@ function ingest(event) {
   state = reduceDeskEvent(state, event);
   paintChat();
   if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
+  if (!replayingTranscript) {
+    if (event.type === "turn.completed") announce("Claude replied.");
+    else if (event.type === "turn.failed") announce(`Problem: ${event.payload?.text || "the turn failed."}`);
+    else if (event.type === "question.requested") announce("Claude has a question for you.");
+    else if (event.type === "permission.requested") announce("Claude is asking for permission.");
+  }
   if (event.type === "artifact.discovered") {
     const incoming = {
       id: event.payload.artifactId || event.payload.entityId,
@@ -528,7 +545,7 @@ source.addEventListener("hello", (event) => {
         : entry.role === "user" ? "user.message"
           : entry.role === "notice" ? "desk.notice"
             : "turn.failed";
-      sseEvent(type, { text: entry.text || "" });
+      sseEvent(type, { text: entry.text || "", detail: entry.detail });
     }
   } finally {
     replayingTranscript = false;
@@ -575,7 +592,10 @@ source.addEventListener("log", () => {
   // turn fails; flashing it in the status line only alarmed people.
 });
 source.addEventListener("turn-error", (event) => {
-  if (event.data && !runtimeSocket) sseEvent("turn.failed", { text: JSON.parse(event.data).text });
+  if (!event.data || runtimeSocket) return;
+  const data = JSON.parse(event.data);
+  sseEvent("turn.failed", { text: data.text, detail: data.detail });
+  if (/not installed/i.test(data.text || "")) checkClaude();
 });
 source.addEventListener("autofill-review", (event) => {
   const payload = JSON.parse(event.data);
@@ -617,9 +637,10 @@ if (openCliBtn) {
     try {
       const res = await fetch("/workspace/cli", { method: "POST" });
       const data = await res.json();
-      statusEl.textContent = data.error || `Claude Code opened in ${data.root}`;
+      if (data.error) notice(data.error);
+      else statusEl.textContent = "A terminal window opened in your job-search folder. You can keep working here too.";
     } catch {
-      statusEl.textContent = "Could not open Claude Code in this folder.";
+      notice("Could not open a terminal window on this computer. You can keep working here; nothing is lost.");
     } finally {
       openCliBtn.disabled = false;
     }
@@ -667,9 +688,9 @@ stopBtn.addEventListener("click", async () => {
   if (runtimeSend({ type: "turn.interrupt" })) return;
   try {
     const res = await post("/stop");
-    if (!res.ok) statusEl.textContent = "Could not stop the current turn.";
+    if (!res.ok) notice("Could not stop Claude. Try Stop again, or close this tab and open the desk again.");
   } catch {
-    statusEl.textContent = "Could not stop the current turn.";
+    notice("Could not stop Claude: the desk is not reachable. Close this tab and open the desk again.");
   }
 });
 resetBtn.addEventListener("click", async () => {
@@ -678,11 +699,11 @@ resetBtn.addEventListener("click", async () => {
     try {
       const res = await post("/reset");
       if (!res.ok) {
-        statusEl.textContent = "Could not start a new conversation.";
+        notice("Could not start a new conversation. Try again in a moment.");
         return;
       }
     } catch {
-      statusEl.textContent = "Could not start a new conversation.";
+      notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
       return;
     }
   }
@@ -763,6 +784,16 @@ logEl.addEventListener("click", async (event) => {
   paintChat();
 });
 
+function restoreFocusAfterDialog() {
+  const active = document.activeElement;
+  const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
+  if (!active || active === document.body || inHiddenDock) {
+    (menuBtn.offsetParent ? menuBtn : promptEl).focus();
+  }
+}
+sheet.addEventListener("close", restoreFocusAfterDialog);
+palette.addEventListener("close", restoreFocusAfterDialog);
+
 paletteQuery?.addEventListener("input", () => {
   renderPaletteList(paletteList, filterCommands(commands, paletteQuery.value));
 });
@@ -791,11 +822,23 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+let terminalSubscriptions = [];
+let selectedTab = "chat";
+
+function terminalPlaceholder(host, title, copy) {
+  host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>${title}</h2><p>${copy}</p></div>`;
+}
+
 async function ensureTerminal() {
   const host = document.getElementById("panel-terminal");
   const bridge = window.deskApp?.terminal;
-  if (!host || !bridge || terminalView) {
-    terminalView?.focus();
+  if (!host || !bridge) return;
+  if (terminalView) {
+    terminalView.focus();
+    return;
+  }
+  if (!state.sessionId) {
+    terminalPlaceholder(host, "Send one message in Chat first.", "The terminal continues the same conversation, so it needs one to continue.");
     return;
   }
   let Terminal;
@@ -820,31 +863,62 @@ async function ensureTerminal() {
     },
   });
   terminalView.mount(xtermHost);
-  bridge.onData((payload) => {
-    if (payload?.data) terminalView.write(payload.data);
-  });
-  bridge.onExit(() => {
-    terminalView.setInputEnabled(false);
-    releaseTerminal();
-  });
+  const view = terminalView;
+  terminalSubscriptions = [
+    bridge.onData((payload) => {
+      if (payload?.data && terminalView === view) view.write(payload.data);
+    }),
+    bridge.onExit((payload) => {
+      if (terminalView !== view) return;
+      view.setInputEnabled(false);
+      if (payload?.snapshot) {
+        state = applySnapshot(state, payload.snapshot);
+        syncBusy();
+      }
+      releaseTerminal();
+      terminalPlaceholder(host, "Claude Code closed.", "Switch to Chat to keep going, or open this tab again to start the terminal.");
+    }),
+  ].filter((stop) => typeof stop === "function");
   const started = await bridge.start({
     expectedControllerGeneration: state.controllerGeneration,
     cols: 80,
     rows: 24,
   });
   if (!started?.ok) {
-    terminalView.dispose();
-    terminalView = null;
-    host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>Could not attach Claude.</h2><p>Stay in Chat. Open CLI still works for the same workspace.</p></div>`;
+    disposeTerminalView();
+    terminalPlaceholder(host, "Could not attach Claude.", started?.error === "session-id-required"
+      ? "Send one message in Chat first; the terminal continues that conversation."
+      : "Stay in Chat; everything works there. Open in Terminal still opens Claude Code in the same folder.");
     return;
   }
   terminalId = started.terminalId;
+  if (selectedTab !== "terminal") {
+    // The person went back to Chat while the terminal was starting; hand the
+    // conversation straight back rather than adopting the terminal controller.
+    await releaseTerminal();
+    return;
+  }
   state = applySnapshot(state, started.snapshot || { controller: "terminal" });
   syncBusy();
   terminalView.focus();
 }
 
+function disposeTerminalView() {
+  for (const stop of terminalSubscriptions) {
+    try { stop(); } catch { /* already gone */ }
+  }
+  terminalSubscriptions = [];
+  terminalView?.dispose();
+  terminalView = null;
+}
+
 async function releaseTerminal() {
+  const host = document.getElementById("panel-terminal");
+  const hadView = Boolean(terminalView);
+  disposeTerminalView();
+  if (hadView && host && !host.querySelector(".empty")) {
+    terminalPlaceholder(host, "Claude Code, same conversation.", "Attaching the terminal…");
+  }
   if (!terminalId) return;
   const bridge = window.deskApp?.terminal;
   const id = terminalId;
@@ -869,6 +943,7 @@ mountTabs(document.getElementById("surface-tabs"), {
   tabs: surfaceTabs,
   selectedId: "chat",
   onSelect(id) {
+    selectedTab = id;
     if (id === "files") loadArtifacts();
     if (id === "terminal") ensureTerminal();
     if (id !== "terminal") releaseTerminal();
@@ -904,6 +979,7 @@ filesEl.addEventListener("keydown", (event) => {
     event.preventDefault();
     artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
     paintFiles();
+    filesEl.querySelector(`[data-artifact-id="${CSS.escape(artifactState.selectedId || "")}"]`)?.focus();
   }
 });
 paintChat();
@@ -952,7 +1028,7 @@ function setGate(open, title, copy) {
   if (copy) gateCopy.textContent = copy;
   if (open) {
     setMenu(false);
-    gateAction.focus();
+    gate.querySelector(".gate-card")?.focus();
   } else {
     promptEl.focus();
   }
@@ -1006,12 +1082,12 @@ function applyHealth(health) {
     return true;
   }
   if (needsInstall(health)) {
-    setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then signs you in with the same Claude account you use in Chrome.");
+    setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then opens a claude.ai sign-in page. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
     gateAction.textContent = claudeAutoStarted ? "Working…" : "Install and sign in";
     return false;
   }
   if (needsLogin(health)) {
-    setGate(true, "Starting Claude Code", "One claude.ai tab will open in your browser. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+    setGate(true, "Starting Claude Code", "A claude.ai sign-in page will open in your browser. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
     gateAction.textContent = claudeAutoStarted ? "Working…" : "Sign in with Claude";
     return false;
   }
@@ -1028,6 +1104,7 @@ function autoStartClaude(health) {
 
 async function bootstrapClaude() {
   gateAction.disabled = true;
+  gateAction.textContent = "Working…";
   gateCancel.hidden = false;
   try {
     let health = await readHealth();

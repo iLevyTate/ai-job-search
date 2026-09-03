@@ -7,6 +7,7 @@ export function createDeskState(seed = {}) {
     controller: seed.controller ?? "chat",
     controllerGeneration: seed.controllerGeneration ?? 1,
     conversationId: seed.conversationId ?? null,
+    sessionId: seed.sessionId ?? null,
     busy: Boolean(seed.busy),
     // True between Claude opening a thinking block and the first visible
     // output (text or a tool call). The chat shows "Thinking" while it holds.
@@ -154,6 +155,9 @@ export function reduceDeskEvent(state, event) {
   if (typeof event.payload?.permissionMode === "string") {
     next.permissionMode = event.payload.permissionMode;
   }
+  if (typeof event.payload?.sessionId === "string" && event.payload.sessionId) {
+    next.sessionId = event.payload.sessionId;
+  }
   if (event.type === "session.status" && event.payload?.controller) {
     next.controller = event.payload.controller;
   }
@@ -229,6 +233,7 @@ export function applySnapshot(state, snapshot = {}) {
   if (snapshot.controller) next.controller = snapshot.controller;
   if (snapshot.controllerGeneration != null) next.controllerGeneration = snapshot.controllerGeneration;
   if (snapshot.conversationId) next.conversationId = snapshot.conversationId;
+  if ("sessionId" in snapshot) next.sessionId = snapshot.sessionId ?? null;
   if (snapshot.busy != null) {
     next.busy = Boolean(snapshot.busy);
     if (!next.busy) next.thinking = false;

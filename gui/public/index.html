@@ -20,7 +20,7 @@
   <div class="workline" aria-hidden="true"></div>
 
   <div id="gate" class="gate" hidden inert aria-hidden="true">
-    <div class="gate-card">
+    <div class="gate-card" role="dialog" aria-labelledby="gate-title" tabindex="-1">
       <p class="mark" aria-hidden="true">D</p>
       <p class="brand">Desk</p>
       <p class="brand-sub">Connect Claude</p>
@@ -108,7 +108,7 @@
       </button>
     </nav>
     <div class="dock-foot">
-      <p>Same files as the CLI. Scrapes, CVs, and applications stay in this folder.</p>
+      <p>Everything Claude finds or writes is saved in your job-search folder on this computer.</p>
       <p class="account" id="account-label">localhost only</p>
     </div>
   </aside>
@@ -120,16 +120,16 @@
           Steps
         </button>
         <div>
-          <p class="kicker">Workspace</p>
+          <p class="kicker">Your job search</p>
           <h1>Conversation</h1>
-          <p id="session-label" class="session">New session</p>
-          <p id="workspace-label" class="workspace-path">Same folder as the CLI</p>
-          <p id="mode-label" class="mode-label" data-mode="autonomous">Autonomous</p>
+          <p id="session-label" class="session">New conversation</p>
+          <p id="workspace-label" class="workspace-path">Your job-search folder</p>
+          <p id="mode-label" class="mode-label" data-mode="autonomous" title="Claude may create and change files in your job-search folder without asking first.">Works on its own</p>
         </div>
       </div>
       <div class="bar-actions">
         <time id="clock" class="clock" datetime=""></time>
-        <button type="button" id="open-cli" class="ghost">Open CLI</button>
+        <button type="button" id="open-cli" class="ghost" title="For people who prefer typing commands. Everything here works without it.">Open in Terminal</button>
         <button type="button" id="stop" hidden>Stop</button>
         <button type="button" id="reset" class="ghost">New chat</button>
       </div>
@@ -137,7 +137,8 @@
 
     <div class="surface">
       <div id="surface-tabs" class="surface-tabs"></div>
-      <section id="panel-chat" class="log" aria-live="polite"></section>
+      <section id="panel-chat" class="log"></section>
+      <p id="announce" class="sr-only" aria-live="polite"></p>
       <section id="panel-terminal" class="surface-panel" hidden>
         <div class="empty">
           <p class="kicker">Terminal</p>
@@ -163,7 +164,7 @@
     </footer>
   </main>
 
-  <dialog id="sheet" class="sheet">
+  <dialog id="sheet" class="sheet" aria-labelledby="sheet-title">
     <form method="dialog" id="sheet-form">
       <p class="kicker" id="sheet-kicker">Command</p>
       <h2 id="sheet-title">Apply</h2>
@@ -177,10 +178,10 @@
     </form>
   </dialog>
 
-  <dialog id="palette" class="sheet palette">
+  <dialog id="palette" class="sheet palette" aria-labelledby="palette-title">
     <form method="dialog">
       <p class="kicker">Commands</p>
-      <h2>Run a workflow</h2>
+      <h2 id="palette-title">Run a step</h2>
       <label>
         <span class="sr-only">Filter commands</span>
         <input id="palette-query" type="search" placeholder="Search setup, scrape, apply…">

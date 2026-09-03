@@ -296,7 +296,13 @@ function renderQuestionBody(card) {
     return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
   }).join("");
   if (readOnly) {
-    return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml(card.id)}"><p>Claude has a question.</p>${blocks}<p class="hint">Type your answer in the box below and send it.</p></div>`;
+    // Nothing here can be clicked in print mode; list the choices plainly and
+    // point at the message box.
+    const list = questions.map((question) => {
+      const options = (question.options || []).map((option) => `<li><strong>${escapeHtml(option.label)}</strong>${option.description ? `<em>${escapeHtml(option.description)}</em>` : ""}</li>`).join("");
+      return `<p class="q-text">${escapeHtml(question.question || question.header || "")}</p>${options ? `<ol class="q-list">${options}</ol>` : ""}`;
+    }).join("");
+    return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml(card.id)}"><p>Claude has a question.</p>${list}<p class="hint">Reply in the message box at the bottom of the page, for example with the number or the name of the option you want.</p></div>`;
   }
   const footer = card.entered
     ? `<p class="hint">${card.payload.answered === false ? (card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered.") : "Answered."}</p>`
@@ -341,11 +347,11 @@ function renderAutofillBody(card) {
     : "";
   const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml(card.payload.screenshot)}</p>` : "";
   return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml(card.id)}" data-token="${escapeHtml(card.payload.token || "")}">
-    <p>The form is filled. Submit stays in the browser. Continue closes Autofill; Cancel stops it.</p>
+    <p>Claude filled in the application form but did not send it. Open the form in your browser, check every field, and click the employer's own Submit button yourself. Then press Done here so Claude can log it, or Cancel to abandon this application.</p>
     ${url}
     ${shot}
     <div class="sheet-actions">
-      <button type="button" data-decision="continue"${disabled}>Continue</button>
+      <button type="button" data-decision="continue"${disabled}>Done, I submitted it</button>
       <button type="button" data-decision="cancel" class="ghost"${disabled}>Cancel</button>
     </div>
   </div>`;
@@ -364,6 +370,9 @@ function bodyHtml(card, { markdown } = {}) {
     return `<p class="tool done">Saved ${escapeHtml(card.payload.relativePath || "a file")}</p>`;
   }
   const text = card.payload.text || card.payload.reason || "";
+  if (card.type === "turn.failed" && card.payload.detail) {
+    return `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml(card.payload.detail)}</pre></details>`;
+  }
   if (card.type === "subagent.activity") {
     const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
     const body = markdown ? markdown(text) : `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>`;
@@ -455,7 +464,7 @@ export function renderChat(container, state, options = {}) {
   if (activity) {
     const row = document.createElement("div");
     row.className = "activity";
-    row.setAttribute("role", "status");
+    row.setAttribute("aria-hidden", "true");
     row.dataset.activity = activity;
     row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml(activity)}…</span>`;
     container.append(row);

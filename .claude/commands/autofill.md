@@ -3,7 +3,7 @@ desk:
   id: autofill
   invocation: /autofill
   title: Autofill
-  description: Prefill an employer application form for human review.
+  description: Fill in an employer's application form for you to check and send.
   primaryOrder: 5
   arguments:
     - kind: url

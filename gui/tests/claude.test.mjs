@@ -285,6 +285,6 @@ test("exitErrorText stays silent after a requested stop", () => {
   assert.equal(exitErrorText(1, true), null);
   assert.equal(exitErrorText(0, false), null);
   assert.equal(exitErrorText(null, false), null);
-  assert.match(exitErrorText(1, false), /exited with code 1/);
+  assert.match(exitErrorText(1, false), /error 1/);
   assert.match(exitErrorText(-4058, false), /not installed/);
 });

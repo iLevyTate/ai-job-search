@@ -3,7 +3,7 @@ desk:
   id: setup
   invocation: /setup
   title: Setup
-  description: Collect profile information and populate workspace files.
+  description: Tell Claude about you, once.
   primaryOrder: 1
   arguments:
     - kind: text

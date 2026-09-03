@@ -11,7 +11,7 @@ desk:
   id: scrape
   invocation: /scrape
   title: Find Jobs
-  description: Search enabled job portals and collect new postings.
+  description: Search the job boards for new openings.
   primaryOrder: 2
   arguments:
     - kind: choice

@@ -3,7 +3,7 @@ desk:
   id: apply
   invocation: /apply
   title: Apply
-  description: Draft a targeted CV and cover letter for a posting.
+  description: Write a CV and cover letter for one job.
   primaryOrder: 4
   arguments:
     - kind: url
