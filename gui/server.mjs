@@ -122,10 +122,10 @@ function emitTools(message) {
   for (const block of content) {
     if (block?.type === "tool_use" && block.name) {
       if (block.id) toolNames.set(block.id, block.name);
-      send("tool", { name: block.name, phase: "start" });
+      send("tool", { id: block.id, name: block.name, phase: "start", input: block.input ?? {} });
     }
     if (block?.type === "tool_result") {
-      send("tool", { name: toolNames.get(block.tool_use_id) || "tool", phase: "done" });
+      send("tool", { id: block.tool_use_id, name: toolNames.get(block.tool_use_id) || "tool", phase: "done" });
     }
   }
 }
@@ -170,7 +170,12 @@ function handleStreamLine(line) {
     if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
       const block = inner.content_block;
       if (block.id && block.name) toolNames.set(block.id, block.name);
-      send("tool", { name: block.name || "tool", phase: "start" });
+      send("tool", { id: block.id, name: block.name || "tool", phase: "start", input: block.input ?? {} });
+    }
+    if (inner.type === "content_block_start" && /^(redacted_)?thinking$/.test(inner.content_block?.type || "")) {
+      // No thinking text leaves the process; the page only needs to know
+      // Claude is thinking so it can say so instead of sitting silent.
+      send("thinking", {});
     }
     const delta = inner.delta;
     if (delta?.type === "text_delta" && delta.text) {
@@ -231,11 +236,14 @@ function stopHelper() {
 }
 
 function attachHelperOutput(proc, kind) {
+  const announced = new Set();
   const onChunk = (chunk) => {
     const text = chunk.toString("utf8");
     if (!text.trim()) return;
     send("auth-log", { kind, text: text.trim() });
     for (const url of extractHttpsUrls(text)) {
+      if (announced.has(url)) continue;
+      announced.add(url);
       send("auth-url", { kind, url });
     }
     if (kind === "login" && loginNeedsCode(text)) {

@@ -13,6 +13,33 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Fixed
+- Job Search Desk first-use fixes, after walking through it as someone who has
+  never opened it. Signing in opened two claude.ai tabs: Claude Code opens the
+  browser itself and prints the same URL as a fallback, and the desk opened it
+  again; the desk now shows that URL as an "Open the sign-in page" link and
+  never opens a tab of its own. Clicking a step in the left column put up a
+  form of raw argument names (`mode`, `focus`, `url`, `posting`) before doing
+  anything; Setup, Scrape, Rank, Interview, and Outcome now run on the click,
+  Apply asks for one thing (a link, or the pasted posting), and Autofill asks
+  for the form link. The conversation could not scroll at all: the page grid
+  had no bounded row, so the log grew past the window and was clipped. Every
+  streamed token rebuilt the whole log, which re-ran each card's entrance
+  animation (the "pulse") and undid any scroll-up; cards are now updated in
+  place and only new ones animate. Nothing said Claude was working except
+  10px text in the footer; the chat now shows *Thinking*, the tool and file in
+  use (*Reading cv/main.tex*), or *Writing* until the reply lands. Thinking
+  blocks, usage, hooks, and session status painted empty cards labelled
+  "Stopped", the final result was rendered a second time under the streamed
+  text, and your own message appeared twice in browser mode; all gone. The
+  installed app never recorded your messages, so a reload replayed only
+  Claude's side, and its first event of every turn was dropped as a replay
+  because the local echo consumed its sequence number; user messages are now
+  persisted server-side and local placeholders no longer touch the cursor.
+  Follow-ups typed while a turn runs get their own turn (and their own reply
+  card) instead of merging into the previous reply. The Terminal tab is
+  hidden in the browser, where it cannot attach.
+
 ### Changed
 - Public README describes this US Job Search Desk product. Credit for the
   original methodology stays in Acknowledgements; Ko-fi, the upstream hiring

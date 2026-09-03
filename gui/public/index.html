@@ -25,12 +25,13 @@
       <p class="brand">Desk</p>
       <p class="brand-sub">Connect Claude</p>
       <h2 id="gate-title">Starting Claude Code</h2>
-      <p id="gate-copy">The desk starts Claude Code as soon as it opens. Use the same Claude account you already use in Chrome. It installs Claude Code if needed, then opens the claude.ai login.</p>
-      <ol class="gate-steps" aria-label="What this button does">
+      <p id="gate-copy">The desk starts Claude Code as soon as it opens. Use the same Claude account you already use in Chrome. It installs Claude Code if needed, then opens one claude.ai sign-in tab.</p>
+      <ol class="gate-steps" aria-label="What happens next">
         <li>Install Claude Code if it is missing</li>
-        <li>Sign in with your Chrome Claude subscription</li>
-        <li>Open the conversation</li>
+        <li>Sign in on claude.ai in the tab that opens</li>
+        <li>Come back here; the conversation opens by itself</li>
       </ol>
+      <p id="gate-link-wrap" class="gate-link-wrap" hidden>Tab did not appear? <a id="gate-link" href="#" target="_blank" rel="noreferrer">Open the sign-in page</a></p>
       <pre id="gate-log" class="gate-log" hidden></pre>
       <label id="gate-code-wrap" hidden>
         <span>Paste the login code from the browser</span>
@@ -141,7 +142,7 @@
         <div class="empty">
           <p class="kicker">Terminal</p>
           <h2>Claude Code, same conversation.</h2>
-          <p>The embedded terminal attaches after Chat can hand off the session.</p>
+          <p>Attaching the terminal…</p>
         </div>
       </section>
       <section id="panel-files" class="surface-panel artifact-view" hidden></section>
@@ -152,7 +153,7 @@
     <footer class="composer">
       <div class="composer-meta">
         <p id="status" class="status" aria-live="polite">Ready</p>
-        <p class="hint">Enter to send · Shift+Enter for a line · / to focus</p>
+        <p class="hint">Enter to send · Shift+Enter for a new line · type /apply, /scrape… or click a step</p>
       </div>
       <form id="compose">
         <label class="sr-only" for="prompt">Message</label>
@@ -168,6 +169,7 @@
       <h2 id="sheet-title">Apply</h2>
       <p id="sheet-copy"></p>
       <div id="sheet-fields" class="sheet-fields"></div>
+      <p id="sheet-error" class="sheet-error" role="alert" hidden></p>
       <div class="sheet-actions">
         <button type="submit" value="run" id="sheet-run">Run</button>
         <button type="submit" value="cancel" class="ghost">Cancel</button>

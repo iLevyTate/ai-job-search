@@ -20,11 +20,97 @@ export function primaryCommands(commands) {
     .sort((left, right) => left.primaryOrder - right.primaryOrder);
 }
 
+// ---------------------------------------------------------------------------
+// Command input
+//
+// A sidebar click should do the obvious thing. Commands whose arguments are all
+// optional run at once with their defaults; the composer accepts the flags for
+// anyone who wants them. A form appears only when the command cannot run
+// without something from the user: a required argument, or the "link or pasted
+// posting" pair that /apply and /import take.
+
+const PASTE_FIELD = "paste";
+
+function hasKind(command, kind) {
+  return (command.arguments || []).some((argument) => argument.kind === kind);
+}
+
+export function commandTakesPaste(command) {
+  return hasKind(command, "url") && hasKind(command, "multiline");
+}
+
+export function commandNeedsInput(command) {
+  if (!command) return false;
+  if (commandTakesPaste(command)) return true;
+  return (command.arguments || []).some((argument) => argument.required);
+}
+
+const FIELD_LABELS = {
+  url: "Link",
+  posting: "Posting text",
+  company: "Company or role",
+  focus: "Focus",
+  query: "What to look for",
+  section: "Section",
+  path: "File path",
+  source: "Template file",
+  use: "Template to use",
+  mode: "Mode",
+  scope: "What to reset",
+  minScore: "Minimum score",
+  top: "How many",
+};
+
+const COMMAND_PLACEHOLDERS = {
+  autofill: "https://boards.greenhouse.io/company/jobs/123",
+  apply: "Paste the job link. If the site blocks links, paste the whole posting instead.",
+  import: "Paste the job link, or the whole posting.",
+};
+
+function labelFor(argument) {
+  return argument.label || FIELD_LABELS[argument.name] || argument.name;
+}
+
+function looksLikeUrl(value) {
+  return /^https?:\/\/\S+$/i.test(String(value || "").trim());
+}
+
+export function normalizeCommandValues(command, values = {}) {
+  if (!commandTakesPaste(command)) return { ...values };
+  const { [PASTE_FIELD]: pasted, ...rest } = values;
+  const text = String(pasted || "").trim();
+  if (!text) return rest;
+  const urlArgument = (command.arguments || []).find((argument) => argument.kind === "url");
+  const postingArgument = (command.arguments || []).find((argument) => argument.kind === "multiline");
+  if (looksLikeUrl(text)) return { ...rest, [urlArgument.name]: text };
+  return { ...rest, [postingArgument.name]: text };
+}
+
+export function commandInputError(command, values = {}) {
+  if (!command) return "";
+  if (commandTakesPaste(command)) {
+    const normalized = normalizeCommandValues(command, values);
+    const filled = (command.arguments || []).some((argument) => {
+      const value = normalized[argument.name];
+      return value != null && String(value).trim() !== "";
+    });
+    return filled ? "" : "Paste a job link or the posting text first.";
+  }
+  for (const argument of command.arguments || []) {
+    if (!argument.required) continue;
+    const value = values[argument.name];
+    if (value == null || String(value).trim() === "") return `${labelFor(argument)} is required.`;
+    if (argument.kind === "url" && !looksLikeUrl(value)) return "That link should start with http:// or https://.";
+  }
+  return "";
+}
+
 export function renderCommandInvocation(command, values = {}) {
+  const normalized = normalizeCommandValues(command, values);
   const parts = [command.invocation];
   let multiline = "";
   for (const argument of command.arguments || []) {
-    const value = values[argument.name];
+    const value = normalized[argument.name];
     if (value == null || value === "" || value === false) continue;
     if (argument.kind === "boolean") {
       parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`);
@@ -45,20 +131,26 @@ export function renderCommandInvocation(command, values = {}) {
 }
 
 export function renderCommandForm(command) {
-  const fields = (command.arguments || []).map((argument) => {
+  if (commandTakesPaste(command)) {
+    const placeholder = escapeHtml(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
+    return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
+  }
+  const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
     const name = escapeHtml(argument.name);
+    const label = escapeHtml(labelFor(argument));
+    const placeholder = escapeHtml(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
     if (argument.kind === "choice") {
       const options = (argument.values || []).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
-      return `<label data-arg="${name}"><span>${name}</span><select name="${name}">${options}</select></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
     }
     if (argument.kind === "boolean") {
-      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${name}</label>`;
+      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
     }
     if (argument.kind === "multiline") {
-      return `<label data-arg="${name}"><span>${name}</span><textarea name="${name}" rows="8"></textarea></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
     }
     const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-    return `<label data-arg="${name}"><span>${name}</span><input name="${name}" type="${type}"></label>`;
+    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}" placeholder="${placeholder}"></label>`;
   });
   return fields.join("");
 }
@@ -72,10 +164,15 @@ export function valuesFromForm(form) {
   return values;
 }
 
+// ---------------------------------------------------------------------------
+// Cards
+
 function whoFor(type) {
   if (type === "user.message") return "You";
-  if (type === "turn.failed" || type === "diagnostic.unknown_sdk_event") return "Stopped";
+  if (type === "turn.failed") return "Problem";
   if (type.startsWith("question") || type.startsWith("permission") || type.startsWith("autofill")) return "Needs you";
+  if (type === "artifact.discovered") return "Saved";
+  if (type === "subagent.activity") return "Helper";
   return "Claude";
 }
 
@@ -83,10 +180,56 @@ function cardClass(card) {
   if (card.type === "user.message") return "msg user";
   if (card.type === "turn.failed") return "msg error";
   if (card.type.startsWith("tool")) return "msg assistant card-tool";
+  if (card.type === "artifact.discovered") return "msg assistant card-tool card-artifact";
+  if (card.type === "subagent.activity") return "msg assistant card-subagent";
   if (card.type.startsWith("question")) return "msg assistant card-question";
   if (card.type.startsWith("permission")) return "msg assistant card-permission";
   if (card.type.startsWith("autofill")) return "msg assistant card-autofill";
   return "msg assistant";
+}
+
+const TOOL_VERBS = {
+  Read: "Reading",
+  Write: "Writing",
+  Edit: "Editing",
+  MultiEdit: "Editing",
+  NotebookEdit: "Editing",
+  Bash: "Running",
+  Grep: "Searching",
+  Glob: "Searching",
+  LS: "Listing",
+  WebFetch: "Fetching",
+  WebSearch: "Searching the web",
+  Agent: "Running a helper agent",
+  Task: "Running a helper agent",
+  Skill: "Running",
+  TodoWrite: "Planning",
+};
+
+function toolDetail(input = {}) {
+  const detail = input.file_path || input.path || input.notebook_path || input.description || input.query || input.url || input.pattern || input.skill || input.command || "";
+  const text = String(detail || "").replace(/\s+/g, " ").trim();
+  return text.length > 72 ? `${text.slice(0, 71)}…` : text;
+}
+
+export function describeTool(name, input = {}) {
+  const verb = TOOL_VERBS[name] || `Using ${name || "a tool"}`;
+  const detail = toolDetail(input);
+  return detail ? `${verb} ${detail}` : verb;
+}
+
+export function activityFor(state) {
+  if (!state?.busy) return "";
+  if (state.thinking) return "Thinking";
+  const cards = [...state.cards.values()];
+  for (let index = cards.length - 1; index >= 0; index -= 1) {
+    const card = cards[index];
+    if (card.type === "tool.started") return describeTool(card.payload.name, card.payload.input);
+    if (card.type === "assistant.message" && (card.payload.text || "").length) return "Writing";
+    if (card.type === "tool.completed") return "Working";
+    if (card.type === "user.message") break;
+  }
+  return "Working";
 }
 
 function renderQuestionBody(card) {
@@ -146,42 +289,108 @@ function bodyHtml(card, { markdown } = {}) {
   if (card.type === "autofill.review" || card.type === "autofill.resolved") return renderAutofillBody(card);
   if (card.type.startsWith("tool")) {
     const phase = card.type === "tool.completed" ? "done" : "live";
-    return `<p class="tool ${phase}">${escapeHtml(card.payload.name || "tool")} ${phase === "done" ? "done" : ""}</p>`;
+    const label = describeTool(card.payload.name, card.payload.input);
+    return `<p class="tool ${phase}" title="${escapeHtml(card.payload.name || "tool")}">${escapeHtml(label)}</p>`;
+  }
+  if (card.type === "artifact.discovered") {
+    return `<p class="tool done">Saved ${escapeHtml(card.payload.relativePath || "a file")}</p>`;
   }
   const text = card.payload.text || card.payload.reason || "";
-  if (markdown && (card.type === "assistant.message" || card.type === "turn.completed")) {
+  if (card.type === "subagent.activity") {
+    const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
+    const body = markdown ? markdown(text) : `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>`;
+    return `<details class="subagent"><summary>${escapeHtml(label)} notes</summary>${body}</details>`;
+  }
+  if (markdown && card.type === "assistant.message") {
     return markdown(text);
   }
   return `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>`;
 }
 
+function signatureFor(card) {
+  const text = card.payload.text || "";
+  return [
+    card.type,
+    card.entered ? "1" : "0",
+    card.payload.phase || "",
+    card.payload.decision || "",
+    card.type.startsWith("tool") ? describeTool(card.payload.name, card.payload.input) : "",
+    text.length,
+    text.slice(-24),
+    card.payload.questions ? JSON.stringify(card.payload.questions).length : 0,
+  ].join("|");
+}
+
+function paintCard(article, card, options) {
+  // Keep the entrance class across repaints: dropping it mid-animation would
+  // snap a card that is still fading in.
+  article.className = `${cardClass(card)}${article.classList.contains("enter") ? " enter" : ""}`;
+  article.dataset.cardType = card.type;
+  if (card.entered) article.dataset.entered = "true";
+  else delete article.dataset.entered;
+  article.dataset.sig = signatureFor(card);
+  const body = article.querySelector(":scope > .body");
+  body.innerHTML = bodyHtml(card, options);
+}
+
+// Keyed reconciliation: an article per card id, updated in place. Rebuilding
+// the whole log on every streamed token restarted every card's entrance
+// animation (the "pulse") and fired a scroll event that undid the reader's
+// scroll position.
 export function renderChat(container, state, options = {}) {
   const document = container.ownerDocument;
-  container.replaceChildren();
   if (!state.cards.size && !state.queued.length) {
+    container.replaceChildren();
     container.insertAdjacentHTML("afterbegin", options.emptyHtml || "");
     return;
   }
-  for (const card of state.cards.values()) {
-    const article = document.createElement("article");
-    article.className = cardClass(card);
-    article.dataset.cardId = card.id;
-    article.dataset.cardType = card.type;
-    if (card.entered) article.dataset.entered = "true";
-    article.innerHTML = `
-      <div class="msg-head">
-        <div class="who">${escapeHtml(whoFor(card.type))}</div>
-      </div>
-      <div class="body">${bodyHtml(card, options)}</div>
-    `;
-    container.append(article);
+
+  const existing = new Map();
+  for (const node of [...container.children]) {
+    if (node.tagName === "ARTICLE" && node.dataset.cardId) existing.set(node.dataset.cardId, node);
+    else node.remove();
   }
+
+  let cursor = container.firstElementChild;
+  for (const card of state.cards.values()) {
+    let article = existing.get(card.id);
+    if (article) {
+      existing.delete(card.id);
+      if (article.dataset.sig !== signatureFor(card)) paintCard(article, card, options);
+    } else {
+      article = document.createElement("article");
+      article.dataset.cardId = card.id;
+      article.innerHTML = `<div class="msg-head"><div class="who"></div></div><div class="body"></div>`;
+      paintCard(article, card, options);
+      article.classList.add("enter");
+    }
+    article.querySelector(":scope > .msg-head > .who").textContent = whoFor(card.type);
+    if (article !== cursor) container.insertBefore(article, cursor);
+    else cursor = cursor.nextElementSibling;
+  }
+  for (const stale of existing.values()) stale.remove();
+  while (cursor) {
+    const next = cursor.nextElementSibling;
+    cursor.remove();
+    cursor = next;
+  }
+
   if (state.queued.length) {
     const queue = document.createElement("div");
     queue.className = "queue";
     queue.setAttribute("aria-label", "Queued messages");
-    queue.innerHTML = state.queued.map((item) => `<p data-queue-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</p>`).join("");
+    queue.innerHTML = `<p class="kicker">Next up</p>${state.queued.map((item) => `<p data-queue-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</p>`).join("")}`;
     container.append(queue);
+  }
+
+  const activity = activityFor(state);
+  if (activity) {
+    const row = document.createElement("div");
+    row.className = "activity";
+    row.setAttribute("role", "status");
+    row.dataset.activity = activity;
+    row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml(activity)}…</span>`;
+    container.append(row);
   }
 }
 

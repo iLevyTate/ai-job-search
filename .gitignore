@@ -64,6 +64,8 @@ Thumbs.db
 
 # Desk local notes and conversation store (per-user, never share)
 .claude/desk/
+# Print-mode desk session pointer (local state, not part of the workspace)
+.claude/desk-session.json
 
 # Skills lock (auto-generated)
 skills-lock.json

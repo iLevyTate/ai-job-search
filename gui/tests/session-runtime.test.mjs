@@ -285,3 +285,39 @@ test("reset drops late events from the previous epoch", async () => {
     assert.equal(published.length, before);
   });
 });
+
+test("a submitted message is persisted as user.message and starts the turn", async () => {
+  await withRuntime(async ({ runtime, fake, published }) => {
+    const result = await runtime.submitMessage({ messageId: "m-user", text: "rank these", expectedControllerGeneration: 1 });
+    assert.equal(result.ok, true);
+    const echoed = published.find((event) => event.type === "user.message");
+    assert.ok(echoed, "the page paints You from this event; there is no local copy");
+    assert.equal(echoed.payload.messageId, "m-user");
+    assert.equal(echoed.payload.text, "rank these");
+    assert.equal(echoed.turnId, "m-user");
+    assert.equal(runtime.snapshot().busy, true);
+    assert.ok(runtime.eventsAfter(0).some((event) => event.type === "user.message"), "replay includes it after a reload");
+
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Ranked." } } });
+    await waitUntil(() => published.some((event) => event.type === "assistant.delta"));
+    assert.equal(published.find((event) => event.type === "assistant.delta").turnId, "m-user");
+  });
+});
+
+test("a follow-up sent during a turn becomes its own turn when Claude reaches it", async () => {
+  await withRuntime(async ({ runtime, fake, published }) => {
+    await runtime.submitMessage({ messageId: "m-first", text: "one", expectedControllerGeneration: 1 });
+    await runtime.submitMessage({ messageId: "m-second", text: "two", expectedControllerGeneration: 1 });
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "A" } } });
+    fake.emit({ type: "result", subtype: "success", result: "A" });
+    await waitUntil(() => published.some((event) => event.type === "turn.completed"));
+    assert.equal(runtime.snapshot().busy, false);
+
+    fake.emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "B" } } });
+    await waitUntil(() => published.filter((event) => event.type === "assistant.delta").length >= 2);
+    const deltas = published.filter((event) => event.type === "assistant.delta");
+    assert.equal(deltas[0].turnId, "m-first");
+    assert.equal(deltas[1].turnId, "m-second");
+    assert.equal(runtime.snapshot().busy, true);
+  });
+});

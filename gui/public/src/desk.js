@@ -14,6 +14,8 @@ import {
 import { mountTabs } from "./tabs.js";
 import { createTerminalView } from "./terminal-view.js";
 import {
+  commandInputError,
+  commandNeedsInput,
   filterCommands,
   renderChat,
   renderCommandForm,
@@ -40,6 +42,7 @@ const sheetTitle = document.getElementById("sheet-title");
 const sheetKicker = document.getElementById("sheet-kicker");
 const sheetCopy = document.getElementById("sheet-copy");
 const sheetFields = document.getElementById("sheet-fields");
+const sheetError = document.getElementById("sheet-error");
 const clockEl = document.getElementById("clock");
 const menuBtn = document.getElementById("menu");
 const scrim = document.getElementById("scrim");
@@ -125,6 +128,12 @@ function scrollLog() {
   jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
 }
 
+function jumpToLatest() {
+  stickToBottom = true;
+  logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+  jumpBtn.hidden = true;
+}
+
 function paintMode() {
   if (!modeEl) return;
   const label = state.permissionMode === "autonomous" ? "Autonomous" : "Safe";
@@ -143,7 +152,7 @@ function setBusy(next) {
   sendBtn.disabled = next && !runtimeSocket;
   stopBtn.hidden = !next;
   document.body.classList.toggle("working", next);
-  statusEl.textContent = next ? "Claude is working" : "Ready";
+  statusEl.textContent = next ? "Claude is working. Stop cancels this turn." : "Ready";
 }
 
 function setWorkspaceLabel(root) {
@@ -275,7 +284,8 @@ function sseEvent(type, payload) {
   }
   ingest({
     eventId: `sse-${sseSequence}`,
-    sequence: Math.max(state.lastSequence + 1, sseSequence),
+    sequence: sseSequence,
+    local: true,
     turnId: `turn-${sseTurn}`,
     type,
     payload,
@@ -330,13 +340,14 @@ async function sendPrompt(prompt) {
     }
     setMenu(false);
     setBusy(true);
+    // The server echoes the message back (runtime: a persisted user.message
+    // event; print mode: the "user" SSE event), so the page does not add its
+    // own copy. A local copy showed every message twice.
     const messageId = `m-${Date.now()}`;
     if (runtimeSend({ type: "user.message", messageId, text })) {
-      sseEvent("user.message", { messageId, text });
       return true;
     }
     try {
-      sseEvent("user.message", { text });
       const res = await post("/send", { prompt: text });
       if (!res.ok) throw new Error();
       return true;
@@ -361,7 +372,7 @@ function runAction(name) {
     else if (name === "outcome") sendPrompt("/outcome");
     return;
   }
-  if (!command.arguments?.length) {
+  if (!commandNeedsInput(command)) {
     sendPrompt(command.invocation);
     return;
   }
@@ -372,8 +383,10 @@ function openCommandSheet(command) {
   activeCommand = command;
   sheetKicker.textContent = command.invocation;
   sheetTitle.textContent = command.title;
-  sheetCopy.textContent = command.description || "Fill the fields you need, then run.";
+  sheetCopy.textContent = command.description || "Add what the step needs, then run.";
   sheetFields.innerHTML = renderCommandForm(command);
+  sheetError.hidden = true;
+  sheetError.textContent = "";
   sheet.showModal();
   sheetFields.querySelector("input, textarea, select")?.focus();
 }
@@ -472,8 +485,11 @@ source.addEventListener("result", (event) => {
 });
 source.addEventListener("tool", (event) => {
   if (runtimeSocket) return;
-  const { name, phase } = JSON.parse(event.data);
-  sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: `tool-${name}`, name });
+  const { id, name, phase, input } = JSON.parse(event.data);
+  sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
+});
+source.addEventListener("thinking", () => {
+  if (!runtimeSocket) sseEvent("assistant.thinking", {});
 });
 source.addEventListener("status", (event) => {
   statusEl.textContent = JSON.parse(event.data).text;
@@ -547,17 +563,16 @@ promptEl.addEventListener("keydown", (event) => {
 sheetForm.addEventListener("submit", (event) => {
   if (event.submitter?.value !== "run") return;
   if (!activeCommand) return;
-  const prompt = renderCommandInvocation(activeCommand, valuesFromForm(sheetFields));
-  if (!prompt || prompt === activeCommand.invocation && activeCommand.arguments.some((argument) => argument.kind === "url")) {
-    const values = valuesFromForm(sheetFields);
-    const needsUrl = activeCommand.arguments.some((argument) => argument.kind === "url");
-    if (needsUrl && !values.url && !values.posting) {
-      event.preventDefault();
-      statusEl.textContent = "Add a URL or paste the posting.";
-      return;
-    }
+  const values = valuesFromForm(sheetFields);
+  const problem = commandInputError(activeCommand, values);
+  if (problem) {
+    event.preventDefault();
+    sheetError.textContent = problem;
+    sheetError.hidden = false;
+    sheetFields.querySelector("input, textarea, select")?.focus();
+    return;
   }
-  sendPrompt(renderCommandInvocation(activeCommand, valuesFromForm(sheetFields)));
+  sendPrompt(renderCommandInvocation(activeCommand, values));
 });
 
 stopBtn.addEventListener("click", async () => {
@@ -594,10 +609,7 @@ resetBtn.addEventListener("click", async () => {
 
 menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
 scrim.addEventListener("click", () => setMenu(false));
-jumpBtn.addEventListener("click", () => {
-  stickToBottom = true;
-  scrollLog();
-});
+jumpBtn.addEventListener("click", jumpToLatest);
 logEl.addEventListener("scroll", () => {
   stickToBottom = nearBottom();
   jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
@@ -745,7 +757,11 @@ async function releaseTerminal() {
 }
 
 bindDelegatedActions(document);
+const surfaceTabs = [{ id: "chat", label: "Chat" }];
+if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
+surfaceTabs.push({ id: "files", label: "Files" });
 mountTabs(document.getElementById("surface-tabs"), {
+  tabs: surfaceTabs,
   selectedId: "chat",
   onSelect(id) {
     if (id === "files") loadArtifacts();
@@ -809,6 +825,8 @@ const gateCancel = document.getElementById("gate-cancel");
 const gateCodeWrap = document.getElementById("gate-code-wrap");
 const gateCode = document.getElementById("gate-code");
 const gateChrome = document.getElementById("gate-chrome");
+const gateLink = document.getElementById("gate-link");
+const gateLinkWrap = document.getElementById("gate-link-wrap");
 const accountLabel = document.getElementById("account-label");
 
 let authWaiter = null;
@@ -877,6 +895,7 @@ function applyHealth(health) {
   accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
   gateCancel.hidden = true;
   gateCodeWrap.hidden = true;
+  gateLinkWrap.hidden = true;
   if (health.loggedIn) {
     setGate(false);
     return true;
@@ -887,7 +906,7 @@ function applyHealth(health) {
     return false;
   }
   if (needsLogin(health)) {
-    setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+    setGate(true, "Starting Claude Code", "One claude.ai tab will open in your browser. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
     gateAction.textContent = claudeAutoStarted ? "Working…" : "Sign in with Claude";
     return false;
   }
@@ -950,9 +969,13 @@ async function bootstrapClaude() {
 
 source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
 source.addEventListener("auth-url", (event) => {
+  // Claude Code opens the browser itself and prints the same URL as a
+  // fallback. Opening it again here is what produced two sign-in tabs.
   const url = JSON.parse(event.data).url;
-  appendGateLog(`Open this login page if the browser did not appear:\n${url}`);
-  window.open(url, "_blank", "noopener");
+  if (!/^https:\/\//.test(url)) return;
+  gateLink.href = url;
+  gateLinkWrap.hidden = false;
+  gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window.";
 });
 source.addEventListener("auth-code", () => {
   gateCodeWrap.hidden = false;

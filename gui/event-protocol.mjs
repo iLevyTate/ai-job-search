@@ -61,28 +61,44 @@ export function diagnosticEvent(raw, context) {
   }, context);
 }
 
+// Stream events that carry nothing the desk shows: message envelopes, block
+// boundaries, tool-input JSON (the full input arrives on the assistant
+// message), and thinking text. Turning these into diagnostic events used to
+// paint an empty "Stopped" card per event while Claude was thinking.
+const QUIET_STREAM_EVENTS = new Set(["message_start", "message_delta", "message_stop", "content_block_stop", "ping"]);
+const QUIET_DELTAS = new Set(["thinking_delta", "input_json_delta", "signature_delta"]);
+
 function fromStreamEvent(message, context) {
   const inner = message.event || {};
   const sessionId = sessionIdOf(message);
 
-  if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
-    const block = inner.content_block;
-    return [event("tool.started", {
-      toolUseId: block.id,
-      name: block.name || "tool",
-      input: block.input ?? {},
-      sessionId,
-    }, context)];
+  if (inner.type === "content_block_start") {
+    const block = inner.content_block || {};
+    if (block.type === "tool_use") {
+      return [event("tool.started", {
+        toolUseId: block.id,
+        name: block.name || "tool",
+        input: block.input ?? {},
+        sessionId,
+      }, context)];
+    }
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
+      return [event("assistant.thinking", { sessionId }, context)];
+    }
+    if (block.type === "text") return [];
+    return [diagnosticEvent(message, context)];
   }
 
-  if (inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
-    return [event("assistant.delta", { text: inner.delta.text, sessionId }, context)];
+  if (inner.type === "content_block_delta") {
+    const delta = inner.delta || {};
+    if (delta.type === "text_delta") {
+      return [event("assistant.delta", { text: typeof delta.text === "string" ? delta.text : "", sessionId }, context)];
+    }
+    if (QUIET_DELTAS.has(delta.type)) return [];
+    return [diagnosticEvent(message, context)];
   }
 
-  if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
-    return [event("assistant.delta", { text: inner.delta.text ?? "", sessionId }, context)];
-  }
-
+  if (QUIET_STREAM_EVENTS.has(inner.type)) return [];
   return [diagnosticEvent(message, context)];
 }
 

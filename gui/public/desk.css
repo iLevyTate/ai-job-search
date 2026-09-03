@@ -65,6 +65,9 @@ body {
   position: relative;
   display: grid;
   grid-template-columns: var(--dock) minmax(0, 1fr);
+  /* Without a bounded row the stage grows with the conversation and the
+     body's overflow: hidden clips it: the log could never scroll. */
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   background: var(--night);
   color: var(--paper);
@@ -316,8 +319,9 @@ body.working .workline {
 
 .stage {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+  min-height: 0;
   background:
     linear-gradient(180deg, rgba(20, 18, 15, 0.35), transparent 16%),
     var(--stage);
@@ -422,7 +426,6 @@ body.working .status::before {
   overflow: auto;
   min-height: 0;
   padding: 1.7rem 1.9rem 2.4rem;
-  scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: rgba(208, 138, 58, 0.35) transparent;
 }
@@ -523,8 +526,10 @@ body.working .status::before {
 .msg {
   max-width: 46rem;
   margin: 0 0 1.7rem;
-  animation: rise 400ms var(--ease) both;
 }
+
+/* Only a card's first paint animates. Streaming updates the card in place. */
+.msg.enter { animation: rise 400ms var(--ease) both; }
 
 .msg.user {
   margin-left: auto;
@@ -665,6 +670,70 @@ body.working .status::before {
   border-color: rgba(208, 138, 58, 0.45);
   animation: pulse 1.4s var(--ease) infinite;
 }
+
+.activity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 46rem;
+  margin: 0 0 1.7rem;
+  color: var(--brass);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  animation: rise 300ms var(--ease) both;
+}
+
+.activity-dots {
+  display: inline-flex;
+  gap: 0.22rem;
+}
+
+.activity-dots i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--brass);
+  animation: dots 1.2s ease-in-out infinite;
+}
+
+.activity-dots i:nth-child(2) { animation-delay: 0.15s; }
+.activity-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes dots {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+
+.card-tool .body { line-height: 1.3; }
+.card-tool .tool { display: inline-block; max-width: 100%; margin: 0; overflow-wrap: anywhere; }
+.card-tool .msg-head, .card-artifact .msg-head, .card-subagent .msg-head { margin-bottom: 0.25rem; }
+.card-tool .who, .card-artifact .who, .card-subagent .who { font-size: 0.82rem; color: var(--fade); }
+
+.subagent summary {
+  cursor: pointer;
+  color: var(--fade);
+  font-family: var(--sans);
+  font-size: 0.86rem;
+}
+
+.subagent[open] summary { margin-bottom: 0.5rem; }
+
+.sheet-error {
+  margin: 0.2rem 0 0.4rem;
+  color: var(--danger-soft);
+  font-size: 0.86rem;
+}
+
+.sheet .sheet-error { color: var(--danger-soft); }
+
+.gate-link-wrap {
+  margin: 0.9rem 0 0;
+  font-size: 0.88rem;
+}
+
+.gate-link-wrap a { color: var(--brass); }
 
 .jump {
   position: absolute;
@@ -1237,6 +1306,7 @@ body.gated .stage {
     scroll-behavior: auto !important;
   }
   .workline { display: none; }
+  .activity-dots i { opacity: 1; }
 }
 
 @media print {

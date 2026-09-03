@@ -55,13 +55,12 @@ Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`
 
 ## How to use it
 
-1. Sign in only if the desk reports you are signed out. Install Claude Code only if it is missing.
-2. **Setup** if this clone has no profile yet.
-3. **Scrape**, then talk: "which of these are real Staff AI roles?"
-4. **Rank** when the table is too long.
-5. **Apply** with a URL or a pasted posting.
-6. **Autofill** on the employer ATS link. Review the filled form, then click Submit yourself. Desk shows Continue and Cancel only.
-7. Keep typing the way you would in Claude Code. Enter sends. Shift+Enter is a new line. Stop cancels the current turn. New chat asks before clearing the conversation.
+1. Sign in only if the desk reports you are signed out. Claude Code opens one claude.ai tab for that; if no tab appears, use the **Open the sign-in page** link on the same card. Install Claude Code only if it is missing.
+2. Click a step in the left column. **Setup**, **Scrape**, **Rank**, **Interview**, and **Outcome** run as soon as you click them. **Apply** asks for one thing: the job link, or the whole posting pasted in if the site blocks links. **Autofill** asks for the application form link.
+3. While Claude works the chat says what it is doing: *Thinking*, *Reading job_search_tracker.csv*, *Writing*. Stop cancels the turn. Scroll up whenever you like; a **Latest** button brings you back.
+4. **Scrape**, then talk: "which of these are real Staff AI roles?" **Rank** when the table is too long.
+5. **Autofill** fills the employer form and hands the browser to you. Review it, then click Submit yourself. Desk shows Continue and Cancel only.
+6. Keep typing the way you would in Claude Code: `/rank healthcare --top 10` works in the composer, and so does a plain question. Enter sends. Shift+Enter is a new line. New chat asks before clearing the conversation.
 
 **Safe** mode asks before tools run and fails closed. **Autonomous** may bypass permissions for the selected trusted workspace. Safe is a Desk permission mode; it is not Claude CLI `--safe-mode`.
 

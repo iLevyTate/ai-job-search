@@ -203,3 +203,30 @@ test("validateClientMessage accepts known messages and rejects malformed ones", 
   assert.equal(validateClientMessage({ type: "explode" }).ok, false);
   assert.equal(validateClientMessage({ type: "user.message" }).ok, false);
 });
+
+test("thinking blocks become one assistant.thinking event and stream noise is dropped", () => {
+  const ctx = context();
+  const start = normalizeSdkMessage({
+    type: "stream_event",
+    event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+  }, ctx);
+  assert.equal(start.length, 1);
+  assert.equal(start[0].type, "assistant.thinking");
+  assert.equal(start[0].payload.text, undefined);
+
+  for (const event of [
+    { type: "message_start", message: { id: "msg" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "private" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+    { type: "message_stop" },
+  ]) {
+    assert.deepEqual(normalizeSdkMessage({ type: "stream_event", event }, ctx), [], event.type);
+  }
+
+  const unknown = normalizeSdkMessage({ type: "stream_event", event: { type: "brand_new_kind" } }, ctx);
+  assert.equal(unknown[0].type, "diagnostic.unknown_sdk_event");
+});

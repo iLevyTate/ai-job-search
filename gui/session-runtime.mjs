@@ -37,6 +37,10 @@ export function createSessionRuntime({
   let pumping = null;
   let pendingHandoff = null;
   let stopRequested = false;
+  // Messages accepted while a turn was still running. Each becomes its own
+  // turn when Claude reaches it, so its reply gets its own card and its
+  // artifacts settle against the snapshot taken when it was submitted.
+  const pendingTurns = [];
 
   function conversation() {
     return store.get(conversationId);
@@ -80,7 +84,19 @@ export function createSessionRuntime({
     };
   }
 
+  const TURN_BEARING = new Set(["assistant", "stream_event", "user"]);
+
+  async function ensureTurnFor(sdkMessage) {
+    if (conversation()?.partialTurn || !TURN_BEARING.has(sdkMessage?.type)) return;
+    const id = pendingTurns.shift() ?? randomUUID();
+    await store.transact(conversationId, (next) => {
+      next.partialTurn = { id, eventId: id };
+    });
+  }
+
   async function publishSdkMessage(sdkMessage, currentEpoch) {
+    if (currentEpoch !== epoch) return;
+    await ensureTurnFor(sdkMessage);
     if (currentEpoch !== epoch) return;
     const drafts = normalize(sdkMessage, eventContext());
     for (const draft of drafts) {
@@ -250,12 +266,22 @@ export function createSessionRuntime({
       }
       const accepted = adapter.send({ id: messageId, text });
       if (!accepted.accepted) return commandResult(false, { reason: accepted.reason });
-      if (artifactService) {
-        await artifactService.beginTurn(messageId);
+      if (artifactService) await artifactService.beginTurn(messageId);
+      if (conversation().partialTurn) {
+        pendingTurns.push(messageId);
+      } else {
         await store.transact(conversationId, (next) => {
           next.partialTurn = { id: messageId, eventId: messageId };
         });
       }
+      // The page paints "You" from this event alone (it keeps no local copy),
+      // and a reload replays it with the rest of the conversation.
+      const persisted = await store.appendEvent(conversationId, {
+        type: "user.message",
+        turnId: messageId,
+        payload: { messageId, text },
+      });
+      for (const listener of subscribers) listener(persisted);
       return commandResult(true, { messageId });
     },
     async resolvePermission({ requestId, decision, update, reason, expectedControllerGeneration } = {}) {
@@ -376,6 +402,7 @@ export function createSessionRuntime({
       const blocked = requireGeneration(expectedControllerGeneration);
       if (blocked) return blocked;
       epoch += 1;
+      pendingTurns.length = 0;
       await store.transact(conversationId, (next) => {
         next.partialTurn = null;
         next.queue = [];

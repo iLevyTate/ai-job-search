@@ -9152,25 +9152,47 @@ ${h2.join(`
       controllerGeneration: seed.controllerGeneration ?? 1,
       conversationId: seed.conversationId ?? null,
       busy: Boolean(seed.busy),
+      // True between Claude opening a thinking block and the first visible
+      // output (text or a tool call). The chat shows "Thinking" while it holds.
+      thinking: false,
+      // Reply text is split into a new card after every tool call, question, or
+      // permission prompt, so an answer that follows a file read lands below
+      // the tool chip instead of being appended to the text above it.
+      segment: 0,
       pendingQuestionId: null,
       pendingPermissionId: null
     };
   }
-  function cardIdFor(event) {
+  var QUIET_TYPES = /* @__PURE__ */ new Set([
+    "assistant.thinking",
+    "diagnostic.unknown_sdk_event",
+    "usage",
+    "hook.activity",
+    "mcp.status",
+    "session.status",
+    "turn.interrupted"
+  ]);
+  var MERGE_ONLY_TYPES = /* @__PURE__ */ new Set(["permission.resolved", "autofill.resolved", "tool.completed"]);
+  var TURN_END_TYPES = /* @__PURE__ */ new Set(["turn.completed", "turn.failed", "turn.interrupted"]);
+  function cardIdFor(event, segment = 0) {
     const payload = event?.payload ?? {};
     if (payload.entityId) return payload.entityId;
     if (payload.toolUseId) return payload.toolUseId;
     if (payload.requestId) return payload.requestId;
     if (payload.messageId) return payload.messageId;
-    if (event?.type === "assistant.delta" || event?.type === "assistant.message") {
-      return `assistant:${event.turnId || "current"}`;
+    if (event?.type === "assistant.delta" || event?.type === "assistant.message" || event?.type === "turn.completed") {
+      return `assistant:${event.turnId || "current"}${segment ? `:${segment}` : ""}`;
+    }
+    if (event?.type === "subagent.activity") {
+      return `subagent:${payload.parentToolUseId || event.turnId || "current"}`;
     }
     return event?.eventId;
   }
   function toRenderableCard(event, id) {
+    const type = event.type === "assistant.delta" || event.type === "turn.completed" ? "assistant.message" : event.type;
     return {
       id,
-      type: event.type === "assistant.delta" ? "assistant.message" : event.type,
+      type,
       payload: { ...event.payload },
       entered: false
     };
@@ -9180,6 +9202,24 @@ ${h2.join(`
     if (event.type === "assistant.delta") {
       next.type = "assistant.message";
       next.payload.text = `${existing.payload.text || ""}${event.payload?.text || ""}`;
+    }
+    if (event.type === "assistant.message") {
+      const incoming = event.payload?.text || "";
+      const current = existing.payload.text || "";
+      next.type = "assistant.message";
+      if (current.includes(incoming)) next.payload.text = current;
+      else if (incoming.includes(current)) next.payload.text = incoming;
+      else next.payload.text = `${current}
+
+${incoming}`;
+    }
+    if (event.type === "turn.completed") {
+      next.type = "assistant.message";
+      next.payload.text = existing.payload.text || event.payload?.text || "";
+    }
+    if (event.type === "subagent.activity") {
+      const incoming = event.payload?.text || "";
+      next.payload.text = incoming ? `${existing.payload.text || ""}${existing.payload.text ? "\n\n" : ""}${incoming}` : existing.payload.text || "";
     }
     if (event.type === "tool.completed") {
       next.type = "tool.completed";
@@ -9192,11 +9232,13 @@ ${h2.join(`
     return next;
   }
   function reduceDeskEvent(state2, event) {
-    if (!event || typeof event.sequence !== "number" || event.sequence <= state2.lastSequence) {
+    if (!event) return state2;
+    const local = event.local === true;
+    if (!local && (typeof event.sequence !== "number" || event.sequence <= state2.lastSequence)) {
       return state2;
     }
     const next = structuredClone(state2);
-    next.lastSequence = event.sequence;
+    if (!local) next.lastSequence = event.sequence;
     if (event.type === "user.queued") {
       next.queued.push({
         id: event.payload?.messageId || event.eventId,
@@ -9210,8 +9252,9 @@ ${h2.join(`
     if (event.type === "session.status" && event.payload?.controller) {
       next.controller = event.payload.controller;
     }
-    if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
+    if (TURN_END_TYPES.has(event.type)) {
       next.busy = false;
+      next.thinking = false;
       next.pendingQuestionId = null;
       next.pendingPermissionId = null;
       if (event.type === "turn.failed" || event.type === "turn.interrupted") {
@@ -9223,15 +9266,29 @@ ${h2.join(`
         }
       }
     }
-    if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "tool.started") {
+    if (event.type === "assistant.thinking") {
       next.busy = true;
+      next.thinking = true;
+    }
+    if (event.type === "user.message" || event.type === "assistant.delta" || event.type === "assistant.message" || event.type === "tool.started") {
+      next.busy = true;
+      next.thinking = false;
       if (event.payload?.messageId) {
         next.queued = next.queued.filter((item) => item.id !== event.payload.messageId);
       }
     }
-    const id = cardIdFor(event);
+    if (event.type === "user.message") next.segment = 0;
+    if (QUIET_TYPES.has(event.type)) return next;
+    if (event.type === "turn.completed" && !(event.payload?.text || "").trim() && !next.cards.has(cardIdFor(event, next.segment))) {
+      return next;
+    }
+    const id = cardIdFor(event, next.segment);
     if (!id) return next;
     const existing = next.cards.get(id);
+    if (!existing && MERGE_ONLY_TYPES.has(event.type)) return next;
+    if (!existing && (event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested")) {
+      next.segment += 1;
+    }
     const card = existing ? mergeCard(existing, event) : toRenderableCard(event, id);
     if (event.type === "question.requested") {
       card.entered = false;
@@ -9259,13 +9316,17 @@ ${h2.join(`
     if (snapshot.controller) next.controller = snapshot.controller;
     if (snapshot.controllerGeneration != null) next.controllerGeneration = snapshot.controllerGeneration;
     if (snapshot.conversationId) next.conversationId = snapshot.conversationId;
-    if (snapshot.busy != null) next.busy = Boolean(snapshot.busy);
+    if (snapshot.busy != null) {
+      next.busy = Boolean(snapshot.busy);
+      if (!next.busy) next.thinking = false;
+    }
     return next;
   }
   function queueFollowUp(state2, { messageId, text }) {
     return reduceDeskEvent(state2, {
       eventId: messageId,
       sequence: state2.lastSequence + 1,
+      local: true,
       type: "user.queued",
       payload: { messageId, text }
     });
@@ -9333,10 +9394,10 @@ ${h2.join(`
     list.className = "artifact-list";
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", "Artifacts");
-    for (const group of groupArtifactsByTurn(state2.artifacts)) {
+    groupArtifactsByTurn(state2.artifacts).forEach((group, index) => {
       const heading = document2.createElement("p");
       heading.className = "kicker";
-      heading.textContent = `Turn ${group.turnId}`;
+      heading.textContent = `Reply ${index + 1}`;
       list.append(heading);
       for (const artifact of group.items) {
         const button = document2.createElement("button");
@@ -9349,7 +9410,7 @@ ${h2.join(`
         button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
         list.append(button);
       }
-    }
+    });
     const preview = document2.createElement("div");
     preview.className = "artifact-preview";
     preview.dataset.kind = state2.preview?.kind || "none";
@@ -9571,11 +9632,78 @@ ${h2.join(`
   function primaryCommands(commands2) {
     return commands2.filter((command) => Number.isFinite(command.primaryOrder)).sort((left, right) => left.primaryOrder - right.primaryOrder);
   }
+  var PASTE_FIELD = "paste";
+  function hasKind(command, kind) {
+    return (command.arguments || []).some((argument) => argument.kind === kind);
+  }
+  function commandTakesPaste(command) {
+    return hasKind(command, "url") && hasKind(command, "multiline");
+  }
+  function commandNeedsInput(command) {
+    if (!command) return false;
+    if (commandTakesPaste(command)) return true;
+    return (command.arguments || []).some((argument) => argument.required);
+  }
+  var FIELD_LABELS = {
+    url: "Link",
+    posting: "Posting text",
+    company: "Company or role",
+    focus: "Focus",
+    query: "What to look for",
+    section: "Section",
+    path: "File path",
+    source: "Template file",
+    use: "Template to use",
+    mode: "Mode",
+    scope: "What to reset",
+    minScore: "Minimum score",
+    top: "How many"
+  };
+  var COMMAND_PLACEHOLDERS = {
+    autofill: "https://boards.greenhouse.io/company/jobs/123",
+    apply: "Paste the job link. If the site blocks links, paste the whole posting instead.",
+    import: "Paste the job link, or the whole posting."
+  };
+  function labelFor(argument) {
+    return argument.label || FIELD_LABELS[argument.name] || argument.name;
+  }
+  function looksLikeUrl(value) {
+    return /^https?:\/\/\S+$/i.test(String(value || "").trim());
+  }
+  function normalizeCommandValues(command, values = {}) {
+    if (!commandTakesPaste(command)) return { ...values };
+    const { [PASTE_FIELD]: pasted, ...rest } = values;
+    const text = String(pasted || "").trim();
+    if (!text) return rest;
+    const urlArgument = (command.arguments || []).find((argument) => argument.kind === "url");
+    const postingArgument = (command.arguments || []).find((argument) => argument.kind === "multiline");
+    if (looksLikeUrl(text)) return { ...rest, [urlArgument.name]: text };
+    return { ...rest, [postingArgument.name]: text };
+  }
+  function commandInputError(command, values = {}) {
+    if (!command) return "";
+    if (commandTakesPaste(command)) {
+      const normalized = normalizeCommandValues(command, values);
+      const filled = (command.arguments || []).some((argument) => {
+        const value = normalized[argument.name];
+        return value != null && String(value).trim() !== "";
+      });
+      return filled ? "" : "Paste a job link or the posting text first.";
+    }
+    for (const argument of command.arguments || []) {
+      if (!argument.required) continue;
+      const value = values[argument.name];
+      if (value == null || String(value).trim() === "") return `${labelFor(argument)} is required.`;
+      if (argument.kind === "url" && !looksLikeUrl(value)) return "That link should start with http:// or https://.";
+    }
+    return "";
+  }
   function renderCommandInvocation(command, values = {}) {
+    const normalized = normalizeCommandValues(command, values);
     const parts = [command.invocation];
     let multiline = "";
     for (const argument of command.arguments || []) {
-      const value = values[argument.name];
+      const value = normalized[argument.name];
       if (value == null || value === "" || value === false) continue;
       if (argument.kind === "boolean") {
         parts.push(argument.flag.startsWith("--") ? argument.flag : `--${argument.flag}`);
@@ -9596,20 +9724,26 @@ ${h2.join(`
 ${multiline}` : rendered;
   }
   function renderCommandForm(command) {
-    const fields = (command.arguments || []).map((argument) => {
+    if (commandTakesPaste(command)) {
+      const placeholder = escapeHtml2(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
+      return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
+    }
+    const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
       const name = escapeHtml2(argument.name);
+      const label = escapeHtml2(labelFor(argument));
+      const placeholder = escapeHtml2(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
       if (argument.kind === "choice") {
         const options = (argument.values || []).map((value) => `<option value="${escapeHtml2(value)}">${escapeHtml2(value)}</option>`).join("");
-        return `<label data-arg="${name}"><span>${name}</span><select name="${name}">${options}</select></label>`;
+        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
       }
       if (argument.kind === "boolean") {
-        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${name}</label>`;
+        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
       }
       if (argument.kind === "multiline") {
-        return `<label data-arg="${name}"><span>${name}</span><textarea name="${name}" rows="8"></textarea></label>`;
+        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
       }
       const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      return `<label data-arg="${name}"><span>${name}</span><input name="${name}" type="${type}"></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}" placeholder="${placeholder}"></label>`;
     });
     return fields.join("");
   }
@@ -9623,18 +9757,62 @@ ${multiline}` : rendered;
   }
   function whoFor(type) {
     if (type === "user.message") return "You";
-    if (type === "turn.failed" || type === "diagnostic.unknown_sdk_event") return "Stopped";
+    if (type === "turn.failed") return "Problem";
     if (type.startsWith("question") || type.startsWith("permission") || type.startsWith("autofill")) return "Needs you";
+    if (type === "artifact.discovered") return "Saved";
+    if (type === "subagent.activity") return "Helper";
     return "Claude";
   }
   function cardClass(card) {
     if (card.type === "user.message") return "msg user";
     if (card.type === "turn.failed") return "msg error";
     if (card.type.startsWith("tool")) return "msg assistant card-tool";
+    if (card.type === "artifact.discovered") return "msg assistant card-tool card-artifact";
+    if (card.type === "subagent.activity") return "msg assistant card-subagent";
     if (card.type.startsWith("question")) return "msg assistant card-question";
     if (card.type.startsWith("permission")) return "msg assistant card-permission";
     if (card.type.startsWith("autofill")) return "msg assistant card-autofill";
     return "msg assistant";
+  }
+  var TOOL_VERBS = {
+    Read: "Reading",
+    Write: "Writing",
+    Edit: "Editing",
+    MultiEdit: "Editing",
+    NotebookEdit: "Editing",
+    Bash: "Running",
+    Grep: "Searching",
+    Glob: "Searching",
+    LS: "Listing",
+    WebFetch: "Fetching",
+    WebSearch: "Searching the web",
+    Agent: "Running a helper agent",
+    Task: "Running a helper agent",
+    Skill: "Running",
+    TodoWrite: "Planning"
+  };
+  function toolDetail(input = {}) {
+    const detail = input.file_path || input.path || input.notebook_path || input.description || input.query || input.url || input.pattern || input.skill || input.command || "";
+    const text = String(detail || "").replace(/\s+/g, " ").trim();
+    return text.length > 72 ? `${text.slice(0, 71)}\u2026` : text;
+  }
+  function describeTool(name, input = {}) {
+    const verb = TOOL_VERBS[name] || `Using ${name || "a tool"}`;
+    const detail = toolDetail(input);
+    return detail ? `${verb} ${detail}` : verb;
+  }
+  function activityFor(state2) {
+    if (!state2?.busy) return "";
+    if (state2.thinking) return "Thinking";
+    const cards = [...state2.cards.values()];
+    for (let index = cards.length - 1; index >= 0; index -= 1) {
+      const card = cards[index];
+      if (card.type === "tool.started") return describeTool(card.payload.name, card.payload.input);
+      if (card.type === "assistant.message" && (card.payload.text || "").length) return "Writing";
+      if (card.type === "tool.completed") return "Working";
+      if (card.type === "user.message") break;
+    }
+    return "Working";
   }
   function renderQuestionBody(card) {
     const questions = card.payload.questions || [];
@@ -9684,41 +9862,95 @@ ${multiline}` : rendered;
     if (card.type === "autofill.review" || card.type === "autofill.resolved") return renderAutofillBody(card);
     if (card.type.startsWith("tool")) {
       const phase = card.type === "tool.completed" ? "done" : "live";
-      return `<p class="tool ${phase}">${escapeHtml2(card.payload.name || "tool")} ${phase === "done" ? "done" : ""}</p>`;
+      const label = describeTool(card.payload.name, card.payload.input);
+      return `<p class="tool ${phase}" title="${escapeHtml2(card.payload.name || "tool")}">${escapeHtml2(label)}</p>`;
+    }
+    if (card.type === "artifact.discovered") {
+      return `<p class="tool done">Saved ${escapeHtml2(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
-    if (markdown2 && (card.type === "assistant.message" || card.type === "turn.completed")) {
+    if (card.type === "subagent.activity") {
+      const label = card.payload.subagentType ? `${card.payload.subagentType} agent` : "Helper agent";
+      const body = markdown2 ? markdown2(text) : `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
+      return `<details class="subagent"><summary>${escapeHtml2(label)} notes</summary>${body}</details>`;
+    }
+    if (markdown2 && card.type === "assistant.message") {
       return markdown2(text);
     }
     return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>`;
   }
+  function signatureFor(card) {
+    const text = card.payload.text || "";
+    return [
+      card.type,
+      card.entered ? "1" : "0",
+      card.payload.phase || "",
+      card.payload.decision || "",
+      card.type.startsWith("tool") ? describeTool(card.payload.name, card.payload.input) : "",
+      text.length,
+      text.slice(-24),
+      card.payload.questions ? JSON.stringify(card.payload.questions).length : 0
+    ].join("|");
+  }
+  function paintCard(article, card, options) {
+    article.className = `${cardClass(card)}${article.classList.contains("enter") ? " enter" : ""}`;
+    article.dataset.cardType = card.type;
+    if (card.entered) article.dataset.entered = "true";
+    else delete article.dataset.entered;
+    article.dataset.sig = signatureFor(card);
+    const body = article.querySelector(":scope > .body");
+    body.innerHTML = bodyHtml(card, options);
+  }
   function renderChat(container, state2, options = {}) {
     const document2 = container.ownerDocument;
-    container.replaceChildren();
     if (!state2.cards.size && !state2.queued.length) {
+      container.replaceChildren();
       container.insertAdjacentHTML("afterbegin", options.emptyHtml || "");
       return;
     }
+    const existing = /* @__PURE__ */ new Map();
+    for (const node of [...container.children]) {
+      if (node.tagName === "ARTICLE" && node.dataset.cardId) existing.set(node.dataset.cardId, node);
+      else node.remove();
+    }
+    let cursor = container.firstElementChild;
     for (const card of state2.cards.values()) {
-      const article = document2.createElement("article");
-      article.className = cardClass(card);
-      article.dataset.cardId = card.id;
-      article.dataset.cardType = card.type;
-      if (card.entered) article.dataset.entered = "true";
-      article.innerHTML = `
-      <div class="msg-head">
-        <div class="who">${escapeHtml2(whoFor(card.type))}</div>
-      </div>
-      <div class="body">${bodyHtml(card, options)}</div>
-    `;
-      container.append(article);
+      let article = existing.get(card.id);
+      if (article) {
+        existing.delete(card.id);
+        if (article.dataset.sig !== signatureFor(card)) paintCard(article, card, options);
+      } else {
+        article = document2.createElement("article");
+        article.dataset.cardId = card.id;
+        article.innerHTML = `<div class="msg-head"><div class="who"></div></div><div class="body"></div>`;
+        paintCard(article, card, options);
+        article.classList.add("enter");
+      }
+      article.querySelector(":scope > .msg-head > .who").textContent = whoFor(card.type);
+      if (article !== cursor) container.insertBefore(article, cursor);
+      else cursor = cursor.nextElementSibling;
+    }
+    for (const stale of existing.values()) stale.remove();
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
     }
     if (state2.queued.length) {
       const queue = document2.createElement("div");
       queue.className = "queue";
       queue.setAttribute("aria-label", "Queued messages");
-      queue.innerHTML = state2.queued.map((item) => `<p data-queue-id="${escapeHtml2(item.id)}">${escapeHtml2(item.text)}</p>`).join("");
+      queue.innerHTML = `<p class="kicker">Next up</p>${state2.queued.map((item) => `<p data-queue-id="${escapeHtml2(item.id)}">${escapeHtml2(item.text)}</p>`).join("")}`;
       container.append(queue);
+    }
+    const activity = activityFor(state2);
+    if (activity) {
+      const row = document2.createElement("div");
+      row.className = "activity";
+      row.setAttribute("role", "status");
+      row.dataset.activity = activity;
+      row.innerHTML = `<span class="activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="activity-text">${escapeHtml2(activity)}\u2026</span>`;
+      container.append(row);
     }
   }
   function renderPaletteList(container, commands2) {
@@ -9761,6 +9993,7 @@ ${multiline}` : rendered;
   var sheetKicker = document.getElementById("sheet-kicker");
   var sheetCopy = document.getElementById("sheet-copy");
   var sheetFields = document.getElementById("sheet-fields");
+  var sheetError = document.getElementById("sheet-error");
   var clockEl = document.getElementById("clock");
   var menuBtn = document.getElementById("menu");
   var scrim = document.getElementById("scrim");
@@ -9838,6 +10071,11 @@ ${multiline}` : rendered;
     if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
   }
+  function jumpToLatest() {
+    stickToBottom = true;
+    logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+    jumpBtn.hidden = true;
+  }
   function paintMode() {
     if (!modeEl) return;
     const label = state.permissionMode === "autonomous" ? "Autonomous" : "Safe";
@@ -9854,7 +10092,7 @@ ${multiline}` : rendered;
     sendBtn.disabled = next && !runtimeSocket;
     stopBtn.hidden = !next;
     document.body.classList.toggle("working", next);
-    statusEl.textContent = next ? "Claude is working" : "Ready";
+    statusEl.textContent = next ? "Claude is working. Stop cancels this turn." : "Ready";
   }
   function setWorkspaceLabel(root) {
     if (!workspaceEl || !root) return;
@@ -9973,7 +10211,8 @@ ${multiline}` : rendered;
     }
     ingest({
       eventId: `sse-${sseSequence}`,
-      sequence: Math.max(state.lastSequence + 1, sseSequence),
+      sequence: sseSequence,
+      local: true,
       turnId: `turn-${sseTurn}`,
       type,
       payload
@@ -10026,11 +10265,9 @@ ${multiline}` : rendered;
       setBusy(true);
       const messageId = `m-${Date.now()}`;
       if (runtimeSend({ type: "user.message", messageId, text })) {
-        sseEvent("user.message", { messageId, text });
         return true;
       }
       try {
-        sseEvent("user.message", { text });
         const res = await post("/send", { prompt: text });
         if (!res.ok) throw new Error();
         return true;
@@ -10054,7 +10291,7 @@ ${multiline}` : rendered;
       else if (name === "outcome") sendPrompt("/outcome");
       return;
     }
-    if (!command.arguments?.length) {
+    if (!commandNeedsInput(command)) {
       sendPrompt(command.invocation);
       return;
     }
@@ -10064,8 +10301,10 @@ ${multiline}` : rendered;
     activeCommand = command;
     sheetKicker.textContent = command.invocation;
     sheetTitle.textContent = command.title;
-    sheetCopy.textContent = command.description || "Fill the fields you need, then run.";
+    sheetCopy.textContent = command.description || "Add what the step needs, then run.";
     sheetFields.innerHTML = renderCommandForm(command);
+    sheetError.hidden = true;
+    sheetError.textContent = "";
     sheet.showModal();
     sheetFields.querySelector("input, textarea, select")?.focus();
   }
@@ -10156,8 +10395,11 @@ ${multiline}` : rendered;
   });
   source.addEventListener("tool", (event) => {
     if (runtimeSocket) return;
-    const { name, phase } = JSON.parse(event.data);
-    sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: `tool-${name}`, name });
+    const { id, name, phase, input } = JSON.parse(event.data);
+    sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
+  });
+  source.addEventListener("thinking", () => {
+    if (!runtimeSocket) sseEvent("assistant.thinking", {});
   });
   source.addEventListener("status", (event) => {
     statusEl.textContent = JSON.parse(event.data).text;
@@ -10227,17 +10469,16 @@ ${multiline}` : rendered;
   sheetForm.addEventListener("submit", (event) => {
     if (event.submitter?.value !== "run") return;
     if (!activeCommand) return;
-    const prompt = renderCommandInvocation(activeCommand, valuesFromForm(sheetFields));
-    if (!prompt || prompt === activeCommand.invocation && activeCommand.arguments.some((argument) => argument.kind === "url")) {
-      const values = valuesFromForm(sheetFields);
-      const needsUrl = activeCommand.arguments.some((argument) => argument.kind === "url");
-      if (needsUrl && !values.url && !values.posting) {
-        event.preventDefault();
-        statusEl.textContent = "Add a URL or paste the posting.";
-        return;
-      }
+    const values = valuesFromForm(sheetFields);
+    const problem = commandInputError(activeCommand, values);
+    if (problem) {
+      event.preventDefault();
+      sheetError.textContent = problem;
+      sheetError.hidden = false;
+      sheetFields.querySelector("input, textarea, select")?.focus();
+      return;
     }
-    sendPrompt(renderCommandInvocation(activeCommand, valuesFromForm(sheetFields)));
+    sendPrompt(renderCommandInvocation(activeCommand, values));
   });
   stopBtn.addEventListener("click", async () => {
     if (runtimeSend({ type: "turn.interrupt" })) return;
@@ -10272,10 +10513,7 @@ ${multiline}` : rendered;
   });
   menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
   scrim.addEventListener("click", () => setMenu(false));
-  jumpBtn.addEventListener("click", () => {
-    stickToBottom = true;
-    scrollLog();
-  });
+  jumpBtn.addEventListener("click", jumpToLatest);
   logEl.addEventListener("scroll", () => {
     stickToBottom = nearBottom();
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
@@ -10418,7 +10656,11 @@ ${multiline}` : rendered;
     }
   }
   bindDelegatedActions(document);
+  var surfaceTabs = [{ id: "chat", label: "Chat" }];
+  if (window.deskApp?.terminal) surfaceTabs.push({ id: "terminal", label: "Terminal" });
+  surfaceTabs.push({ id: "files", label: "Files" });
   mountTabs(document.getElementById("surface-tabs"), {
+    tabs: surfaceTabs,
     selectedId: "chat",
     onSelect(id) {
       if (id === "files") loadArtifacts();
@@ -10477,6 +10719,8 @@ ${multiline}` : rendered;
   var gateCodeWrap = document.getElementById("gate-code-wrap");
   var gateCode = document.getElementById("gate-code");
   var gateChrome = document.getElementById("gate-chrome");
+  var gateLink = document.getElementById("gate-link");
+  var gateLinkWrap = document.getElementById("gate-link-wrap");
   var accountLabel = document.getElementById("account-label");
   var authWaiter = null;
   var lastHealth = null;
@@ -10536,6 +10780,7 @@ ${multiline}` : rendered;
     accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
     gateCancel.hidden = true;
     gateCodeWrap.hidden = true;
+    gateLinkWrap.hidden = true;
     if (health.loggedIn) {
       setGate(false);
       return true;
@@ -10546,7 +10791,7 @@ ${multiline}` : rendered;
       return false;
     }
     if (needsLogin(health)) {
-      setGate(true, "Starting Claude Code", "A browser window will open on claude.ai. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
+      setGate(true, "Starting Claude Code", "One claude.ai tab will open in your browser. Use the same email as your Chrome Claude subscription (Pro, Max, Team, or Enterprise). API keys are not required.");
       gateAction.textContent = claudeAutoStarted ? "Working\u2026" : "Sign in with Claude";
       return false;
     }
@@ -10607,9 +10852,10 @@ ${multiline}` : rendered;
   source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
   source.addEventListener("auth-url", (event) => {
     const url = JSON.parse(event.data).url;
-    appendGateLog(`Open this login page if the browser did not appear:
-${url}`);
-    window.open(url, "_blank", "noopener");
+    if (!/^https:\/\//.test(url)) return;
+    gateLink.href = url;
+    gateLinkWrap.hidden = false;
+    gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window.";
   });
   source.addEventListener("auth-code", () => {
     gateCodeWrap.hidden = false;
