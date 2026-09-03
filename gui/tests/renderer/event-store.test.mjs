@@ -139,3 +139,36 @@ test("reply text after a tool call gets its own card below the tool chip", () =>
   state = reduceDeskEvent(state, event(10, "assistant.delta", { text: "Sure." }, { turnId: "turn-2" }));
   assert.equal(state.cards.get("assistant:turn-2").payload.text, "Sure.");
 });
+
+test("a question announced after its tool chip becomes the form, and the tool result closes it", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "tool.started", { toolUseId: "tool-q", name: "AskUserQuestion" }));
+  state = reduceDeskEvent(state, event(2, "question.requested", { toolUseId: "tool-q", questions: [{ question: "Lane?", options: [{ label: "A" }] }] }));
+  assert.equal(state.cards.get("tool-q").type, "question.requested");
+  assert.equal(state.pendingQuestionId, "tool-q");
+  state = reduceDeskEvent(state, event(3, "tool.completed", { toolUseId: "tool-q", text: "denied" }));
+  assert.equal(state.cards.get("tool-q").type, "question.requested");
+  assert.equal(state.cards.get("tool-q").entered, true);
+});
+
+test("the full message after a tool call does not repeat text streamed before it", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "user.message", { messageId: "m1", text: "go" }));
+  state = reduceDeskEvent(state, event(2, "assistant.delta", { text: "Let me look." }));
+  state = reduceDeskEvent(state, event(3, "tool.started", { toolUseId: "t1", name: "Read" }));
+  state = reduceDeskEvent(state, event(4, "assistant.message", { text: "Let me look." }));
+  assert.deepEqual([...state.cards.keys()], ["m1", "assistant:turn-1", "t1"]);
+  state = reduceDeskEvent(state, event(5, "tool.completed", { toolUseId: "t1" }));
+  state = reduceDeskEvent(state, event(6, "assistant.message", { text: "Found it." }));
+  assert.equal(state.cards.get("assistant:turn-1:1").payload.text, "Found it.");
+});
+
+test("a permission resolution clears the pending flag and marks the card decided", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "permission.requested", { entityId: "req-1", toolName: "Write", suggestions: [] }));
+  assert.equal(state.pendingPermissionId, "req-1");
+  state = reduceDeskEvent(state, event(2, "permission.resolved", { entityId: "req-1", decision: "allow" }));
+  assert.equal(state.pendingPermissionId, null);
+  assert.equal(state.cards.get("req-1").entered, true);
+  assert.equal(state.cards.get("req-1").payload.decision, "allow");
+});

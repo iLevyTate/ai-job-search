@@ -13,12 +13,10 @@ function cancelledQuestion(reason) {
   return { answers: {}, cancelled: true, reason };
 }
 
+// The Agent SDK keys AskUserQuestion answers by the question text, not the
+// short header chip.
 function questionKey(question) {
-  return question.header || question.question;
-}
-
-function optionLabels(question) {
-  return new Set((question.options ?? []).map((option) => option.label));
+  return question.question || question.header;
 }
 
 function isFreeText(question) {
@@ -53,18 +51,15 @@ function validateQuestionAnswers(questions, answers) {
   for (const question of questions) {
     const key = questionKey(question);
     const value = answers[key];
-    if (isFreeText(question)) {
-      if (typeof value !== "string" || !value.trim()) return false;
-      continue;
-    }
-    const labels = optionLabels(question);
-    if (question.multiSelect) {
-      if (!Array.isArray(value) || value.length === 0 || value.some((item) => !labels.has(item))) {
+    if (!isFreeText(question) && question.multiSelect) {
+      if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) {
         return false;
       }
       continue;
     }
-    if (typeof value !== "string" || !labels.has(value)) return false;
+    // A single-choice question takes an option label or the user's own words
+    // (the SDK's "Other" path); a free-text question takes any non-empty text.
+    if (typeof value !== "string" || !value.trim()) return false;
   }
   return true;
 }

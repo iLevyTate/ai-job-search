@@ -75,6 +75,9 @@ function fromStreamEvent(message, context) {
   if (inner.type === "content_block_start") {
     const block = inner.content_block || {};
     if (block.type === "tool_use") {
+      // Questions are announced from canUseTool, where they can be answered;
+      // a chip here would paint "Using AskUserQuestion" in front of the form.
+      if (block.name === "AskUserQuestion") return [];
       return [event("tool.started", {
         toolUseId: block.id,
         name: block.name || "tool",
@@ -117,14 +120,15 @@ function fromAssistant(message, context) {
     return events;
   }
 
+  let sawQuestion = false;
   if (Array.isArray(content)) {
     for (const block of content) {
       if (block?.type === "tool_use" && block.name === "AskUserQuestion") {
-        events.push(event("question.requested", {
-          toolUseId: block.id,
-          questions: block.input?.questions ?? [],
-          sessionId,
-        }, context));
+        // Questions reach the desk through canUseTool (session-runtime
+        // publishes question.requested there), the only channel that can
+        // carry the answer back to Claude. Announcing the block here too would
+        // paint a second, unanswerable card.
+        sawQuestion = true;
         continue;
       }
       if (block?.type === "tool_use") {
@@ -146,7 +150,7 @@ function fromAssistant(message, context) {
     events.push(event("turn.failed", { text: String(message.error), sessionId }, context));
   }
 
-  return events.length ? events : [diagnosticEvent(message, context)];
+  return events.length || sawQuestion ? events : [diagnosticEvent(message, context)];
 }
 
 function fromUser(message, context) {

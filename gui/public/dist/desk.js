@@ -9172,7 +9172,7 @@ ${h2.join(`
     "session.status",
     "turn.interrupted"
   ]);
-  var MERGE_ONLY_TYPES = /* @__PURE__ */ new Set(["permission.resolved", "autofill.resolved", "tool.completed"]);
+  var MERGE_ONLY_TYPES = /* @__PURE__ */ new Set(["permission.resolved", "question.resolved", "autofill.resolved", "tool.completed"]);
   var TURN_END_TYPES = /* @__PURE__ */ new Set(["turn.completed", "turn.failed", "turn.interrupted"]);
   function cardIdFor(event, segment = 0) {
     const payload = event?.payload ?? {};
@@ -9199,6 +9199,15 @@ ${h2.join(`
   }
   function mergeCard(existing, event) {
     const next = { ...existing, payload: { ...existing.payload, ...event.payload } };
+    if (event.type === "question.requested" || event.type === "permission.requested") {
+      next.type = event.type;
+      next.entered = false;
+      return next;
+    }
+    if (event.type === "tool.completed" && (existing.type.startsWith("question") || existing.type.startsWith("permission"))) {
+      next.entered = true;
+      return next;
+    }
     if (event.type === "assistant.delta") {
       next.type = "assistant.message";
       next.payload.text = `${existing.payload.text || ""}${event.payload?.text || ""}`;
@@ -9229,7 +9238,22 @@ ${incoming}`;
       next.entered = true;
       next.payload.decision = event.payload?.decision;
     }
+    if (event.type === "question.resolved") {
+      next.entered = true;
+      next.payload.answered = event.payload?.answered !== false;
+      next.payload.reason = event.payload?.reason;
+    }
     return next;
+  }
+  function restatesEarlierSegment(cards, event, segment) {
+    if (event.type !== "assistant.message" || segment === 0) return false;
+    const incoming = (event.payload?.text || "").trim();
+    if (!incoming) return true;
+    for (let index = segment - 1; index >= 0; index -= 1) {
+      const earlier = cards.get(cardIdFor(event, index));
+      if (earlier?.payload?.text && earlier.payload.text.includes(incoming)) return true;
+    }
+    return false;
   }
   function reduceDeskEvent(state2, event) {
     if (!event) return state2;
@@ -9278,6 +9302,8 @@ ${incoming}`;
       }
     }
     if (event.type === "user.message") next.segment = 0;
+    if (event.type === "question.resolved" && next.pendingQuestionId === cardIdFor(event)) next.pendingQuestionId = null;
+    if (event.type === "permission.resolved" && next.pendingPermissionId === cardIdFor(event)) next.pendingPermissionId = null;
     if (QUIET_TYPES.has(event.type)) return next;
     if (event.type === "turn.completed" && !(event.payload?.text || "").trim() && !next.cards.has(cardIdFor(event, next.segment))) {
       return next;
@@ -9286,6 +9312,7 @@ ${incoming}`;
     if (!id) return next;
     const existing = next.cards.get(id);
     if (!existing && MERGE_ONLY_TYPES.has(event.type)) return next;
+    if (!existing && restatesEarlierSegment(next.cards, event, next.segment)) return next;
     if (!existing && (event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested")) {
       next.segment += 1;
     }
@@ -9751,13 +9778,46 @@ ${multiline}` : rendered;
     const values = {};
     for (const field of form2.querySelectorAll("[name]")) {
       if (field.type === "checkbox") values[field.name] = field.checked;
+      else if (field.multiple) values[field.name] = [...field.selectedOptions].map((option) => option.value);
       else values[field.name] = field.value;
     }
     return values;
   }
+  function questionKey(question, index) {
+    return question.question || question.header || `q${index}`;
+  }
+  function answersFromQuestionForm(form2, questions = []) {
+    const answers = {};
+    questions.forEach((question, index) => {
+      const name = `q${index}`;
+      const other = form2.querySelector(`[name="${name}__other"]`)?.value?.trim() || "";
+      const options = question.options || [];
+      if (!options.length) {
+        const text = form2.querySelector(`[name="${name}"]`)?.value?.trim() || "";
+        if (text) answers[questionKey(question, index)] = text;
+        return;
+      }
+      const picked = [...form2.querySelectorAll(`[name="${name}"]`)].filter((input) => input.checked).map((input) => input.value);
+      if (question.multiSelect) {
+        const list = [...picked, ...other ? [other] : []];
+        if (list.length) answers[questionKey(question, index)] = list;
+      } else if (other) {
+        answers[questionKey(question, index)] = other;
+      } else if (picked[0]) {
+        answers[questionKey(question, index)] = picked[0];
+      }
+    });
+    return answers;
+  }
+  function questionAnswersError(questions = [], answers = {}) {
+    const missing = questions.filter((question, index) => answers[questionKey(question, index)] == null);
+    if (!missing.length) return "";
+    return questions.length === 1 ? "Pick an answer or type your own first." : "Answer every question first.";
+  }
   function whoFor(type) {
     if (type === "user.message") return "You";
     if (type === "turn.failed") return "Problem";
+    if (type === "desk.notice") return "Desk";
     if (type.startsWith("question") || type.startsWith("permission") || type.startsWith("autofill")) return "Needs you";
     if (type === "artifact.discovered") return "Saved";
     if (type === "subagent.activity") return "Helper";
@@ -9766,6 +9826,7 @@ ${multiline}` : rendered;
   function cardClass(card) {
     if (card.type === "user.message") return "msg user";
     if (card.type === "turn.failed") return "msg error";
+    if (card.type === "desk.notice") return "msg notice";
     if (card.type.startsWith("tool")) return "msg assistant card-tool";
     if (card.type === "artifact.discovered") return "msg assistant card-tool card-artifact";
     if (card.type === "subagent.activity") return "msg assistant card-subagent";
@@ -9803,6 +9864,7 @@ ${multiline}` : rendered;
   }
   function activityFor(state2) {
     if (!state2?.busy) return "";
+    if (state2.pendingQuestionId || state2.pendingPermissionId) return "";
     if (state2.thinking) return "Thinking";
     const cards = [...state2.cards.values()];
     for (let index = cards.length - 1; index >= 0; index -= 1) {
@@ -9816,29 +9878,48 @@ ${multiline}` : rendered;
   }
   function renderQuestionBody(card) {
     const questions = card.payload.questions || [];
-    const disabled = card.entered ? " disabled" : "";
-    const fields = questions.map((question, index) => {
-      const key = question.header || question.question || `q${index}`;
+    const readOnly = card.payload.readOnly === true;
+    const disabled = card.entered || readOnly ? " disabled" : "";
+    const blocks = questions.map((question, index) => {
+      const name = `q${index}`;
       const options = question.options || [];
+      const legend = question.header ? `<legend>${escapeHtml2(question.header)}</legend>` : "";
+      const text = `<p class="q-text">${escapeHtml2(question.question || question.header || "")}</p>`;
       if (!options.length) {
-        return `<label><span>${escapeHtml2(question.question || key)}</span><textarea name="${escapeHtml2(key)}"${disabled}></textarea></label>`;
+        return `<fieldset class="q" data-question="${index}">${legend}${text}<textarea name="${name}" rows="3" placeholder="Type your answer"${disabled}></textarea></fieldset>`;
       }
-      const multiple = question.multiSelect ? " multiple" : "";
-      const choices = options.map((option) => `<option value="${escapeHtml2(option.label)}">${escapeHtml2(option.label)}</option>`).join("");
-      return `<label><span>${escapeHtml2(question.question || key)}</span><select name="${escapeHtml2(key)}"${multiple}${disabled}>${choices}</select></label>`;
+      const type = question.multiSelect ? "checkbox" : "radio";
+      const choices = options.map((option) => `<label class="q-option"><input type="${type}" name="${name}" value="${escapeHtml2(option.label)}"${disabled}><span><strong>${escapeHtml2(option.label)}</strong>${option.description ? `<em>${escapeHtml2(option.description)}</em>` : ""}</span></label>`).join("");
+      const hint = question.multiSelect ? `<p class="hint">Pick all that apply.</p>` : "";
+      const other = `<label class="q-option q-other"><span>Something else</span><input type="text" name="${name}__other" placeholder="Type your own answer"${disabled}></label>`;
+      return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
     }).join("");
-    return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${fields}<button type="submit"${disabled}>Answer</button></form>`;
+    if (readOnly) {
+      return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml2(card.id)}"><p>Claude has a question.</p>${blocks}<p class="hint">Type your answer in the box below and send it.</p></div>`;
+    }
+    const footer = card.entered ? `<p class="hint">${card.payload.answered === false ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered." : "Answered."}</p>` : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
+    return `<form class="interaction" data-kind="question" data-id="${escapeHtml2(card.id)}">${blocks}${footer}</form>`;
   }
   function renderPermissionBody(card) {
     const disabled = card.entered ? " disabled" : "";
-    const scoped = Array.isArray(card.payload.suggestions) && card.payload.suggestions.length ? `<button type="button" data-decision="allow-scoped"${disabled}>Allow for workspace</button>` : "";
+    const name = card.payload.displayName || card.payload.toolName || "A tool";
+    const title = card.payload.title || `Claude wants to use ${name}.`;
+    const detail = describeTool(card.payload.toolName, card.payload.input || {});
+    const description = card.payload.description ? `<p class="hint">${escapeHtml2(card.payload.description)}</p>` : "";
+    const suggestions = Array.isArray(card.payload.suggestions) ? card.payload.suggestions : [];
+    const persistent = suggestions.some((item) => item?.destination === "localSettings" || item?.destination === "projectSettings");
+    const scoped = suggestions.length ? `<button type="button" data-decision="allow-scoped"${disabled}>${persistent ? "Allow in this folder from now on" : "Allow for the rest of this chat"}</button>` : "";
+    const outcome = card.entered ? `<p class="hint">${card.payload.decision === "deny" ? card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without it." : "Not allowed." : "Allowed."}</p>` : "";
     return `<div class="interaction" data-kind="permission" data-id="${escapeHtml2(card.id)}">
-    <p>${escapeHtml2(card.payload.toolName || "Tool")} needs approval.</p>
+    <p>${escapeHtml2(title)}</p>
+    ${detail && !card.payload.title ? `<p class="tool done">${escapeHtml2(detail)}</p>` : ""}
+    ${description}
     <div class="sheet-actions">
       <button type="button" data-decision="allow-once"${disabled}>Allow once</button>
       ${scoped}
-      <button type="button" data-decision="deny" class="ghost"${disabled}>Deny</button>
+      <button type="button" data-decision="deny" class="ghost"${disabled}>Don't allow</button>
     </div>
+    ${outcome}
   </div>`;
   }
   function renderAutofillBody(card) {
@@ -10017,6 +10098,24 @@ ${multiline}` : rendered;
   var stickToBottom = true;
   var terminalView = null;
   var terminalId = null;
+  var runtimeMode = false;
+  var hasReset = false;
+  var REJECT_TEXT = {
+    full: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+    busy: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+    "stale-controller": "The desk was out of step for a moment. Please try that again.",
+    "wrong-controller": "The Terminal tab has the conversation right now. Switch back to Chat first.",
+    "handoff-in-progress": "The desk is switching tabs. Try again in a moment.",
+    closed: "Claude is not running. Start a new chat.",
+    "unknown-request": "That question has already been answered, or it expired.",
+    malformed: "Answer every question before sending."
+  };
+  function notice(text) {
+    sseEvent("desk.notice", { text });
+  }
+  function syncBusy() {
+    if (state.busy !== busy) setBusy(state.busy);
+  }
   function emptyMarkup(kind) {
     if (kind === "reset") {
       return `<div class="empty" id="empty">
@@ -10083,7 +10182,7 @@ ${multiline}` : rendered;
     modeEl.dataset.mode = state.permissionMode;
   }
   function paintChat() {
-    renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(state.cards.size ? "reset" : void 0) });
+    renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : void 0) });
     paintMode();
     scrollLog();
   }
@@ -10267,18 +10366,43 @@ ${multiline}` : rendered;
       if (runtimeSend({ type: "user.message", messageId, text })) {
         return true;
       }
+      let res;
       try {
-        const res = await post("/send", { prompt: text });
-        if (!res.ok) throw new Error();
-        return true;
+        res = await post("/send", { prompt: text });
       } catch {
         setBusy(false);
-        sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
+        sseEvent("turn.failed", { text: "The desk cannot reach its local server. Close this tab and open the desk again." });
         return false;
       }
+      if (res.ok) return true;
+      const body = await res.json().catch(() => ({}));
+      if (!state.busy) setBusy(false);
+      notice(sendErrorText(res.status, body.error));
+      return false;
     } finally {
       sendPending = false;
     }
+  }
+  function sendErrorText(status, reason) {
+    if (status === 409 || reason === "busy") return REJECT_TEXT.busy;
+    if (status === 413) return "That message is too long to send. Paste a shorter posting.";
+    if (status === 400) return "The desk could not send an empty message.";
+    return "The desk could not send that message. Try again, and if it keeps happening close this tab and open the desk again.";
+  }
+  function handleRejected(message) {
+    const reason = message.reason || "rejected";
+    if (reason === "duplicate") return;
+    if (message.command === "user.message" || !message.command) {
+      if (message.messageId) {
+        state = { ...state, queued: state.queued.filter((item) => item.id !== message.messageId) };
+      }
+      if (!state.busy) setBusy(false);
+    } else if (message.requestId && state.cards.has(message.requestId)) {
+      const next = structuredClone(state);
+      next.cards.get(message.requestId).entered = false;
+      state = next;
+    }
+    notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
   }
   function runAction(name) {
     const command = commands.find((item) => item.id === name);
@@ -10347,20 +10471,21 @@ ${multiline}` : rendered;
         return;
       }
       if (message.type === "snapshot") {
+        runtimeMode = true;
         state = applySnapshot(state, message.snapshot || {});
+        syncBusy();
         paintChat();
       } else if (message.type === "event" && message.event) {
         ingest(message.event);
       } else if (message.type === "command.rejected") {
-        setBusy(false);
-        sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+        handleRejected(message);
       } else if (message.type === "protocol.error") {
-        setBusy(false);
-        sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
+        notice(`The desk and Claude disagreed about a message (${message.error || "protocol error"}). Try again.`);
       }
     });
     socket.addEventListener("close", () => {
       if (runtimeSocket === socket) runtimeSocket = null;
+      if (runtimeMode) window.setTimeout(connectRuntime, 2e3);
     });
     socket.addEventListener("error", () => {
       socket.close();
@@ -10369,19 +10494,31 @@ ${multiline}` : rendered;
   var source = new EventSource("/events");
   source.addEventListener("hello", (event) => {
     const data = JSON.parse(event.data);
-    setBusy(Boolean(data.busy));
     rememberSession(data);
-    if (Array.isArray(data.transcript) && data.transcript.length && !state.cards.size) {
-      replayingTranscript = true;
-      try {
-        for (const entry of data.transcript) {
-          const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
-          sseEvent(type, { text: entry.text || "" });
-        }
-      } finally {
-        replayingTranscript = false;
+    if (runtimeMode) return;
+    state = createDeskState({ permissionMode: state.permissionMode });
+    sseSequence = 0;
+    sseTurn = 0;
+    sseTurnClosed = true;
+    replayingTranscript = true;
+    try {
+      for (const entry of data.transcript || []) {
+        const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : entry.role === "notice" ? "desk.notice" : "turn.failed";
+        sseEvent(type, { text: entry.text || "" });
       }
+    } finally {
+      replayingTranscript = false;
     }
+    state = applySnapshot(state, { busy: Boolean(data.busy) });
+    sseTurnClosed = !data.busy;
+    setBusy(Boolean(data.busy));
+    if (data.runtimeError && window.deskApp) {
+      notice("The app's connection to Claude Code did not start, so the desk is using a simpler mode: Claude runs each message on its own and does not ask before using tools. Restarting the app usually fixes this.");
+      modeEl.textContent = "Autonomous";
+      modeEl.dataset.mode = "autonomous";
+    }
+    paintChat();
+    if (statusEl.textContent.startsWith("Reconnecting")) statusEl.textContent = busy ? "Claude is working. Stop cancels this turn." : "Ready";
   });
   source.addEventListener("session", (event) => rememberSession(JSON.parse(event.data)));
   source.addEventListener("user", (event) => {
@@ -10398,14 +10535,18 @@ ${multiline}` : rendered;
     const { id, name, phase, input } = JSON.parse(event.data);
     sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
   });
+  source.addEventListener("question", (event) => {
+    if (runtimeSocket) return;
+    const { id, questions } = JSON.parse(event.data);
+    sseEvent("question.requested", { entityId: id, toolUseId: id, questions: questions || [], readOnly: true });
+  });
   source.addEventListener("thinking", () => {
     if (!runtimeSocket) sseEvent("assistant.thinking", {});
   });
   source.addEventListener("status", (event) => {
     statusEl.textContent = JSON.parse(event.data).text;
   });
-  source.addEventListener("log", (event) => {
-    statusEl.textContent = JSON.parse(event.data).text.slice(0, 180);
+  source.addEventListener("log", () => {
   });
   source.addEventListener("turn-error", (event) => {
     if (event.data && !runtimeSocket) sseEvent("turn.failed", { text: JSON.parse(event.data).text });
@@ -10415,6 +10556,8 @@ ${multiline}` : rendered;
     sseEvent("autofill.review", payload);
   });
   source.addEventListener("reset", () => {
+    if (runtimeMode) return;
+    hasReset = true;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
     sseTurn = 0;
@@ -10423,14 +10566,19 @@ ${multiline}` : rendered;
     jumpBtn.hidden = true;
   });
   source.addEventListener("idle", () => {
+    if (runtimeMode) return;
+    if (state.busy) sseEvent("turn.interrupted", {});
     sseTurnClosed = true;
     setBusy(false);
     state = applySnapshot(state, { busy: false });
     paintChat();
   });
-  source.onerror = (event) => {
-    if (event?.data) return;
-    statusEl.textContent = "Lost the local server. Run node gui/server.mjs again.";
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) {
+      statusEl.textContent = "The desk stopped. Close this tab and open the desk again.";
+    } else {
+      statusEl.textContent = "Reconnecting to the desk\u2026";
+    }
   };
   if (openCliBtn) {
     openCliBtn.addEventListener("click", async () => {
@@ -10503,10 +10651,12 @@ ${multiline}` : rendered;
         return;
       }
     }
+    hasReset = true;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
     sseTurn = 0;
     sseTurnClosed = true;
+    setBusy(false);
     paintChat();
     jumpBtn.hidden = true;
     setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -10523,8 +10673,19 @@ ${multiline}` : rendered;
     if (!formNode) return;
     event.preventDefault();
     const id = formNode.dataset.id;
-    if (!runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) })) {
-      statusEl.textContent = "Could not send your answer. Is the terminal still running?";
+    const questions = state.cards.get(id)?.payload.questions || [];
+    const answers = answersFromQuestionForm(formNode, questions);
+    const problem = questionAnswersError(questions, answers);
+    const errorEl = formNode.querySelector(".form-error");
+    if (problem) {
+      if (errorEl) {
+        errorEl.textContent = problem;
+        errorEl.hidden = false;
+      }
+      return;
+    }
+    if (!runtimeSend({ type: "question.response", requestId: id, answers })) {
+      notice("Could not send your answer: the desk is not connected to Claude right now.");
       return;
     }
     state = markEntered(state, id);
@@ -10557,7 +10718,7 @@ ${multiline}` : rendered;
       return;
     }
     if (!runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision })) {
-      statusEl.textContent = "Could not send that decision. Is the terminal still running?";
+      notice("Could not send that decision: the desk is not connected to Claude right now.");
       return;
     }
     state = markEntered(state, id);
@@ -10642,6 +10803,7 @@ ${multiline}` : rendered;
     }
     terminalId = started.terminalId;
     state = applySnapshot(state, started.snapshot || { controller: "terminal" });
+    syncBusy();
     terminalView.focus();
   }
   async function releaseTerminal() {
@@ -10651,7 +10813,10 @@ ${multiline}` : rendered;
     terminalId = null;
     try {
       const result = await bridge?.dispose({ terminalId: id });
-      if (result?.snapshot) state = applySnapshot(state, result.snapshot);
+      if (result?.snapshot) {
+        state = applySnapshot(state, result.snapshot);
+        syncBusy();
+      }
     } catch {
     }
   }
@@ -10810,12 +10975,16 @@ ${multiline}` : rendered;
     try {
       let health = await readHealth();
       if (needsInstall(health)) {
-        appendGateLog("Installing Claude Code with the official installer.");
+        appendGateLog("Installing Claude Code with the official installer. This can take a minute or two.");
         if (window.deskApp?.ensureClaude) {
+          gateCancel.hidden = true;
           let info = await window.deskApp.ensureClaude();
+          let ticks = 0;
           while (info?.status === "installing") {
             await new Promise((resolve) => window.setTimeout(resolve, 1500));
             info = await window.deskApp.ensureClaude();
+            ticks += 1;
+            if (ticks % 10 === 0) appendGateLog("Still installing\u2026");
           }
           if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
           health = info?.health || await readHealth();
@@ -10828,34 +10997,55 @@ ${multiline}` : rendered;
         }
       }
       if (needsLogin(health)) {
-        appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
+        appendGateLog("Opening the claude.ai sign-in. Finish it in the browser, then return here.");
         const res = await post("/auth/login");
-        if (!res.ok) throw new Error("Login is already running.");
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          if (!body.running) throw new Error("The sign-in could not start. Try again.");
+          appendGateLog("A sign-in is already in progress in your browser.");
+          if (body.urls?.[0]) showSignInLink(body.urls[0]);
+          if (body.needsCode) {
+            gateCodeWrap.hidden = false;
+          }
+        }
         const done = await waitForAuth("login");
-        if (!done.ok) throw new Error(done.error || "Claude login did not finish.");
+        if (done.kind === "cancel") {
+          gateTitle.textContent = "Sign-in cancelled";
+          gateCopy.textContent = "No problem. Click Sign in with Claude when you are ready.";
+          gateAction.textContent = "Sign in with Claude";
+          claudeAutoStarted = false;
+          return;
+        }
+        if (!done.ok) throw new Error(done.error || "The sign-in did not finish. Try again, and use the link above if no tab opened.");
         health = done.health || await readHealth();
       }
       if (health.loggedIn || !needsLogin(health) && !needsInstall(health)) {
         applyHealth(health);
         return;
       }
-      throw new Error("Claude is installed but still signed out. Try Sign in again.");
+      throw new Error("Claude Code is installed but still signed out. Click Sign in with Claude to try again.");
     } catch (err) {
       appendGateLog(err.message);
       gateTitle.textContent = "Could not connect";
       gateCopy.textContent = err.message;
+      gateAction.textContent = "Try again";
+      claudeAutoStarted = false;
     } finally {
       gateAction.disabled = false;
-      gateCancel.hidden = Boolean(gate.hidden);
+      gateCancel.hidden = true;
     }
   }
-  source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
-  source.addEventListener("auth-url", (event) => {
-    const url = JSON.parse(event.data).url;
+  function showSignInLink(url) {
     if (!/^https:\/\//.test(url)) return;
     gateLink.href = url;
     gateLinkWrap.hidden = false;
-    gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window.";
+  }
+  source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
+  source.addEventListener("auth-url", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.kind !== "login") return;
+    showSignInLink(data.url);
+    gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window. If claude.ai shows you a code, paste it below.";
   });
   source.addEventListener("auth-code", () => {
     gateCodeWrap.hidden = false;
@@ -10870,7 +11060,13 @@ ${multiline}` : rendered;
     }
     if (data.health) applyHealth(data.health);
   });
-  gateAction.addEventListener("click", () => bootstrapClaude());
+  gateAction.addEventListener("click", () => {
+    if (!lastHealth) {
+      checkClaude();
+      return;
+    }
+    bootstrapClaude();
+  });
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
   gateCode.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -10884,13 +11080,19 @@ ${multiline}` : rendered;
     if (meta.chromeExtensionUrl) gateChrome.href = meta.chromeExtensionUrl;
   }).catch(() => {
   });
-  readHealth().then((health) => {
-    applyHealth(health);
-    autoStartClaude(health);
-  }).catch(() => {
-    setGate(false);
-    accountLabel.textContent = "Claude status unknown";
-  });
+  function checkClaude() {
+    return readHealth().then((health) => {
+      applyHealth(health);
+      autoStartClaude(health);
+    }).catch(() => {
+      lastHealth = null;
+      accountLabel.textContent = "Claude status unknown";
+      setGate(true, "Could not check Claude Code", "The desk could not find out whether Claude Code is installed and signed in. Try again in a moment.");
+      gateAction.textContent = "Try again";
+      gateAction.disabled = false;
+    });
+  }
+  checkClaude();
   tickClock();
   window.setInterval(tickClock, 3e4);
   sizePrompt();

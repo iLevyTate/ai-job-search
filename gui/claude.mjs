@@ -439,6 +439,8 @@ export function spawnSubscriptionLogin({ cwd, email } = {}) {
   // If the spawn fails, stdin errors asynchronously; without a listener that
   // EPIPE is an uncaught exception in the desk process.
   child.stdin?.on("error", () => {});
-  child.stdin?.write("\n");
+  // Nothing is written to stdin here: the CLI reads its "Paste code here"
+  // prompt from it, and an eager newline was answered with "Invalid code"
+  // before the person had done anything.
   return child;
 }

@@ -34,7 +34,7 @@ const QUIET_TYPES = new Set([
 ]);
 
 // Events that only ever update a card that already exists.
-const MERGE_ONLY_TYPES = new Set(["permission.resolved", "autofill.resolved", "tool.completed"]);
+const MERGE_ONLY_TYPES = new Set(["permission.resolved", "question.resolved", "autofill.resolved", "tool.completed"]);
 
 const TURN_END_TYPES = new Set(["turn.completed", "turn.failed", "turn.interrupted"]);
 
@@ -65,6 +65,18 @@ function toRenderableCard(event, id) {
 
 function mergeCard(existing, event) {
   const next = { ...existing, payload: { ...existing.payload, ...event.payload } };
+  if (event.type === "question.requested" || event.type === "permission.requested") {
+    // A request announced after a plain tool chip for the same id (older
+    // producers) becomes the form, not a chip labelled "Using AskUserQuestion".
+    next.type = event.type;
+    next.entered = false;
+    return next;
+  }
+  if (event.type === "tool.completed" && (existing.type.startsWith("question") || existing.type.startsWith("permission"))) {
+    // The tool result for an answered question closes the form; it stays a form.
+    next.entered = true;
+    return next;
+  }
   if (event.type === "assistant.delta") {
     next.type = "assistant.message";
     next.payload.text = `${existing.payload.text || ""}${event.payload?.text || ""}`;
@@ -97,7 +109,26 @@ function mergeCard(existing, event) {
     next.entered = true;
     next.payload.decision = event.payload?.decision;
   }
+  if (event.type === "question.resolved") {
+    next.entered = true;
+    next.payload.answered = event.payload?.answered !== false;
+    next.payload.reason = event.payload?.reason;
+  }
   return next;
+}
+
+// Text streamed before a tool call lives in the previous segment's card; the
+// full assistant message that follows the tool block restates it and must not
+// open a second card in the new segment.
+function restatesEarlierSegment(cards, event, segment) {
+  if (event.type !== "assistant.message" || segment === 0) return false;
+  const incoming = (event.payload?.text || "").trim();
+  if (!incoming) return true;
+  for (let index = segment - 1; index >= 0; index -= 1) {
+    const earlier = cards.get(cardIdFor(event, index));
+    if (earlier?.payload?.text && earlier.payload.text.includes(incoming)) return true;
+  }
+  return false;
 }
 
 export function reduceDeskEvent(state, event) {
@@ -153,6 +184,9 @@ export function reduceDeskEvent(state, event) {
   }
   if (event.type === "user.message") next.segment = 0;
 
+  if (event.type === "question.resolved" && next.pendingQuestionId === cardIdFor(event)) next.pendingQuestionId = null;
+  if (event.type === "permission.resolved" && next.pendingPermissionId === cardIdFor(event)) next.pendingPermissionId = null;
+
   if (QUIET_TYPES.has(event.type)) return next;
   if (event.type === "turn.completed" && !(event.payload?.text || "").trim() && !next.cards.has(cardIdFor(event, next.segment))) {
     return next;
@@ -162,6 +196,7 @@ export function reduceDeskEvent(state, event) {
   if (!id) return next;
   const existing = next.cards.get(id);
   if (!existing && MERGE_ONLY_TYPES.has(event.type)) return next;
+  if (!existing && restatesEarlierSegment(next.cards, event, next.segment)) return next;
   if (!existing && (event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested")) {
     next.segment += 1;
   }

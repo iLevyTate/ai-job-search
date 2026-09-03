@@ -159,9 +159,50 @@ export function valuesFromForm(form) {
   const values = {};
   for (const field of form.querySelectorAll("[name]")) {
     if (field.type === "checkbox") values[field.name] = field.checked;
+    else if (field.multiple) values[field.name] = [...field.selectedOptions].map((option) => option.value);
     else values[field.name] = field.value;
   }
   return values;
+}
+
+// ---------------------------------------------------------------------------
+// Questions from Claude (AskUserQuestion)
+//
+// The SDK keys answers by the question text; the form uses positional names
+// and maps back here. A typed "something else" wins over a ticked option.
+
+function questionKey(question, index) {
+  return question.question || question.header || `q${index}`;
+}
+
+export function answersFromQuestionForm(form, questions = []) {
+  const answers = {};
+  questions.forEach((question, index) => {
+    const name = `q${index}`;
+    const other = form.querySelector(`[name="${name}__other"]`)?.value?.trim() || "";
+    const options = question.options || [];
+    if (!options.length) {
+      const text = form.querySelector(`[name="${name}"]`)?.value?.trim() || "";
+      if (text) answers[questionKey(question, index)] = text;
+      return;
+    }
+    const picked = [...form.querySelectorAll(`[name="${name}"]`)].filter((input) => input.checked).map((input) => input.value);
+    if (question.multiSelect) {
+      const list = [...picked, ...(other ? [other] : [])];
+      if (list.length) answers[questionKey(question, index)] = list;
+    } else if (other) {
+      answers[questionKey(question, index)] = other;
+    } else if (picked[0]) {
+      answers[questionKey(question, index)] = picked[0];
+    }
+  });
+  return answers;
+}
+
+export function questionAnswersError(questions = [], answers = {}) {
+  const missing = questions.filter((question, index) => answers[questionKey(question, index)] == null);
+  if (!missing.length) return "";
+  return questions.length === 1 ? "Pick an answer or type your own first." : "Answer every question first.";
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +211,7 @@ export function valuesFromForm(form) {
 function whoFor(type) {
   if (type === "user.message") return "You";
   if (type === "turn.failed") return "Problem";
+  if (type === "desk.notice") return "Desk";
   if (type.startsWith("question") || type.startsWith("permission") || type.startsWith("autofill")) return "Needs you";
   if (type === "artifact.discovered") return "Saved";
   if (type === "subagent.activity") return "Helper";
@@ -179,6 +221,7 @@ function whoFor(type) {
 function cardClass(card) {
   if (card.type === "user.message") return "msg user";
   if (card.type === "turn.failed") return "msg error";
+  if (card.type === "desk.notice") return "msg notice";
   if (card.type.startsWith("tool")) return "msg assistant card-tool";
   if (card.type === "artifact.discovered") return "msg assistant card-tool card-artifact";
   if (card.type === "subagent.activity") return "msg assistant card-subagent";
@@ -220,6 +263,8 @@ export function describeTool(name, input = {}) {
 
 export function activityFor(state) {
   if (!state?.busy) return "";
+  // Claude is waiting on the person, not working; the card says so.
+  if (state.pendingQuestionId || state.pendingPermissionId) return "";
   if (state.thinking) return "Thinking";
   const cards = [...state.cards.values()];
   for (let index = cards.length - 1; index >= 0; index -= 1) {
@@ -234,32 +279,55 @@ export function activityFor(state) {
 
 function renderQuestionBody(card) {
   const questions = card.payload.questions || [];
-  const disabled = card.entered ? " disabled" : "";
-  const fields = questions.map((question, index) => {
-    const key = question.header || question.question || `q${index}`;
+  const readOnly = card.payload.readOnly === true;
+  const disabled = card.entered || readOnly ? " disabled" : "";
+  const blocks = questions.map((question, index) => {
+    const name = `q${index}`;
     const options = question.options || [];
+    const legend = question.header ? `<legend>${escapeHtml(question.header)}</legend>` : "";
+    const text = `<p class="q-text">${escapeHtml(question.question || question.header || "")}</p>`;
     if (!options.length) {
-      return `<label><span>${escapeHtml(question.question || key)}</span><textarea name="${escapeHtml(key)}"${disabled}></textarea></label>`;
+      return `<fieldset class="q" data-question="${index}">${legend}${text}<textarea name="${name}" rows="3" placeholder="Type your answer"${disabled}></textarea></fieldset>`;
     }
-    const multiple = question.multiSelect ? " multiple" : "";
-    const choices = options.map((option) => `<option value="${escapeHtml(option.label)}">${escapeHtml(option.label)}</option>`).join("");
-    return `<label><span>${escapeHtml(question.question || key)}</span><select name="${escapeHtml(key)}"${multiple}${disabled}>${choices}</select></label>`;
+    const type = question.multiSelect ? "checkbox" : "radio";
+    const choices = options.map((option) => `<label class="q-option"><input type="${type}" name="${name}" value="${escapeHtml(option.label)}"${disabled}><span><strong>${escapeHtml(option.label)}</strong>${option.description ? `<em>${escapeHtml(option.description)}</em>` : ""}</span></label>`).join("");
+    const hint = question.multiSelect ? `<p class="hint">Pick all that apply.</p>` : "";
+    const other = `<label class="q-option q-other"><span>Something else</span><input type="text" name="${name}__other" placeholder="Type your own answer"${disabled}></label>`;
+    return `<fieldset class="q" data-question="${index}">${legend}${text}${hint}${choices}${other}</fieldset>`;
   }).join("");
-  return `<form class="interaction" data-kind="question" data-id="${escapeHtml(card.id)}">${fields}<button type="submit"${disabled}>Answer</button></form>`;
+  if (readOnly) {
+    return `<div class="interaction" data-kind="question-readonly" data-id="${escapeHtml(card.id)}"><p>Claude has a question.</p>${blocks}<p class="hint">Type your answer in the box below and send it.</p></div>`;
+  }
+  const footer = card.entered
+    ? `<p class="hint">${card.payload.answered === false ? (card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without one." : "Not answered.") : "Answered."}</p>`
+    : `<p class="form-error" role="alert" hidden></p><button type="submit">Send answers</button>`;
+  return `<form class="interaction" data-kind="question" data-id="${escapeHtml(card.id)}">${blocks}${footer}</form>`;
 }
 
 function renderPermissionBody(card) {
   const disabled = card.entered ? " disabled" : "";
-  const scoped = Array.isArray(card.payload.suggestions) && card.payload.suggestions.length
-    ? `<button type="button" data-decision="allow-scoped"${disabled}>Allow for workspace</button>`
+  const name = card.payload.displayName || card.payload.toolName || "A tool";
+  const title = card.payload.title || `Claude wants to use ${name}.`;
+  const detail = describeTool(card.payload.toolName, card.payload.input || {});
+  const description = card.payload.description ? `<p class="hint">${escapeHtml(card.payload.description)}</p>` : "";
+  const suggestions = Array.isArray(card.payload.suggestions) ? card.payload.suggestions : [];
+  const persistent = suggestions.some((item) => item?.destination === "localSettings" || item?.destination === "projectSettings");
+  const scoped = suggestions.length
+    ? `<button type="button" data-decision="allow-scoped"${disabled}>${persistent ? "Allow in this folder from now on" : "Allow for the rest of this chat"}</button>`
+    : "";
+  const outcome = card.entered
+    ? `<p class="hint">${card.payload.decision === "deny" ? (card.payload.reason === "timeout" ? "No answer within five minutes, so Claude went on without it." : "Not allowed.") : "Allowed."}</p>`
     : "";
   return `<div class="interaction" data-kind="permission" data-id="${escapeHtml(card.id)}">
-    <p>${escapeHtml(card.payload.toolName || "Tool")} needs approval.</p>
+    <p>${escapeHtml(title)}</p>
+    ${detail && !card.payload.title ? `<p class="tool done">${escapeHtml(detail)}</p>` : ""}
+    ${description}
     <div class="sheet-actions">
       <button type="button" data-decision="allow-once"${disabled}>Allow once</button>
       ${scoped}
-      <button type="button" data-decision="deny" class="ghost"${disabled}>Deny</button>
+      <button type="button" data-decision="deny" class="ghost"${disabled}>Don't allow</button>
     </div>
+    ${outcome}
   </div>`;
 }
 

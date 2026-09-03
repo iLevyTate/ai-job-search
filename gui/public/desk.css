@@ -720,6 +720,84 @@ body.working .status::before {
 
 .subagent[open] summary { margin-bottom: 0.5rem; }
 
+.msg.notice .who { color: var(--fade); }
+.msg.notice .body {
+  padding: 0.7rem 0.95rem;
+  border: 1px dashed var(--line-strong);
+  color: var(--fade);
+  font-family: var(--sans);
+  font-size: 0.92rem;
+}
+
+.q {
+  margin: 0.6rem 0 0.9rem;
+  padding: 0.75rem 0.9rem 0.6rem;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.q legend {
+  padding: 0 0.35rem;
+  color: var(--brass);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.q-text {
+  margin: 0.2rem 0 0.6rem;
+  font-family: var(--sans);
+  font-size: 0.98rem;
+}
+
+.q .hint { margin: -0.3rem 0 0.5rem; }
+
+.card-question label.q-option,
+.q-option {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0.25rem 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.q-option:hover { border-color: var(--line-strong); background: rgba(244, 235, 216, 0.04); }
+.q-option:has(input:checked) { border-color: rgba(208, 138, 58, 0.6); background: var(--brass-soft); }
+.q-option input[type="radio"], .q-option input[type="checkbox"] { margin-top: 0.25rem; accent-color: var(--brass); }
+.q-option strong { display: block; font-weight: 500; }
+.q-option em { display: block; color: var(--fade); font-style: normal; font-size: 0.82rem; }
+.q-other { align-items: center; }
+.q-other > span { flex: 0 0 auto; color: var(--fade); }
+.q-other input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--well);
+  color: var(--paper);
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+}
+
+.form-error { margin: 0 0 0.5rem; color: var(--danger-soft); font-family: var(--sans); font-size: 0.88rem; }
+
+.interaction button[type="submit"], .interaction [data-decision] {
+  font: inherit;
+  cursor: pointer;
+  background: var(--paper);
+  color: var(--ink);
+  border: 0;
+  padding: 0.55rem 0.9rem;
+  font-weight: 500;
+}
+.interaction [data-decision].ghost { background: transparent; color: var(--paper); border: 1px solid var(--line-strong); }
+.interaction button:disabled { opacity: 0.42; cursor: default; }
+
 .sheet-error {
   margin: 0.2rem 0 0.4rem;
   color: var(--danger-soft);

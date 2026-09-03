@@ -3,6 +3,7 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import {
   activityFor,
+  answersFromQuestionForm,
   commandInputError,
   commandNeedsInput,
   describeTool,
@@ -144,14 +145,66 @@ test("chat view renders stable tool cards, questions, permissions, and queued me
   state = queueFollowUp(state, { messageId: "m2", text: "rank next" });
   renderChat(root, state);
   assert.equal(root.querySelector('[data-card-id="tool-1"] .tool').textContent.includes("Read"), true);
-  assert.equal(root.querySelector('[data-card-id="q-1"] select').disabled, false);
+  const radio = root.querySelector('[data-card-id="q-1"] input[type="radio"]');
+  assert.equal(radio.disabled, false);
+  assert.equal(radio.value, "Healthcare");
+  assert.ok(root.querySelector('[data-card-id="q-1"] input[name="q0__other"]'), "a Something else box exists");
+  assert.equal(root.querySelector('[data-card-id="q-1"] select'), null, "no dropdowns");
   assert.ok(root.querySelector('[data-card-id="p-1"] [data-decision="allow-scoped"]'));
   assert.equal(root.querySelector('[data-queue-id="m2"]').textContent, "rank next");
+  assert.equal(root.querySelector(".activity"), null, "no Working row while Claude waits on the person");
 
   state = markEntered(state, "q-1");
   renderChat(root, state);
-  assert.equal(root.querySelector('[data-card-id="q-1"] select').disabled, true);
+  assert.equal(root.querySelector('[data-card-id="q-1"] input[type="radio"]').disabled, true);
   assert.equal(root.querySelector('[data-card-id="q-1"]').dataset.entered, "true");
+});
+
+test("question answers are keyed by the question text; typed text beats a ticked option", () => {
+  const doc = document();
+  const root = doc.createElement("section");
+  const questions = [
+    { question: "Which lane?", header: "Lane", options: [{ label: "Healthcare", description: "Hospitals" }, { label: "Defense", description: "" }], multiSelect: false },
+    { question: "Which boards?", header: "Boards", options: [{ label: "LinkedIn" }, { label: "Ashby" }], multiSelect: true },
+    { question: "Anything else?", header: "Notes" },
+  ];
+  let state = createDeskState();
+  state = reduceDeskEvent(state, { eventId: "e1", sequence: 1, type: "question.requested", payload: { entityId: "req-1", questions } });
+  renderChat(root, state);
+  const form = root.querySelector('form[data-id="req-1"]');
+  assert.ok(form.querySelector(".q-option em")?.textContent.includes("Hospitals"), "option descriptions are shown");
+  form.querySelector('input[name="q0"][value="Defense"]').checked = true;
+  form.querySelector('input[name="q1"][value="LinkedIn"]').checked = true;
+  form.querySelector('input[name="q1__other"]').value = "Wellfound";
+  form.querySelector('textarea[name="q2"]').value = " Remote only ";
+  assert.deepEqual(answersFromQuestionForm(form, questions), {
+    "Which lane?": "Defense",
+    "Which boards?": ["LinkedIn", "Wellfound"],
+    "Anything else?": "Remote only",
+  });
+  form.querySelector('input[name="q0__other"]').value = "Climate";
+  assert.equal(answersFromQuestionForm(form, questions)["Which lane?"], "Climate");
+
+  state = reduceDeskEvent(state, { eventId: "e2", sequence: 2, type: "question.resolved", payload: { entityId: "req-1", answered: true } });
+  renderChat(root, state);
+  assert.equal(root.querySelector('form[data-id="req-1"] button[type="submit"]'), null);
+  assert.ok(root.querySelector('form[data-id="req-1"] > .hint').textContent.includes("Answered"));
+});
+
+test("print mode shows a read-only question and permission cards use the SDK title", () => {
+  const doc = document();
+  const root = doc.createElement("section");
+  let state = createDeskState();
+  state = reduceDeskEvent(state, { eventId: "e1", sequence: 1, type: "question.requested", payload: { entityId: "tool-q", toolUseId: "tool-q", readOnly: true, questions: [{ question: "Which lane?", header: "Lane", options: [{ label: "Healthcare" }] }] } });
+  state = reduceDeskEvent(state, { eventId: "e2", sequence: 2, type: "permission.requested", payload: { entityId: "req-p", toolName: "Bash", input: { command: "rm -rf build", description: "Clean build" }, title: "Claude wants to run rm -rf build", suggestions: [] } });
+  renderChat(root, state);
+  const question = root.querySelector('[data-card-id="tool-q"]');
+  assert.equal(question.querySelector("form"), null, "nothing to submit in print mode");
+  assert.ok(question.textContent.includes("Type your answer in the box below"));
+  const permission = root.querySelector('[data-card-id="req-p"]');
+  assert.ok(permission.textContent.includes("Claude wants to run rm -rf build"));
+  assert.equal(permission.querySelector('[data-decision="allow-scoped"]'), null);
+  assert.ok(permission.querySelector('[data-decision="deny"]').textContent.includes("Don"));
 });
 
 test("autofill review cards expose Continue and Cancel only", () => {

@@ -249,3 +249,27 @@ test("permission, interrupt, and reconnect during an active turn", async () => {
     server.close();
   }
 });
+
+test("events after a reset are delivered even though their sequence numbers start over", async () => {
+  const runtime = fakeRuntime();
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(received.filter((m) => m.type === "event").length, 2);
+  ws.send(JSON.stringify({ type: "conversation.reset" }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(received.some((m) => m.type === "snapshot" && m.snapshot), "reset pushes a snapshot");
+  runtime.emit({ sequence: 1, type: "user.message", payload: { messageId: "m-after", text: "again" } });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const after = received.filter((m) => m.type === "event").map((m) => m.event.payload.text);
+  assert.deepEqual(after, ["A", "B", "again"]);
+  ws.close();
+  await transport.close();
+  server.close();
+});

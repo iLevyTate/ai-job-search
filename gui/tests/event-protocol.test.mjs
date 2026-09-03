@@ -92,7 +92,12 @@ test("assistant tool_use and user tool_result share the tool-use ID", () => {
   assert.equal(completed[0].payload.toolUseId, "tool-9");
 });
 
-test("AskUserQuestion becomes a question.requested event", () => {
+test("AskUserQuestion blocks produce no card events; canUseTool announces the question", () => {
+  const streamStart = normalizeSdkMessage({
+    type: "stream_event",
+    event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tool-q", name: "AskUserQuestion", input: {} } },
+  }, context());
+  assert.deepEqual(streamStart, []);
   const events = normalizeSdkMessage({
     type: "assistant",
     session_id: "sess-1",
@@ -107,9 +112,7 @@ test("AskUserQuestion becomes a question.requested event", () => {
       }],
     },
   }, context());
-  assert.equal(events[0].type, "question.requested");
-  assert.equal(events[0].payload.toolUseId, "tool-q");
-  assert.equal(events[0].payload.questions[0].question, "Which lane?");
+  assert.deepEqual(events, []);
 });
 
 test("system init reports session and MCP status", () => {

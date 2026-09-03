@@ -65,6 +65,11 @@ let busy = false;
 let sessionId = null;
 let child = null;
 let helper = null;
+// What the running install/login helper has shown so far, so a page that
+// reloads mid sign-in can pick the link and code box up again.
+let helperState = null;
+// Why the installed app's session runtime is not running, if it failed to start.
+let runtimeError = "";
 let streamedText = false;
 let sawInit = false;
 let stopRequested = false;
@@ -77,8 +82,26 @@ let resetGen = 0;
 // Rendered conversation, replayed to a client that reconnects (page refresh).
 const transcript = [];
 let turnText = "";
+// The tail of Claude's stderr for the running turn, shown with the error card
+// when the child exits badly; without it the page only ever said "exit code 1".
+let errTail = "";
+// Set when a result event already produced an error card, so the exit-code
+// card does not restate it.
+let reportedError = false;
 // tool_use id -> tool name, so "done" chips can show the name, not the id.
 const toolNames = new Map();
+
+const TRANSCRIPT_CAP = 200;
+
+// Keep the replayed conversation self-explanatory: trim on a "You" boundary
+// so a reload never opens with a reply to a question that is no longer shown.
+function pushTranscript(row) {
+  transcript.push(row);
+  if (transcript.length <= TRANSCRIPT_CAP) return;
+  transcript.splice(0, transcript.length - TRANSCRIPT_CAP);
+  while (transcript.length && transcript[0].role !== "user") transcript.shift();
+  transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+}
 
 function send(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -87,8 +110,7 @@ function send(event, data) {
 
 function sendTurnError(text) {
   send("turn-error", { text });
-  transcript.push({ role: "error", text });
-  if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+  pushTranscript({ role: "error", text });
 }
 
 function snapshot(withTranscript = false) {
@@ -97,6 +119,8 @@ function snapshot(withTranscript = false) {
     busy,
     chromeGroup: chromeEnabled() ? DESK_SESSION_NAME : null,
     workspace,
+    runtime: Boolean(deskRuntime),
+    runtimeError,
   };
   if (withTranscript) {
     const rows = transcript.slice(-200);
@@ -120,6 +144,14 @@ function emitTools(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return;
   for (const block of content) {
+    if (block?.type === "tool_use" && block.name === "AskUserQuestion") {
+      // Print mode cannot answer the tool (no permission callback, so the CLI
+      // denies it and Claude re-asks in text). Show the question anyway, so
+      // the person knows what Claude wanted and can answer in the composer.
+      if (block.id) toolNames.set(block.id, block.name);
+      send("question", { id: block.id, questions: block.input?.questions ?? [] });
+      continue;
+    }
     if (block?.type === "tool_use" && block.name) {
       if (block.id) toolNames.set(block.id, block.name);
       send("tool", { id: block.id, name: block.name, phase: "start", input: block.input ?? {} });
@@ -146,7 +178,7 @@ function handleStreamLine(line) {
 
   if (event.type === "system" && event.subtype === "init") {
     sawInit = true;
-    send("status", { text: "Claude is in the repo" });
+    send("status", { text: "Claude is working in your job-search folder" });
     return;
   }
 
@@ -167,7 +199,7 @@ function handleStreamLine(line) {
 
   if (event.type === "stream_event") {
     const inner = event.event || {};
-    if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+    if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use" && inner.content_block.name !== "AskUserQuestion") {
       const block = inner.content_block;
       if (block.id && block.name) toolNames.set(block.id, block.name);
       send("tool", { id: block.id, name: block.name || "tool", phase: "start", input: block.input ?? {} });
@@ -187,12 +219,16 @@ function handleStreamLine(line) {
   }
 
   if (event.type === "result") {
+    if (event.is_error) {
+      // One card, once: the error text is not also a reply, and the exit-code
+      // card below stays quiet when this one exists.
+      reportedError = true;
+      sendTurnError(event.result || "Claude reported an error.");
+      return;
+    }
     if (typeof event.result === "string" && event.result && !streamedText) {
       if (!turnText.trim()) turnText = event.result;
       send("result", { text: event.result });
-    }
-    if (event.is_error) {
-      sendTurnError(event.result || "Claude reported an error.");
     }
   }
 }
@@ -222,17 +258,33 @@ function stopProcess(proc, group) {
   proc.kill("SIGTERM");
 }
 
+const KILL_GRACE_MS = 5000;
+
 function stopClaude(reason = "Stopped") {
   if (!child) return;
+  const target = child;
   stopRequested = true;
-  stopProcess(child, !IS_WIN);
+  stopProcess(target, !IS_WIN);
   send("status", { text: reason });
+  // A child that ignores SIGTERM (a hung tool, a trapped signal) would keep
+  // the desk busy forever; escalate so Stop always stops.
+  const escalate = setTimeout(() => {
+    if (child !== target || !target.pid) return;
+    try {
+      if (!IS_WIN) process.kill(-target.pid, "SIGKILL");
+      else target.kill("SIGKILL");
+    } catch {
+      try { target.kill("SIGKILL"); } catch { /* already gone */ }
+    }
+  }, KILL_GRACE_MS);
+  escalate.unref?.();
 }
 
 function stopHelper() {
   if (!helper) return;
   stopProcess(helper, !IS_WIN);
   helper = null;
+  helperState = null;
 }
 
 function attachHelperOutput(proc, kind) {
@@ -241,12 +293,19 @@ function attachHelperOutput(proc, kind) {
     const text = chunk.toString("utf8");
     if (!text.trim()) return;
     send("auth-log", { kind, text: text.trim() });
-    for (const url of extractHttpsUrls(text)) {
-      if (announced.has(url)) continue;
-      announced.add(url);
-      send("auth-url", { kind, url });
+    if (helperState?.proc === proc) helperState.log = `${helperState.log}${text}`.slice(-4000);
+    // Only the login prints a sign-in link; installer output can carry URLs
+    // of its own (docs, error pages) that must not be offered as one.
+    if (kind === "login") {
+      for (const url of extractHttpsUrls(text)) {
+        if (announced.has(url)) continue;
+        announced.add(url);
+        if (helperState?.proc === proc) helperState.urls.push(url);
+        send("auth-url", { kind, url });
+      }
     }
     if (kind === "login" && loginNeedsCode(text)) {
+      if (helperState?.proc === proc) helperState.needsCode = true;
       send("auth-code", { needed: true });
     }
     if (kind === "login" && loginSucceeded(text)) {
@@ -268,6 +327,7 @@ function runHelper(kind, factory) {
   }
   const proc = factory();
   helper = proc;
+  helperState = { kind, proc, urls: [], needsCode: false, log: "" };
   // A write to a stdin the helper already closed must not crash the desk.
   proc.stdin?.on("error", () => {});
   send("auth-log", { kind, text: kind === "install" ? "Installing Claude Code…" : "Opening Claude login…" });
@@ -277,12 +337,14 @@ function runHelper(kind, factory) {
     // live one: only the process that still owns `helper` may clear it.
     if (helper !== proc) return;
     helper = null;
+    helperState = null;
     send("auth-log", { kind, text: err.message });
     send("auth-done", { kind, ok: false, error: err.message });
   });
   proc.on("close", async (code) => {
     if (helper !== proc) return;
     helper = null;
+    helperState = null;
     const health = await getClaudeHealth(workspace);
     const ok = kind === "install" ? health.installed : health.loggedIn;
     send("auth-done", { kind, ok, code: code ?? 0, health });
@@ -310,6 +372,8 @@ function runClaude(prompt, { retried = false } = {}) {
   sawInit = false;
   stopRequested = false;
   turnText = "";
+  errTail = "";
+  reportedError = false;
   toolNames.clear();
   const gen = ++turnGen;
   let settled = false;
@@ -317,11 +381,20 @@ function runClaude(prompt, { retried = false } = {}) {
   send("status", { text: turnStatusText({ resuming: Boolean(sessionId) }) });
   if (!retried) {
     send("user", { text: prompt });
-    transcript.push({ role: "user", text: prompt });
-    if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+    pushTranscript({ role: "user", text: prompt });
   }
 
-  child = spawnClaude(args, { cwd: workspace, detached: !IS_WIN });
+  try {
+    child = spawnClaude(args, { cwd: workspace, detached: !IS_WIN });
+  } catch (err) {
+    // A synchronous spawn failure used to leave the desk busy forever with
+    // nothing on screen.
+    busy = false;
+    child = null;
+    sendTurnError(err.message || MISSING_CLAUDE_TEXT);
+    send("idle", snapshot());
+    return;
+  }
   // Print mode receives its prompt as an argument and waits for a piped stdin
   // to close. Leaving this stream open makes the Desk appear busy forever.
   child.stdin?.on("error", () => {});
@@ -340,7 +413,9 @@ function runClaude(prompt, { retried = false } = {}) {
   child.stderr.on("data", (chunk) => {
     if (superseded()) return;
     const text = chunk.toString("utf8").trim();
-    if (text) send("log", { text });
+    if (!text) return;
+    errTail = `${errTail}${errTail ? "\n" : ""}${text}`.slice(-1500);
+    send("log", { text });
   });
   child.on("error", (err) => {
     if (gen !== turnGen) return;
@@ -351,7 +426,7 @@ function runClaude(prompt, { retried = false } = {}) {
     sendTurnError(err.code === "ENOENT" ? MISSING_CLAUDE_TEXT : err.message);
     send("idle", snapshot());
   });
-  child.on("close", (code) => {
+  child.on("close", (code, signal) => {
     if (gen !== turnGen) return;
     if (settled) return;
     settled = true;
@@ -373,13 +448,19 @@ function runClaude(prompt, { retried = false } = {}) {
       runClaude(prompt, { retried: true });
       return;
     }
-    if (turnText.trim()) {
-      transcript.push({ role: "assistant", text: turnText });
-      if (transcript.length > 200) transcript.splice(0, transcript.length - 200);
+    const hadReply = Boolean(turnText.trim());
+    if (hadReply) {
+      pushTranscript({ role: "assistant", text: turnText });
       turnText = "";
     }
-    const failure = exitErrorText(code, stopRequested);
-    if (failure) sendTurnError(failure);
+    let failure = reportedError ? null : exitErrorText(code, stopRequested);
+    if (!failure && !reportedError && !stopRequested) {
+      // A child killed by a signal exits with code null; without this the
+      // turn ended silently as though the message had been ignored.
+      if (signal) failure = `Claude stopped unexpectedly (${signal}).`;
+      else if (!code && !hadReply) failure = "Claude finished without sending a reply. Try sending the message again.";
+    }
+    if (failure) sendTurnError(errTail ? `${failure}\n\n${errTail}` : failure);
     send("idle", snapshot());
   });
 }
@@ -688,7 +769,7 @@ async function handleRequest(req, res) {
 
     if (req.method === "POST" && url.pathname === "/auth/install") {
       const started = runHelper("install", () => spawnOfficialInstall());
-      json(res, started ? 202 : 409, { ok: started });
+      json(res, started ? 202 : 409, started ? { ok: true } : { ok: false, running: true, kind: helperState?.kind || "install" });
       return;
     }
 
@@ -700,7 +781,12 @@ async function handleRequest(req, res) {
       }
       const email = typeof body.email === "string" ? body.email.trim() : "";
       const started = runHelper("login", () => spawnSubscriptionLogin({ cwd: workspace, email }));
-      json(res, started ? 202 : 409, { ok: started });
+      if (!started) {
+        // A reloaded page joins the sign-in already in progress.
+        json(res, 409, { ok: false, running: true, kind: helperState?.kind || "login", urls: helperState?.urls || [], needsCode: Boolean(helperState?.needsCode) });
+        return;
+      }
+      json(res, 202, { ok: true });
       return;
     }
 
@@ -747,7 +833,13 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/stop") {
-      stopClaude("Stopped this turn");
+      if (!child) {
+        // Nothing to stop: make sure the page is not stuck showing busy.
+        busy = false;
+        send("idle", snapshot());
+      } else {
+        stopClaude("Stopped this turn");
+      }
       json(res, 200, { ok: true });
       return;
     }
@@ -861,9 +953,12 @@ export async function startDesk(options = {}) {
   if (!runtime && options.runtimeFactory) {
     try {
       runtime = await options.runtimeFactory({ workspace });
+      runtimeError = "";
     } catch (error) {
       if (!options.allowRuntimeFailure) throw error;
       runtime = null;
+      runtimeError = error?.message || String(error);
+      console.error(`Desk runtime failed to start; using print mode instead: ${runtimeError}`);
     }
   }
   deskRuntime = runtime;

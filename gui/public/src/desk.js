@@ -14,8 +14,10 @@ import {
 import { mountTabs } from "./tabs.js";
 import { createTerminalView } from "./terminal-view.js";
 import {
+  answersFromQuestionForm,
   commandInputError,
   commandNeedsInput,
+  questionAnswersError,
   filterCommands,
   renderChat,
   renderCommandForm,
@@ -67,6 +69,29 @@ let artifactState = createArtifactViewState();
 let stickToBottom = true;
 let terminalView = null;
 let terminalId = null;
+// True once the installed app's runtime has spoken over the WebSocket; the
+// print-mode event stream must not repaint the page after that.
+let runtimeMode = false;
+let hasReset = false;
+
+const REJECT_TEXT = {
+  full: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+  busy: "Claude is still working on the last message. Wait for it to finish, or press Stop.",
+  "stale-controller": "The desk was out of step for a moment. Please try that again.",
+  "wrong-controller": "The Terminal tab has the conversation right now. Switch back to Chat first.",
+  "handoff-in-progress": "The desk is switching tabs. Try again in a moment.",
+  closed: "Claude is not running. Start a new chat.",
+  "unknown-request": "That question has already been answered, or it expired.",
+  malformed: "Answer every question before sending.",
+};
+
+function notice(text) {
+  sseEvent("desk.notice", { text });
+}
+
+function syncBusy() {
+  if (state.busy !== busy) setBusy(state.busy);
+}
 
 function emptyMarkup(kind) {
   if (kind === "reset") {
@@ -142,7 +167,7 @@ function paintMode() {
 }
 
 function paintChat() {
-  renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(state.cards.size ? "reset" : undefined) });
+  renderChat(logEl, state, { markdown, emptyHtml: emptyMarkup(hasReset ? "reset" : undefined) });
   paintMode();
   scrollLog();
 }
@@ -347,18 +372,46 @@ async function sendPrompt(prompt) {
     if (runtimeSend({ type: "user.message", messageId, text })) {
       return true;
     }
+    let res;
     try {
-      const res = await post("/send", { prompt: text });
-      if (!res.ok) throw new Error();
-      return true;
+      res = await post("/send", { prompt: text });
     } catch {
       setBusy(false);
-      sseEvent("turn.failed", { text: "The desk could not reach the local server. Is the terminal still running?" });
+      sseEvent("turn.failed", { text: "The desk cannot reach its local server. Close this tab and open the desk again." });
       return false;
     }
+    if (res.ok) return true;
+    const body = await res.json().catch(() => ({}));
+    if (!state.busy) setBusy(false);
+    notice(sendErrorText(res.status, body.error));
+    return false;
   } finally {
     sendPending = false;
   }
+}
+
+function sendErrorText(status, reason) {
+  if (status === 409 || reason === "busy") return REJECT_TEXT.busy;
+  if (status === 413) return "That message is too long to send. Paste a shorter posting.";
+  if (status === 400) return "The desk could not send an empty message.";
+  return "The desk could not send that message. Try again, and if it keeps happening close this tab and open the desk again.";
+}
+
+function handleRejected(message) {
+  const reason = message.reason || "rejected";
+  if (reason === "duplicate") return;
+  if (message.command === "user.message" || !message.command) {
+    if (message.messageId) {
+      state = { ...state, queued: state.queued.filter((item) => item.id !== message.messageId) };
+    }
+    if (!state.busy) setBusy(false);
+  } else if (message.requestId && state.cards.has(message.requestId)) {
+    // Let the person answer or decide again.
+    const next = structuredClone(state);
+    next.cards.get(message.requestId).entered = false;
+    state = next;
+  }
+  notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
 }
 
 function runAction(name) {
@@ -434,22 +487,23 @@ function connectRuntime() {
       return;
     }
     if (message.type === "snapshot") {
+      runtimeMode = true;
       state = applySnapshot(state, message.snapshot || {});
+      syncBusy();
       paintChat();
     } else if (message.type === "event" && message.event) {
       ingest(message.event);
     } else if (message.type === "command.rejected") {
-      // A rejected send (wrong controller, stale generation, queue full) must
-      // not leave the composer spinning as if Claude were working.
-      setBusy(false);
-      sseEvent("turn.failed", { text: `The desk could not run that: ${message.reason || "rejected"}.` });
+      handleRejected(message);
     } else if (message.type === "protocol.error") {
-      setBusy(false);
-      sseEvent("turn.failed", { text: `Desk connection error: ${message.error || "protocol"}.` });
+      notice(`The desk and Claude disagreed about a message (${message.error || "protocol error"}). Try again.`);
     }
   });
   socket.addEventListener("close", () => {
     if (runtimeSocket === socket) runtimeSocket = null;
+    // The installed app's runtime is the only backend once it has spoken;
+    // keep trying to reach it rather than silently falling back to nothing.
+    if (runtimeMode) window.setTimeout(connectRuntime, 2000);
   });
   socket.addEventListener("error", () => {
     socket.close();
@@ -459,19 +513,36 @@ function connectRuntime() {
 const source = new EventSource("/events");
 source.addEventListener("hello", (event) => {
   const data = JSON.parse(event.data);
-  setBusy(Boolean(data.busy));
   rememberSession(data);
-  if (Array.isArray(data.transcript) && data.transcript.length && !state.cards.size) {
-    replayingTranscript = true;
-    try {
-      for (const entry of data.transcript) {
-        const type = entry.role === "assistant" ? "assistant.message" : entry.role === "user" ? "user.message" : "turn.failed";
-        sseEvent(type, { text: entry.text || "" });
-      }
-    } finally {
-      replayingTranscript = false;
+  if (runtimeMode) return;
+  // The stream reconnects on its own after a sleep or a hiccup, and the
+  // snapshot is the only complete picture: rebuild from it every time.
+  state = createDeskState({ permissionMode: state.permissionMode });
+  sseSequence = 0;
+  sseTurn = 0;
+  sseTurnClosed = true;
+  replayingTranscript = true;
+  try {
+    for (const entry of data.transcript || []) {
+      const type = entry.role === "assistant" ? "assistant.message"
+        : entry.role === "user" ? "user.message"
+          : entry.role === "notice" ? "desk.notice"
+            : "turn.failed";
+      sseEvent(type, { text: entry.text || "" });
     }
+  } finally {
+    replayingTranscript = false;
   }
+  state = applySnapshot(state, { busy: Boolean(data.busy) });
+  sseTurnClosed = !data.busy;
+  setBusy(Boolean(data.busy));
+  if (data.runtimeError && window.deskApp) {
+    notice("The app's connection to Claude Code did not start, so the desk is using a simpler mode: Claude runs each message on its own and does not ask before using tools. Restarting the app usually fixes this.");
+    modeEl.textContent = "Autonomous";
+    modeEl.dataset.mode = "autonomous";
+  }
+  paintChat();
+  if (statusEl.textContent.startsWith("Reconnecting")) statusEl.textContent = busy ? "Claude is working. Stop cancels this turn." : "Ready";
 });
 source.addEventListener("session", (event) => rememberSession(JSON.parse(event.data)));
 source.addEventListener("user", (event) => {
@@ -488,14 +559,20 @@ source.addEventListener("tool", (event) => {
   const { id, name, phase, input } = JSON.parse(event.data);
   sseEvent(phase === "start" ? "tool.started" : "tool.completed", { toolUseId: id || `tool-${name}`, name, input: input || {} });
 });
+source.addEventListener("question", (event) => {
+  if (runtimeSocket) return;
+  const { id, questions } = JSON.parse(event.data);
+  sseEvent("question.requested", { entityId: id, toolUseId: id, questions: questions || [], readOnly: true });
+});
 source.addEventListener("thinking", () => {
   if (!runtimeSocket) sseEvent("assistant.thinking", {});
 });
 source.addEventListener("status", (event) => {
   statusEl.textContent = JSON.parse(event.data).text;
 });
-source.addEventListener("log", (event) => {
-  statusEl.textContent = JSON.parse(event.data).text.slice(0, 180);
+source.addEventListener("log", () => {
+  // Claude's stderr is kept server-side and shown with the error card if the
+  // turn fails; flashing it in the status line only alarmed people.
 });
 source.addEventListener("turn-error", (event) => {
   if (event.data && !runtimeSocket) sseEvent("turn.failed", { text: JSON.parse(event.data).text });
@@ -505,6 +582,8 @@ source.addEventListener("autofill-review", (event) => {
   sseEvent("autofill.review", payload);
 });
 source.addEventListener("reset", () => {
+  if (runtimeMode) return;
+  hasReset = true;
   state = createDeskState({ permissionMode: state.permissionMode });
   sseSequence = 0;
   sseTurn = 0;
@@ -513,14 +592,23 @@ source.addEventListener("reset", () => {
   jumpBtn.hidden = true;
 });
 source.addEventListener("idle", () => {
+  if (runtimeMode) return;
+  // Print mode ends a turn with idle, not turn.completed; a quiet
+  // turn.interrupted closes the turn and settles any still-pulsing tool chip.
+  if (state.busy) sseEvent("turn.interrupted", {});
   sseTurnClosed = true;
   setBusy(false);
   state = applySnapshot(state, { busy: false });
   paintChat();
 });
-source.onerror = (event) => {
-  if (event?.data) return;
-  statusEl.textContent = "Lost the local server. Run node gui/server.mjs again.";
+source.onerror = () => {
+  // EventSource fires error on every reconnect attempt; only a closed stream
+  // means the desk is gone.
+  if (source.readyState === EventSource.CLOSED) {
+    statusEl.textContent = "The desk stopped. Close this tab and open the desk again.";
+  } else {
+    statusEl.textContent = "Reconnecting to the desk…";
+  }
 };
 
 if (openCliBtn) {
@@ -598,10 +686,12 @@ resetBtn.addEventListener("click", async () => {
       return;
     }
   }
+  hasReset = true;
   state = createDeskState({ permissionMode: state.permissionMode });
   sseSequence = 0;
   sseTurn = 0;
   sseTurnClosed = true;
+  setBusy(false);
   paintChat();
   jumpBtn.hidden = true;
   setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
@@ -620,8 +710,19 @@ logEl.addEventListener("submit", (event) => {
   if (!formNode) return;
   event.preventDefault();
   const id = formNode.dataset.id;
-  if (!runtimeSend({ type: "question.response", requestId: id, answers: valuesFromForm(formNode) })) {
-    statusEl.textContent = "Could not send your answer. Is the terminal still running?";
+  const questions = state.cards.get(id)?.payload.questions || [];
+  const answers = answersFromQuestionForm(formNode, questions);
+  const problem = questionAnswersError(questions, answers);
+  const errorEl = formNode.querySelector(".form-error");
+  if (problem) {
+    if (errorEl) {
+      errorEl.textContent = problem;
+      errorEl.hidden = false;
+    }
+    return;
+  }
+  if (!runtimeSend({ type: "question.response", requestId: id, answers })) {
+    notice("Could not send your answer: the desk is not connected to Claude right now.");
     return;
   }
   state = markEntered(state, id);
@@ -655,7 +756,7 @@ logEl.addEventListener("click", async (event) => {
     return;
   }
   if (!runtimeSend({ type: "permission.decision", requestId: id, decision: decision.dataset.decision })) {
-    statusEl.textContent = "Could not send that decision. Is the terminal still running?";
+    notice("Could not send that decision: the desk is not connected to Claude right now.");
     return;
   }
   state = markEntered(state, id);
@@ -739,6 +840,7 @@ async function ensureTerminal() {
   }
   terminalId = started.terminalId;
   state = applySnapshot(state, started.snapshot || { controller: "terminal" });
+  syncBusy();
   terminalView.focus();
 }
 
@@ -749,7 +851,10 @@ async function releaseTerminal() {
   terminalId = null;
   try {
     const result = await bridge?.dispose({ terminalId: id });
-    if (result?.snapshot) state = applySnapshot(state, result.snapshot);
+    if (result?.snapshot) {
+      state = applySnapshot(state, result.snapshot);
+      syncBusy();
+    }
   } catch {
     // The handoff back to chat is best-effort; the runtime also resets the
     // persisted controller on load.
@@ -927,12 +1032,17 @@ async function bootstrapClaude() {
   try {
     let health = await readHealth();
     if (needsInstall(health)) {
-      appendGateLog("Installing Claude Code with the official installer.");
+      appendGateLog("Installing Claude Code with the official installer. This can take a minute or two.");
       if (window.deskApp?.ensureClaude) {
+        // The app runs this install itself; there is nothing to cancel here.
+        gateCancel.hidden = true;
         let info = await window.deskApp.ensureClaude();
+        let ticks = 0;
         while (info?.status === "installing") {
           await new Promise((resolve) => window.setTimeout(resolve, 1500));
           info = await window.deskApp.ensureClaude();
+          ticks += 1;
+          if (ticks % 10 === 0) appendGateLog("Still installing…");
         }
         if (info?.status === "failed") throw new Error(info.error || "Claude Code did not install.");
         health = info?.health || (await readHealth());
@@ -945,37 +1055,60 @@ async function bootstrapClaude() {
       }
     }
     if (needsLogin(health)) {
-      appendGateLog("Opening the claude.ai login. Finish it in the browser, then return here.");
+      appendGateLog("Opening the claude.ai sign-in. Finish it in the browser, then return here.");
       const res = await post("/auth/login");
-      if (!res.ok) throw new Error("Login is already running.");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (!body.running) throw new Error("The sign-in could not start. Try again.");
+        // A reloaded page joins the sign-in already in progress.
+        appendGateLog("A sign-in is already in progress in your browser.");
+        if (body.urls?.[0]) showSignInLink(body.urls[0]);
+        if (body.needsCode) {
+          gateCodeWrap.hidden = false;
+        }
+      }
       const done = await waitForAuth("login");
-      if (!done.ok) throw new Error(done.error || "Claude login did not finish.");
+      if (done.kind === "cancel") {
+        gateTitle.textContent = "Sign-in cancelled";
+        gateCopy.textContent = "No problem. Click Sign in with Claude when you are ready.";
+        gateAction.textContent = "Sign in with Claude";
+        claudeAutoStarted = false;
+        return;
+      }
+      if (!done.ok) throw new Error(done.error || "The sign-in did not finish. Try again, and use the link above if no tab opened.");
       health = done.health || (await readHealth());
     }
     if (health.loggedIn || (!needsLogin(health) && !needsInstall(health))) {
       applyHealth(health);
       return;
     }
-    throw new Error("Claude is installed but still signed out. Try Sign in again.");
+    throw new Error("Claude Code is installed but still signed out. Click Sign in with Claude to try again.");
   } catch (err) {
     appendGateLog(err.message);
     gateTitle.textContent = "Could not connect";
     gateCopy.textContent = err.message;
+    gateAction.textContent = "Try again";
+    claudeAutoStarted = false;
   } finally {
     gateAction.disabled = false;
-    gateCancel.hidden = Boolean(gate.hidden);
+    gateCancel.hidden = true;
   }
+}
+
+function showSignInLink(url) {
+  if (!/^https:\/\//.test(url)) return;
+  gateLink.href = url;
+  gateLinkWrap.hidden = false;
 }
 
 source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
 source.addEventListener("auth-url", (event) => {
   // Claude Code opens the browser itself and prints the same URL as a
   // fallback. Opening it again here is what produced two sign-in tabs.
-  const url = JSON.parse(event.data).url;
-  if (!/^https:\/\//.test(url)) return;
-  gateLink.href = url;
-  gateLinkWrap.hidden = false;
-  gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window.";
+  const data = JSON.parse(event.data);
+  if (data.kind !== "login") return;
+  showSignInLink(data.url);
+  gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window. If claude.ai shows you a code, paste it below.";
 });
 source.addEventListener("auth-code", () => {
   gateCodeWrap.hidden = false;
@@ -991,7 +1124,13 @@ source.addEventListener("auth-done", (event) => {
   if (data.health) applyHealth(data.health);
 });
 
-gateAction.addEventListener("click", () => bootstrapClaude());
+gateAction.addEventListener("click", () => {
+  if (!lastHealth) {
+    checkClaude();
+    return;
+  }
+  bootstrapClaude();
+});
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
 gateCode.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
@@ -1009,15 +1148,22 @@ fetch("/auth/meta")
   })
   .catch(() => {});
 
-readHealth()
-  .then((health) => {
-    applyHealth(health);
-    autoStartClaude(health);
-  })
-  .catch(() => {
-    setGate(false);
-    accountLabel.textContent = "Claude status unknown";
-  });
+function checkClaude() {
+  return readHealth()
+    .then((health) => {
+      applyHealth(health);
+      autoStartClaude(health);
+    })
+    .catch(() => {
+      lastHealth = null;
+      accountLabel.textContent = "Claude status unknown";
+      setGate(true, "Could not check Claude Code", "The desk could not find out whether Claude Code is installed and signed in. Try again in a moment.");
+      gateAction.textContent = "Try again";
+      gateAction.disabled = false;
+    });
+}
+
+checkClaude();
 
 tickClock();
 window.setInterval(tickClock, 30000);
