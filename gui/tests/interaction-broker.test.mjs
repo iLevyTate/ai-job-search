@@ -349,3 +349,32 @@ test("a single-choice question accepts the user's own words (the SDK's Other pat
   assert.equal(result.ok, true);
   assert.equal((await pending).answers["Which lane?"], "Climate tech, remote");
 });
+
+test("with no timeout configured a pending question is never auto-cancelled", async () => {
+  const timers = createFakeTimers();
+  const interactions = createInteractionBroker({ timeoutMs: 0, timers, getControllerGeneration: () => 1 });
+  const pending = interactions.beginQuestion({ requestId: "q-forever", questions: [laneQuestion] });
+  timers.flush();
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  assert.equal(interactions.pendingCount(), 1);
+  interactions.abortAll("done");
+});
+
+test("multi-select answers may mix offered labels with the user's own words", async () => {
+  const { interactions } = broker();
+  const pending = interactions.beginQuestion({ requestId: "q-mix", questions: [multiQuestion] });
+  const result = interactions.respondToQuestion({
+    requestId: "q-mix",
+    answers: { "Which boards?": ["LinkedIn", "Wellfound"] },
+    expectedControllerGeneration: 1,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual((await pending).answers["Which boards?"], ["LinkedIn", "Wellfound"]);
+  const empty = interactions.beginQuestion({ requestId: "q-empty", questions: [multiQuestion] });
+  assert.equal(interactions.respondToQuestion({ requestId: "q-empty", answers: { "Which boards?": [] }, expectedControllerGeneration: 1 }).reason, "malformed");
+  interactions.abortAll("done");
+  await empty;
+});

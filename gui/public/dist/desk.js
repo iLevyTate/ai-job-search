@@ -9160,6 +9160,9 @@ ${h2.join(`
       // permission prompt, so an answer that follows a file read lands below
       // the tool chip instead of being appended to the text above it.
       segment: 0,
+      // The turn the reply cards currently belong to; a new turn id starts
+      // segment numbering again.
+      activeTurnId: null,
       pendingQuestionId: null,
       pendingPermissionId: null
     };
@@ -9308,7 +9311,10 @@ ${incoming}`;
         next.queued = next.queued.filter((item) => item.id !== event.payload.messageId);
       }
     }
-    if (event.type === "user.message") next.segment = 0;
+    if ((event.type === "assistant.delta" || event.type === "assistant.message" || event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested" || event.type === "turn.completed") && event.turnId && event.turnId !== next.activeTurnId) {
+      next.activeTurnId = event.turnId;
+      next.segment = 0;
+    }
     if (event.type === "question.resolved" && next.pendingQuestionId === cardIdFor(event)) next.pendingQuestionId = null;
     if (event.type === "permission.resolved" && next.pendingPermissionId === cardIdFor(event)) next.pendingPermissionId = null;
     if (QUIET_TYPES.has(event.type)) return next;
@@ -10135,9 +10141,12 @@ ${multiline}` : rendered;
     "handoff-in-progress": "The desk is switching tabs. Try again in a moment.",
     closed: "Claude is not running. Start a new chat.",
     "unknown-request": "That question has already been answered, or it expired.",
-    malformed: "Answer every question before sending."
+    malformed: "Answer every question before sending.",
+    error: "Something went wrong inside the desk while doing that. Try again; if it keeps happening, start a new chat."
   };
   function notice(text) {
+    const last = [...state.cards.values()].at(-1);
+    if (last?.type === "desk.notice" && last.payload.text === text) return;
     sseEvent("desk.notice", { text });
   }
   function syncBusy() {
@@ -10183,7 +10192,11 @@ ${multiline}` : rendered;
           }
         });
       }
-      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), { FORBID_TAGS: ["img", "svg", "picture", "video", "audio"] });
+      return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), {
+        ALLOW_DATA_ATTR: false,
+        FORBID_TAGS: ["img", "svg", "picture", "video", "audio", "form", "input", "button", "select", "textarea", "label", "style", "details", "summary", "dialog"],
+        FORBID_ATTR: ["class", "id", "style"]
+      });
     }
     return String(text || "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`).replace(/\n/g, "<br>");
   }
@@ -10257,7 +10270,8 @@ ${multiline}` : rendered;
       sessionEl.textContent = data.sessionId ? `${data.chromeGroup} \xB7 Chrome group` : `${data.chromeGroup} \xB7 waiting for Chrome`;
       return;
     }
-    sessionEl.textContent = data.sessionId ? "Continuing from last time" : "New conversation";
+    if (data.restored) sessionEl.textContent = "Continuing from last time";
+    else if (!data.sessionId) sessionEl.textContent = "New conversation";
   }
   function sizePrompt() {
     promptEl.style.height = "auto";
@@ -10404,10 +10418,12 @@ ${multiline}` : rendered;
       return true;
     }
     if (busy) {
-      notice(REJECT_TEXT.busy);
+      lastSendError = closingOld ? "Still closing the old conversation. Try again in a moment." : REJECT_TEXT.busy;
+      notice(lastSendError);
       return false;
     }
     if (sendPending) return false;
+    lastSendError = "";
     sendPending = true;
     try {
       if (!lastHealth?.loggedIn) {
@@ -10417,6 +10433,7 @@ ${multiline}` : rendered;
         }
       }
       if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
+        lastSendError = "Claude Code needs to be set up first. Follow the steps on screen.";
         applyHealth(lastHealth || { installed: false });
         if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
           sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
@@ -10427,20 +10444,29 @@ ${multiline}` : rendered;
       setBusy(true);
       const messageId = `m-${Date.now()}`;
       if (runtimeSend({ type: "user.message", messageId, text })) {
+        inFlightSends.set(messageId, text);
         return true;
+      }
+      if (runtimeMode) {
+        setBusy(false);
+        lastSendError = "The desk is reconnecting to Claude. Try again in a moment.";
+        notice(lastSendError);
+        return false;
       }
       let res;
       try {
         res = await post("/send", { prompt: text });
       } catch {
         setBusy(false);
-        sseEvent("turn.failed", { text: "The desk cannot reach its local server. Close this tab and open the desk again." });
+        lastSendError = "The desk cannot reach its local server. Close this tab and open the desk again.";
+        sseEvent("turn.failed", { text: lastSendError });
         return false;
       }
       if (res.ok) return true;
       const body = await res.json().catch(() => ({}));
       if (!state.busy) setBusy(false);
-      notice(sendErrorText(res.status, body.error));
+      lastSendError = sendErrorText(res.status, body.error);
+      notice(lastSendError);
       return false;
     } finally {
       sendPending = false;
@@ -10458,12 +10484,22 @@ ${multiline}` : rendered;
     if (message.command === "user.message" || !message.command) {
       if (message.messageId) {
         state = { ...state, queued: state.queued.filter((item) => item.id !== message.messageId) };
+        const text = inFlightSends.get(message.messageId);
+        inFlightSends.delete(message.messageId);
+        if (text && !promptEl.value.trim()) {
+          promptEl.value = text;
+          sizePrompt();
+        }
       }
       if (!state.busy) setBusy(false);
     } else if (message.requestId && state.cards.has(message.requestId)) {
       const next = structuredClone(state);
-      next.cards.get(message.requestId).entered = false;
+      const card = next.cards.get(message.requestId);
+      card.entered = false;
+      if (card.type === "question.requested") next.pendingQuestionId = message.requestId;
+      if (card.type === "permission.requested") next.pendingPermissionId = message.requestId;
       state = next;
+      paintChat();
     }
     notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
   }
@@ -10478,8 +10514,12 @@ ${multiline}` : rendered;
   function runAction(name) {
     const command = commands.find((item) => item.id === name);
     setMenu(false);
+    if (command && commandNeedsInput(command)) {
+      openCommandSheet(command);
+      return;
+    }
     if (busy && !runtimeSocket) {
-      notice(REJECT_TEXT.busy);
+      notice(closingOld ? "Still closing the old conversation. Try again in a moment." : REJECT_TEXT.busy);
       return;
     }
     if (!command) {
@@ -10542,13 +10582,27 @@ ${multiline}` : rendered;
         return;
       }
       if (message.type === "snapshot") {
-        runtimeMode = true;
+        if (!runtimeMode) {
+          runtimeMode = true;
+          state = createDeskState({ permissionMode: state.permissionMode });
+          sseSequence = 0;
+          sseTurn = 0;
+          sseTurnClosed = true;
+        }
         state = applySnapshot(state, message.snapshot || {});
         syncBusy();
         paintChat();
       } else if (message.type === "event" && message.event) {
         ingest(message.event);
+      } else if (message.type === "command.accepted") {
+        if (message.messageId) inFlightSends.delete(message.messageId);
+        if (message.command === "conversation.reset" && resetPending) {
+          resetPending = false;
+          clearConversation();
+          setBusy(false);
+        }
       } else if (message.type === "command.rejected") {
+        if (message.command === "conversation.reset") resetPending = false;
         handleRejected(message);
       } else if (message.type === "protocol.error") {
         notice(`The desk and Claude disagreed about a message (${message.error || "protocol error"}). Try again.`);
@@ -10565,7 +10619,7 @@ ${multiline}` : rendered;
   var source = new EventSource("/events");
   source.addEventListener("hello", (event) => {
     const data = JSON.parse(event.data);
-    rememberSession(data);
+    rememberSession({ ...data, restored: Boolean(data.sessionId && (data.transcript || []).length) });
     if (runtimeMode) return;
     state = createDeskState({ permissionMode: state.permissionMode });
     sseSequence = 0;
@@ -10649,6 +10703,7 @@ ${multiline}` : rendered;
   });
   source.addEventListener("idle", () => {
     if (runtimeMode) return;
+    closingOld = false;
     if (state.busy) sseEvent("turn.interrupted", {});
     sseTurnClosed = true;
     setBusy(false);
@@ -10716,7 +10771,7 @@ ${multiline}` : rendered;
         sheet.close();
         return;
       }
-      sheetError.textContent = REJECT_TEXT.busy;
+      sheetError.textContent = lastSendError || REJECT_TEXT.busy;
       sheetError.hidden = false;
     });
   });
@@ -10729,8 +10784,28 @@ ${multiline}` : rendered;
       notice("Could not stop Claude: the desk is not reachable. Close this tab and open the desk again.");
     }
   });
+  var resetPending = false;
+  var closingOld = false;
+  var inFlightSends = /* @__PURE__ */ new Map();
+  var lastSendError = "";
+  function clearConversation() {
+    hasReset = true;
+    state = createDeskState({ permissionMode: state.permissionMode });
+    sseSequence = 0;
+    sseTurn = 0;
+    sseTurnClosed = true;
+    markAction(null);
+    paintChat();
+    jumpBtn.hidden = true;
+    setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: null });
+  }
   resetBtn.addEventListener("click", async () => {
     if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
+    if (runtimeSend({ type: "conversation.reset" })) {
+      resetPending = true;
+      statusEl.textContent = "Starting a new conversation\u2026";
+      return;
+    }
     if (!runtimeSend({ type: "conversation.reset" })) {
       try {
         const res = await post("/reset");
@@ -10743,21 +10818,14 @@ ${multiline}` : rendered;
         return;
       }
     }
-    hasReset = true;
     const wasBusy = busy;
-    state = createDeskState({ permissionMode: state.permissionMode });
-    sseSequence = 0;
-    sseTurn = 0;
-    sseTurnClosed = true;
-    markAction(null);
-    if (wasBusy && !runtimeSocket) {
+    clearConversation();
+    if (wasBusy) {
+      closingOld = true;
       statusEl.textContent = "Closing the old conversation\u2026";
     } else {
       setBusy(false);
     }
-    paintChat();
-    jumpBtn.hidden = true;
-    setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
   });
   menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
   scrim.addEventListener("click", () => setMenu(false));
@@ -10823,14 +10891,22 @@ ${multiline}` : rendered;
     paintChat();
   });
   function restoreFocusAfterDialog() {
-    const active = document.activeElement;
-    const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
-    if (!active || active === document.body || inHiddenDock) {
-      (menuBtn.offsetParent ? menuBtn : promptEl).focus();
-    }
+    window.setTimeout(() => {
+      const active = document.activeElement;
+      const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
+      if (!active || active === document.body || inHiddenDock || active && !active.isConnected) {
+        (menuBtn.offsetParent ? menuBtn : promptEl).focus();
+      }
+    }, 0);
   }
   sheet.addEventListener("close", restoreFocusAfterDialog);
   palette.addEventListener("close", restoreFocusAfterDialog);
+  paletteQuery?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      palette.close();
+    }
+  });
   paletteQuery?.addEventListener("input", () => {
     renderPaletteList(paletteList, filterCommands(commands, paletteQuery.value));
   });
@@ -10862,7 +10938,15 @@ ${multiline}` : rendered;
   function terminalPlaceholder(host, title, copy) {
     host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>${title}</h2><p>${copy}</p></div>`;
   }
-  async function ensureTerminal() {
+  var terminalStarting = null;
+  function ensureTerminal() {
+    if (terminalStarting) return terminalStarting;
+    terminalStarting = startTerminal().finally(() => {
+      terminalStarting = null;
+    });
+    return terminalStarting;
+  }
+  async function startTerminal() {
     const host = document.getElementById("panel-terminal");
     const bridge = window.deskApp?.terminal;
     if (!host || !bridge) return;
@@ -10982,6 +11066,7 @@ ${multiline}` : rendered;
       if (id === "files") loadArtifacts();
       if (id === "terminal") ensureTerminal();
       if (id !== "terminal") releaseTerminal();
+      if (id === "chat") requestAnimationFrame(scrollLog);
     }
   });
   filesEl.addEventListener("click", (event) => {

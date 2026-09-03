@@ -78,6 +78,9 @@ export function attachWebSocketTransport({
         const replay = runtime.eventsAfter(message.afterSequence ?? 0);
         lastReplayed = replay.at(-1)?.sequence ?? message.afterSequence ?? 0;
         unsubscribe = runtime.subscribe((event) => {
+          // A reset issued on another socket restarts numbering at 1; a
+          // sequence below the cursor can only mean that, never a replay.
+          if (event.sequence < lastReplayed) lastReplayed = 0;
           if (event.sequence <= lastReplayed) return;
           lastReplayed = event.sequence;
           send(ws, { type: "event", event });
@@ -103,6 +106,29 @@ export function attachWebSocketTransport({
       }
 
       let result = { ok: false, reason: "unsupported" };
+      try {
+        result = await dispatch(message);
+      } catch (error) {
+        // A runtime that throws (an SDK transport not ready, a store write
+        // failing) must answer the page and must not take the process down.
+        console.error(`desk command ${message.type} failed: ${error?.message || error}`);
+        result = { ok: false, reason: "error" };
+      }
+      // Echo the ids so the page can tell which send or answer this settles.
+      const correlation = { messageId: message.messageId, requestId: message.requestId };
+      send(ws, result.ok
+        ? { type: "command.accepted", command: message.type, ...correlation }
+        : { type: "command.rejected", command: message.type, reason: result.reason || "rejected", ...correlation });
+      // Generation-changing commands (reset, handoffs) must push the new
+      // snapshot, or the client's stale controllerGeneration rejects the next
+      // message. The accepted result above carries no generation.
+      if (result.ok && (result.snapshot || message.type === "conversation.reset")) {
+        send(ws, { type: "snapshot", snapshot: result.snapshot || runtime.snapshot() });
+      }
+    });
+
+    async function dispatch(message) {
+      let result = { ok: false, reason: "unsupported" };
       if (message.type === "user.message") {
         result = await runtime.submitMessage({
           messageId: message.messageId,
@@ -122,19 +148,8 @@ export function attachWebSocketTransport({
         result = await runtime.reset(message);
         if (result.ok) lastReplayed = 0;
       }
-
-      // Echo the ids so the page can tell which send or answer this settles.
-      const correlation = { messageId: message.messageId, requestId: message.requestId };
-      send(ws, result.ok
-        ? { type: "command.accepted", command: message.type, ...correlation }
-        : { type: "command.rejected", command: message.type, reason: result.reason || "rejected", ...correlation });
-      // Generation-changing commands (reset, handoffs) must push the new
-      // snapshot, or the client's stale controllerGeneration rejects the next
-      // message. The accepted result above carries no generation.
-      if (result.ok && (result.snapshot || message.type === "conversation.reset")) {
-        send(ws, { type: "snapshot", snapshot: result.snapshot || runtime.snapshot() });
-      }
-    });
+      return result;
+    }
   });
 
   return {

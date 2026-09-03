@@ -16,6 +16,9 @@ export function createDeskState(seed = {}) {
     // permission prompt, so an answer that follows a file read lands below
     // the tool chip instead of being appended to the text above it.
     segment: 0,
+    // The turn the reply cards currently belong to; a new turn id starts
+    // segment numbering again.
+    activeTurnId: null,
     pendingQuestionId: null,
     pendingPermissionId: null,
   };
@@ -190,7 +193,12 @@ export function reduceDeskEvent(state, event) {
       next.queued = next.queued.filter((item) => item.id !== event.payload.messageId);
     }
   }
-  if (event.type === "user.message") next.segment = 0;
+  // A queued follow-up's user.message arrives while the current reply still
+  // streams, so the segment counter follows the turn id, not user messages.
+  if ((event.type === "assistant.delta" || event.type === "assistant.message" || event.type === "tool.started" || event.type === "question.requested" || event.type === "permission.requested" || event.type === "turn.completed") && event.turnId && event.turnId !== next.activeTurnId) {
+    next.activeTurnId = event.turnId;
+    next.segment = 0;
+  }
 
   if (event.type === "question.resolved" && next.pendingQuestionId === cardIdFor(event)) next.pendingQuestionId = null;
   if (event.type === "permission.resolved" && next.pendingPermissionId === cardIdFor(event)) next.pendingPermissionId = null;

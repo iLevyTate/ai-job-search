@@ -180,7 +180,6 @@ ipcMain.handle("open-cli", async (_event, chosen) => {
   if (prep.status === "installing") {
     return { error: "Claude Code is still installing. Wait for the message above to say it is ready, then try again." };
   }
-  writeWorkspace(root);
   const started = startCli(root);
   if (started.error) return started;
   // The desk shows the same folder the terminal is using, instead of leaving
@@ -244,12 +243,14 @@ ipcMain.handle("terminal-start", async (_event, payload = {}) => {
       pty.start({ cols, rows });
       pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
       pty.onExit(async (info) => {
-        if (activePty?.id === pty.id) activePty = null;
+        const wasActive = activePty?.id === pty.id;
+        if (wasActive) activePty = null;
         // Claude Code closing in the terminal must hand the conversation back
         // to Chat, or every later message is rejected until the app restarts.
+        // A pty replaced by a newer one must not hand back the newer one's turn.
         let snapshot = null;
         const current = desk?.runtime?.snapshot?.();
-        if (desk?.controllers && current?.controller === "terminal") {
+        if (wasActive && desk?.controllers && current?.controller === "terminal") {
           const handoff = await switchToChat({
             controllers: desk.controllers,
             expectedControllerGeneration: current.controllerGeneration,

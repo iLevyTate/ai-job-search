@@ -285,6 +285,20 @@ test("exitErrorText stays silent after a requested stop", () => {
   assert.equal(exitErrorText(1, true), null);
   assert.equal(exitErrorText(0, false), null);
   assert.equal(exitErrorText(null, false), null);
-  assert.match(exitErrorText(1, false), /error 1/);
+  assert.match(exitErrorText(1, false), /\(error 1\)\. Send the message again/);
+  assert.match(exitErrorText(12, false), /\(error 12\)/);
+  assert.match(exitErrorText(-4058, false), /install and sign-in screen/);
   assert.match(exitErrorText(-4058, false), /not installed/);
+});
+
+import { clearErrorLine } from "../server.mjs";
+
+test("clearErrorLine promotes a clear last stderr sentence and ignores warnings and stacks", () => {
+  assert.equal(clearErrorLine("Error: API rate limit reached. Try again in a few minutes."), "API rate limit reached. Try again in a few minutes.");
+  assert.equal(clearErrorLine("something\nInvalid API key"), "Invalid API key");
+  assert.equal(clearErrorLine("Error: boom\n    at Object.<anonymous> (/x.js:1:1)"), "");
+  assert.equal(clearErrorLine("(Use `node --trace-warnings ...` to show where the warning was created)"), "");
+  assert.equal(clearErrorLine("npm warn deprecated thing"), "");
+  assert.equal(clearErrorLine('{"json": true}'), "");
+  assert.equal(clearErrorLine(""), "");
 });

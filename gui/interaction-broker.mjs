@@ -116,13 +116,15 @@ export function createInteractionBroker({
         }
       },
     };
-    item.timeoutId = timers.setTimeout(() => {
+    // No timeout unless one is configured: the SDK lets a prompt wait as long
+    // as the person needs, and an unanswered question is worse denied.
+    item.timeoutId = timeoutMs > 0 ? timers.setTimeout(() => {
       if (kind === "permission") {
         settle(requestId, denyPermission("Permission request timed out"));
       } else {
         settle(requestId, cancelledQuestion("timeout"));
       }
-    }, timeoutMs);
+    }, timeoutMs) : null;
     item.signal?.addEventListener?.("abort", item.onAbort, { once: true });
     if (item.signal?.aborted) item.onAbort();
     pending.set(requestId, item);

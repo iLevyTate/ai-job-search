@@ -23,7 +23,7 @@ export function createSessionRuntime({
   autofillBridge = createAutofillBridge(),
   maxQueuedMessages = 8,
   interruptGraceMs = 3000,
-  interactionTimeoutMs = 5 * 60 * 1000,
+  interactionTimeoutMs = 0,
   handoffTimeoutMs = 0,
 } = {}) {
   const subscribers = new Set();
@@ -105,6 +105,11 @@ export function createSessionRuntime({
     for (const draft of drafts) {
       if (currentEpoch !== epoch) return;
       const persisted = await store.appendEvent(conversationId, draft);
+      if (persisted.type === "turn.completed" && conversation()?.recoveryAttempts) {
+        await store.transact(conversationId, (next) => {
+          next.recoveryAttempts = 0;
+        });
+      }
       if ((persisted.type === "turn.completed" || persisted.type === "turn.failed") && artifactService) {
         const found = await artifactService.settleTurn(persisted.turnId || conversation()?.partialTurn?.id);
         if (found.length) {
@@ -170,6 +175,12 @@ export function createSessionRuntime({
           ? `Claude stopped unexpectedly (${reason}). Send your message again.`
           : "Claude stopped unexpectedly. Send your message again.";
       await publishEvent({ type: wasStop ? "turn.interrupted" : "turn.failed", payload: { text, reason: classification } }).catch(() => {});
+    }
+    // Follow-ups handed to the dead adapter never reach Claude.
+    const lost = pendingTurns.splice(0, pendingTurns.length);
+    for (const id of lost) {
+      await publishEvent({ type: "turn.failed", turnId: id, payload: { text: "Claude stopped before reaching this message. Send it again." } }).catch(() => {});
+      artifactService?.settleTurn?.(id).catch?.(() => {});
     }
     const attempts = current?.recoveryAttempts ?? 0;
     const resumable = recoveryPolicy.shouldResume({
@@ -281,6 +292,8 @@ export function createSessionRuntime({
   function handlePermissionRequest(request = {}) {
     const requestId = request.requestId || request.toolUseId;
     if (!requestId) return Promise.resolve({ behavior: "deny", message: "Permission request had no id" });
+    const requestEpoch = epoch;
+    const publishIfCurrent = (draft) => (requestEpoch === epoch ? publishEvent(draft) : Promise.resolve(null));
     if (request.toolName === "AskUserQuestion") {
       const questions = Array.isArray(request.input?.questions) ? request.input.questions : [];
       const pending = broker.beginQuestion({ requestId, toolUseId: request.toolUseId, questions, signal: request.signal });
@@ -290,7 +303,7 @@ export function createSessionRuntime({
       }).catch(() => {});
       return Promise.resolve(pending).then((result) => {
         const answered = result && !result.cancelled && result.answers && Object.keys(result.answers).length > 0;
-        publishEvent({
+        publishIfCurrent({
           type: "question.resolved",
           payload: { entityId: requestId, requestId, toolUseId: request.toolUseId, answered: Boolean(answered), reason: result?.reason },
         }).catch(() => {});
@@ -318,7 +331,7 @@ export function createSessionRuntime({
       },
     }).catch(() => {});
     return Promise.resolve(pending).then((result) => {
-      publishEvent({
+      publishIfCurrent({
         type: "permission.resolved",
         payload: {
           entityId: requestId,
@@ -370,15 +383,22 @@ export function createSessionRuntime({
       // A Stop from an earlier turn must not colour how this turn's failures
       // are classified.
       stopRequested = false;
-      const accepted = adapter.send({ id: messageId, text });
-      if (!accepted.accepted) return commandResult(false, { reason: accepted.reason });
-      if (artifactService) await artifactService.beginTurn(messageId);
-      if (conversation().partialTurn) {
-        pendingTurns.push(messageId);
-      } else {
+      // Claim the turn before anything is sent: a fast first token must find
+      // this id, not a random one, and the artifact snapshot must predate
+      // any write Claude makes.
+      const queued = Boolean(conversation().partialTurn) || pendingTurns.length > 0;
+      if (queued) pendingTurns.push(messageId);
+      else {
         await store.transact(conversationId, (next) => {
           next.partialTurn = { id: messageId, eventId: messageId };
         });
+      }
+      if (artifactService) await artifactService.beginTurn(messageId);
+      const accepted = adapter.send({ id: messageId, text });
+      if (!accepted.accepted) {
+        if (queued) pendingTurns.splice(pendingTurns.indexOf(messageId), 1);
+        else await store.transact(conversationId, (next) => { next.partialTurn = null; });
+        return commandResult(false, { reason: accepted.reason });
       }
       // The page paints "You" from this event alone (it keeps no local copy),
       // and a reload replays it with the rest of the conversation.

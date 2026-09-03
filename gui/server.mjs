@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -89,10 +89,27 @@ let errTail = "";
 // Set when a result event already produced an error card, so the exit-code
 // card does not restate it.
 let reportedError = false;
+// True once this turn produced any reply text, even text already moved into
+// a transcript row by a tool call.
+let repliedThisTurn = false;
 // tool_use id -> tool name, so "done" chips can show the name, not the id.
 const toolNames = new Map();
 
-const TRANSCRIPT_CAP = 200;
+// Rows are capped by conversation turns, not raw rows: one tool-heavy turn
+// can add dozens of chips, which must never evict the message that asked.
+const TRANSCRIPT_CAP = 600;
+const TRANSCRIPT_KEEP_TURNS = 40;
+
+// Only what the page shows is stored: describeTool reads these fields, and a
+// full Write input or Bash command would put file contents on disk twice.
+const TOOL_INPUT_KEYS = ["file_path", "path", "notebook_path", "description", "query", "url", "pattern", "skill"];
+function summarizeToolInput(input = {}) {
+  const out = {};
+  for (const key of TOOL_INPUT_KEYS) {
+    if (typeof input?.[key] === "string" && input[key]) out[key] = input[key].slice(0, 200);
+  }
+  return out;
+}
 
 // The print-mode conversation lives on disk too, so a desk that crashes or is
 // restarted mid-turn comes back with the conversation instead of a blank page.
@@ -101,17 +118,28 @@ function transcriptPath() {
 }
 
 let transcriptSaveTimer = null;
+function writeTranscriptNow() {
+  clearTimeout(transcriptSaveTimer);
+  transcriptSaveTimer = null;
+  try {
+    const dir = join(workspace, ".claude", "desk");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Write whole, then rename: a crash mid-write never leaves half a file.
+    const tmp = `${transcriptPath()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(transcript.slice(-TRANSCRIPT_CAP)), { mode: 0o600 });
+    renameSync(tmp, transcriptPath());
+  } catch {
+    // A read-only folder just loses replay after a restart.
+  }
+}
 function saveTranscript() {
   clearTimeout(transcriptSaveTimer);
-  transcriptSaveTimer = setTimeout(() => {
-    try {
-      mkdirSync(join(workspace, ".claude", "desk"), { recursive: true });
-      writeFileSync(transcriptPath(), JSON.stringify(transcript.slice(-TRANSCRIPT_CAP)));
-    } catch {
-      // A read-only folder just loses replay after a restart.
-    }
-  }, 150);
+  transcriptSaveTimer = setTimeout(writeTranscriptNow, 150);
   transcriptSaveTimer.unref?.();
+}
+// Shutdown paths call this so the last 150 ms of conversation are not lost.
+function flushTranscript() {
+  if (transcriptSaveTimer) writeTranscriptNow();
 }
 
 function loadTranscript() {
@@ -123,10 +151,11 @@ function loadTranscript() {
     for (const row of rows) {
       if (row && typeof row.role === "string") transcript.push(row);
     }
-    // A conversation that ended on the person's message was cut off by a
-    // restart; say so instead of leaving a question that looks ignored.
+    // A conversation that did not end on a reply, an error, or a note was
+    // cut off by a restart (mid-turn it usually ends on a tool row); say so
+    // instead of leaving a message that looks ignored.
     const last = transcript.at(-1);
-    if (last?.role === "user") {
+    if (last && !["assistant", "error", "notice"].includes(last.role)) {
       transcript.push({ role: "error", text: "The desk restarted while Claude was working on this. Send the message again." });
     }
   } catch {
@@ -139,9 +168,22 @@ function loadTranscript() {
 function pushTranscript(row) {
   transcript.push(row);
   if (transcript.length > TRANSCRIPT_CAP) {
-    transcript.splice(0, transcript.length - TRANSCRIPT_CAP);
-    while (transcript.length && transcript[0].role !== "user") transcript.shift();
-    transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+    // Keep the last TRANSCRIPT_KEEP_TURNS exchanges whole.
+    let turns = 0;
+    let cut = 0;
+    for (let index = transcript.length - 1; index >= 0; index -= 1) {
+      if (transcript[index].role === "user") {
+        turns += 1;
+        if (turns === TRANSCRIPT_KEEP_TURNS) {
+          cut = index;
+          break;
+        }
+      }
+    }
+    if (cut > 0) {
+      transcript.splice(0, cut);
+      transcript.unshift({ role: "notice", text: "Earlier messages are not shown." });
+    }
   }
   saveTranscript();
 }
@@ -156,6 +198,7 @@ function sendNotice(text) {
 // chip, so a reload shows the same shape the person watched live.
 function flushTurnText() {
   if (!turnText.trim()) return;
+  repliedThisTurn = true;
   pushTranscript({ role: "assistant", text: turnText });
   turnText = "";
 }
@@ -179,10 +222,12 @@ function snapshot(withTranscript = false) {
     runtime: Boolean(deskRuntime),
     runtimeError,
   };
-  if (withTranscript) {
-    const rows = transcript.slice(-200);
+  if (withTranscript && !deskRuntime) {
+    const rows = transcript.slice(-TRANSCRIPT_CAP);
     if (busy && turnText) rows.push({ role: "assistant", text: turnText, partial: true });
     base.transcript = rows;
+  } else if (withTranscript) {
+    base.transcript = [];
   }
   return base;
 }
@@ -215,12 +260,12 @@ function emitTools(message) {
       send("tool", { id: block.id, name: block.name, phase: "start", input: block.input ?? {} });
       if (!known) {
         flushTurnText();
-        pushTranscript({ role: "tool", name: block.name, input: block.input ?? {} });
+        pushTranscript({ role: "tool", id: block.id, name: block.name, input: summarizeToolInput(block.input) });
       } else {
         // The stream start had no input; the full message carries it.
-        const row = [...transcript].reverse().find((item) => item.role === "tool" && item.name === block.name && !Object.keys(item.input || {}).length);
+        const row = [...transcript].reverse().find((item) => item.role === "tool" && item.id === block.id);
         if (row) {
-          row.input = block.input ?? {};
+          row.input = summarizeToolInput(block.input);
           saveTranscript();
         }
       }
@@ -273,7 +318,7 @@ function handleStreamLine(line) {
       if (block.id && block.name) toolNames.set(block.id, block.name);
       send("tool", { id: block.id, name: block.name || "tool", phase: "start", input: block.input ?? {} });
       flushTurnText();
-      pushTranscript({ role: "tool", name: block.name || "tool", input: block.input ?? {} });
+      pushTranscript({ role: "tool", id: block.id, name: block.name || "tool", input: summarizeToolInput(block.input) });
     }
     if (inner.type === "content_block_start" && /^(redacted_)?thinking$/.test(inner.content_block?.type || "")) {
       // No thinking text leaves the process; the page only needs to know
@@ -306,13 +351,16 @@ function handleStreamLine(line) {
   }
 }
 
-function clearErrorLine(tail) {
+// Exported for tests: the last stderr line when it reads as one sentence
+// meant for a person, or "" when it is a warning, a stack frame, or JSON.
+export function clearErrorLine(tail) {
   const lines = String(tail || "").split("\n").map((line) => line.trim()).filter(Boolean);
   const last = lines.at(-1) || "";
+  if (/^\(use `node|^npm warn|^warning|^deprecat|^\(node:\d+\)/i.test(last)) return "";
   const match = /^(?:\[?(?:error|api error|fatal)\]?:?\s*)?(.{8,200})$/i.exec(last);
   if (!match) return "";
   const text = match[1];
-  if (/\bat\s+\S+\s*\(|node:internal|^\s*\{/.test(text)) return "";
+  if (/\bat\s+\S+\s*\(|node:internal|^\s*[{[]|^\s*at /.test(text)) return "";
   return text;
 }
 
@@ -351,16 +399,18 @@ function stopClaude(reason = "Stopped") {
   send("status", { text: reason });
   // A child that ignores SIGTERM (a hung tool, a trapped signal) would keep
   // the desk busy forever; escalate so Stop always stops.
-  const escalate = setTimeout(() => {
-    if (child !== target || !target.pid) return;
-    try {
-      if (!IS_WIN) process.kill(-target.pid, "SIGKILL");
-      else target.kill("SIGKILL");
-    } catch {
-      try { target.kill("SIGKILL"); } catch { /* already gone */ }
-    }
-  }, KILL_GRACE_MS);
+  const escalate = setTimeout(() => forceKill(target), KILL_GRACE_MS);
   escalate.unref?.();
+}
+
+function forceKill(target) {
+  if (!target?.pid || target.exitCode !== null || target.signalCode !== null) return;
+  try {
+    if (!IS_WIN) process.kill(-target.pid, "SIGKILL");
+    else target.kill("SIGKILL");
+  } catch {
+    try { target.kill("SIGKILL"); } catch { /* already gone */ }
+  }
 }
 
 function stopHelper() {
@@ -437,7 +487,9 @@ function runHelper(kind, factory) {
 
 function runClaude(prompt, { retried = false } = {}) {
   if (busy) {
-    sendTurnError("Claude is already working. Stop the turn, or wait.");
+    // Transient: a message typed while the old turn is still closing must
+    // not persist an error into the conversation.
+    send("turn-error", { text: "Claude is still working on the last message. Wait for it to finish, or press Stop." });
     return false;
   }
 
@@ -457,6 +509,7 @@ function runClaude(prompt, { retried = false } = {}) {
   turnText = "";
   errTail = "";
   reportedError = false;
+  repliedThisTurn = false;
   toolNames.clear();
   const gen = ++turnGen;
   let settled = false;
@@ -531,8 +584,8 @@ function runClaude(prompt, { retried = false } = {}) {
       runClaude(prompt, { retried: true });
       return;
     }
-    const hadReply = Boolean(turnText.trim());
-    if (hadReply) {
+    const hadReply = Boolean(turnText.trim()) || repliedThisTurn;
+    if (turnText.trim()) {
       pushTranscript({ role: "assistant", text: turnText });
       turnText = "";
     }
@@ -1001,6 +1054,28 @@ function openBrowser(href) {
   linuxChrome.unref();
 }
 
+// One set of process handlers for the life of the process; a folder switch
+// only re-points them at the current desk.
+let currentStop = null;
+let handlersInstalled = false;
+function installProcessHandlers() {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  const onSignal = () => currentStop?.(true);
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  // Closing the terminal window sends SIGHUP; the startup text promises that
+  // stops Claude, and a detached child would otherwise keep editing files.
+  process.on("SIGHUP", onSignal);
+  process.on("exit", () => {
+    const target = child;
+    stopClaude("Desk closed");
+    forceKill(target);
+    stopHelper();
+    flushTranscript();
+  });
+}
+
 function listen(server, host, port) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -1026,23 +1101,16 @@ export async function startDesk(options = {}) {
   }
   rememberWorkspace(workspace);
   // A previous desk in this process (a folder switch) may still own a Claude
-  // turn or a sign-in helper; stop them before the shared state is reset, or
-  // they would run on unobserved.
+  // turn or a sign-in helper. Stop them and mark the turn superseded: its
+  // close handler then releases busy without writing into the new folder,
+  // and the SIGKILL escalation still finds its child.
   stopClaude("Switching folders");
   stopHelper();
-  // A workspace switch must not carry the previous desk's turn state into the
-  // new folder: a dying child's close handler would otherwise save the old
-  // session id into the new workspace's desk-session.json.
+  resetGen = turnGen;
   sessionId = loadDeskSession(workspace);
-  child = null;
-  busy = false;
-  helper = null;
   streamedText = false;
   sawInit = false;
-  stopRequested = false;
   turnText = "";
-  turnGen = 0;
-  resetGen = 0;
   loadTranscript();
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
@@ -1064,35 +1132,34 @@ export async function startDesk(options = {}) {
   let transport = null;
 
   const stop = (exitProcess = false) => {
+    const target = child;
     stopClaude("Desk closed");
     stopHelper();
+    // Keep whatever Claude had said so far; the restart note follows it.
+    flushTurnText();
+    flushTranscript();
     runtime?.stop?.();
     transport?.close?.();
     server.close(() => {
-      if (exitProcess) process.exit(0);
+      if (exitProcess && !target) process.exit(0);
     });
-    if (exitProcess) setTimeout(() => process.exit(0), 500).unref();
+    if (exitProcess) {
+      // Leave only once Claude is really gone: SIGTERM first, SIGKILL if it
+      // is still there after the grace period, then exit.
+      const bound = setTimeout(() => {
+        forceKill(target);
+        process.exit(0);
+      }, target ? KILL_GRACE_MS : 500);
+      bound.unref();
+      target?.once?.("close", () => {
+        clearTimeout(bound);
+        process.exit(0);
+      });
+    }
   };
 
-  // Signal handlers accumulate if startDesk runs again (workspace switch), so
-  // each registration removes itself before re-adding.
-  function stopOnSignal() {
-    stop(true);
-  }
-  function stopOnExit() {
-    stopClaude("Desk closed");
-    stopHelper();
-  }
-  process.off("SIGINT", stopOnSignal);
-  process.off("SIGTERM", stopOnSignal);
-  process.off("SIGHUP", stopOnSignal);
-  process.on("SIGINT", stopOnSignal);
-  process.on("SIGTERM", stopOnSignal);
-  // Closing the terminal window sends SIGHUP; the startup text promises that
-  // stops Claude, and a detached child would otherwise keep editing files.
-  process.on("SIGHUP", stopOnSignal);
-  process.off("exit", stopOnExit);
-  process.on("exit", stopOnExit);
+  currentStop = stop;
+  installProcessHandlers();
 
   const preferred = options.port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
   let bound = preferred;

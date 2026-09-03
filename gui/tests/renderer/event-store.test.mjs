@@ -183,3 +183,26 @@ test("a tool completion without input keeps the file name, and a read-only quest
   state = reduceDeskEvent(state, event(4, "question.requested", { entityId: "q-live", questions: [{ question: "Lane?" }] }));
   assert.equal(state.pendingQuestionId, "q-live");
 });
+
+test("a runtime-shaped question (request id card, tool use id result) closes on the tool result", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "question.requested", { entityId: "req-1", toolUseId: "tool-q", questions: [{ question: "Lane?", options: [{ label: "A" }] }] }));
+  state = reduceDeskEvent(state, event(2, "question.resolved", { entityId: "req-1", answered: true }));
+  state = reduceDeskEvent(state, event(3, "tool.completed", { toolUseId: "tool-q", text: "ok" }));
+  assert.equal(state.cards.size, 1);
+  assert.equal(state.cards.get("req-1").entered, true);
+  assert.equal(state.pendingQuestionId, null);
+});
+
+test("a follow-up sent mid-turn does not reset the reply segment; the next turn does", () => {
+  let state = createDeskState();
+  state = reduceDeskEvent(state, event(1, "user.message", { messageId: "m1", text: "one" }, { turnId: "m1" }));
+  state = reduceDeskEvent(state, event(2, "assistant.delta", { text: "Let me check." }, { turnId: "m1" }));
+  state = reduceDeskEvent(state, event(3, "tool.started", { toolUseId: "t1", name: "Read" }, { turnId: "m1" }));
+  state = reduceDeskEvent(state, event(4, "user.message", { messageId: "m2", text: "two" }, { turnId: "m2" }));
+  state = reduceDeskEvent(state, event(5, "assistant.delta", { text: "Found it." }, { turnId: "m1" }));
+  assert.equal(state.cards.get("assistant:m1:1").payload.text, "Found it.");
+  state = reduceDeskEvent(state, event(6, "turn.completed", { text: "" }, { turnId: "m1" }));
+  state = reduceDeskEvent(state, event(7, "assistant.delta", { text: "Second answer." }, { turnId: "m2" }));
+  assert.equal(state.cards.get("assistant:m2").payload.text, "Second answer.");
+});

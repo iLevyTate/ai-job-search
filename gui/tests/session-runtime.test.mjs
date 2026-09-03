@@ -482,3 +482,87 @@ test("a sign-in failure does not loop restarts; sends are refused until New chat
     assert.equal(after.ok, true);
   }, { adapterFactory: factory });
 });
+
+test("the turn is claimed before the prompt reaches Claude, so a fast first token lands on it", async () => {
+  const fake = createFakeAdapter();
+  let turnAtSend = null;
+  const factory = (options) => {
+    const api = fake.create(options);
+    const send = api.send;
+    api.send = (message) => {
+      turnAtSend = store.get(conversation.id)?.partialTurn?.id ?? null;
+      return send(message);
+    };
+    return api;
+  };
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-")) });
+  const conversation = await store.createConversation();
+  const runtime = createSessionRuntime({ workspace: "unused", conversationId: conversation.id, store, adapterFactory: factory });
+  await runtime.start();
+  await runtime.submitMessage({ messageId: "m-fast", text: "go", expectedControllerGeneration: 1 });
+  assert.equal(turnAtSend, "m-fast");
+  await runtime.stop();
+});
+
+test("follow-ups queued behind a crashed turn are reported and the restart budget returns after a good turn", async () => {
+  const fakes = [];
+  const factory = (options) => {
+    const fake = createFakeAdapter();
+    fakes.push(fake);
+    return fake.create(options);
+  };
+  await withRuntime(async ({ runtime, published, store, conversation }) => {
+    await runtime.submitMessage({ messageId: "m-1", text: "one", expectedControllerGeneration: 1 });
+    await runtime.submitMessage({ messageId: "m-2", text: "two", expectedControllerGeneration: 1 });
+    fakes[0].closeStream();
+    await waitUntil(() => published.filter((event) => event.type === "turn.failed").length >= 2);
+    const lost = published.find((event) => event.type === "turn.failed" && event.turnId === "m-2");
+    assert.match(lost.payload.text, /before reaching this message/);
+    await waitUntil(() => fakes.length === 2);
+    assert.equal(store.get(conversation.id).recoveryAttempts, 1);
+    await runtime.submitMessage({ messageId: "m-3", text: "three", expectedControllerGeneration: 1 });
+    fakes[1].emit({ type: "result", subtype: "success", result: "ok" });
+    await waitUntil(() => published.some((event) => event.type === "turn.completed"));
+    await waitUntil(() => store.get(conversation.id).recoveryAttempts === 0);
+    fakes[1].closeStream();
+    await waitUntil(() => fakes.length === 3, 2000);
+  }, { adapterFactory: factory });
+});
+
+test("questions and approvals wait as long as the person needs by default", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-wait", text: "go", expectedControllerGeneration: 1 });
+    const decision = wired.captured.onPermissionRequest({ requestId: "req-wait", toolUseId: "t", toolName: "Bash", input: { command: "ls" } });
+    await waitUntil(() => published.some((event) => event.type === "permission.requested"));
+    let settled = false;
+    decision.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(settled, false);
+    await runtime.resolvePermission({ requestId: "req-wait", decision: "deny", expectedControllerGeneration: 1 });
+    await waitUntil(() => settled);
+  }, { adapterFactory: wired.factory });
+});
+
+test("multi-select answers reach the SDK joined with ', ' and an unanswered question is a deny", async () => {
+  const fake = createFakeAdapter();
+  const wired = adapterWithPermissions(fake);
+  await withRuntime(async ({ runtime, published }) => {
+    await runtime.submitMessage({ messageId: "m-multi", text: "go", expectedControllerGeneration: 1 });
+    const questions = [{ question: "Which boards?", header: "Boards", options: [{ label: "LinkedIn", description: "" }, { label: "Ashby", description: "" }], multiSelect: true }];
+    const decision = wired.captured.onPermissionRequest({ requestId: "req-multi", toolUseId: "t-multi", toolName: "AskUserQuestion", input: { questions } });
+    await waitUntil(() => published.some((event) => event.type === "question.requested"));
+    await runtime.respondToQuestion({ requestId: "req-multi", answers: { "Which boards?": ["LinkedIn", "Ashby"] }, expectedControllerGeneration: 1 });
+    const result = await decision;
+    assert.equal(result.updatedInput.answers["Which boards?"], "LinkedIn, Ashby");
+
+    const second = wired.captured.onPermissionRequest({ requestId: "req-none", toolUseId: "t-none", toolName: "AskUserQuestion", input: { questions } });
+    await waitUntil(() => published.filter((event) => event.type === "question.requested").length === 2);
+    runtime.disconnectInteractions();
+    const denied = await second;
+    assert.equal(denied.behavior, "deny");
+    assert.match(denied.message, /did not answer/);
+    await waitUntil(() => published.some((event) => event.type === "question.resolved" && event.payload.answered === false));
+  }, { adapterFactory: wired.factory });
+});

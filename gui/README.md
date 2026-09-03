@@ -1,6 +1,6 @@
 # Job search desk
 
-A localhost desk that talks to Claude Code in this repo. Native Chat, a Claude-only Terminal tab, and Files/Artifacts share one workspace and one conversation. Works on **macOS, Windows, and Linux**.
+A localhost desk that talks to Claude Code in this repo. Native Chat, a Claude-only Terminal tab, and Files share one folder and one conversation. Works on **macOS, Windows, and Linux**.
 
 ## Install the app
 
@@ -57,14 +57,14 @@ Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`
 
 1. Sign in only if the desk reports you are signed out. Claude Code opens one claude.ai tab for that; if no tab appears, use the **Open the sign-in page** link on the same card. Install Claude Code only if it is missing.
 2. Click a step in the left column. **Setup**, **Find Jobs**, **Rank**, **Interview**, and **Outcome** run as soon as you click them. **Apply** asks for one thing: the job link, or the whole posting pasted in if the site blocks links. **Autofill** asks for the application form link. **More steps…** (or Ctrl+K) lists everything else, such as Import and Upskill.
-3. While Claude works the chat says what it is doing: *Thinking*, *Reading job_search_tracker.csv*, *Writing*. Stop cancels the turn. Scroll up whenever you like; a **Latest** button brings you back. When Claude has a question, a **Needs you** card lists the choices; pick one or type your own answer. In **Safe** mode the same kind of card asks before a tool runs.
+3. While Claude works the chat says what it is doing: *Thinking*, *Reading job_search_tracker.csv*, *Writing*. Stop cancels the turn. Scroll up whenever you like; a **Latest** button brings you back. When Claude has a question, a **Needs you** card lists the choices; pick one or type your own answer. When the header says **Asks before acting** (Safe mode), the same kind of card asks before a tool runs.
 4. **Scrape**, then talk: "which of these are real Staff AI roles?" **Rank** when the table is too long.
 5. **Autofill** fills the employer form and hands the browser to you. Review it, then click Submit yourself. Desk shows Continue and Cancel only.
 6. Keep typing the way you would in Claude Code: `/rank healthcare --top 10` works in the composer, and so does a plain question. Enter sends. Shift+Enter is a new line. New chat asks before clearing the conversation.
 
-**Safe** mode asks before tools run and fails closed. **Autonomous** may bypass permissions for the selected trusted workspace. Safe is a Desk permission mode; it is not Claude CLI `--safe-mode`.
+The header shows the permission mode in plain words: **Asks before acting** (Safe) asks before tools run and fails closed; **Works on its own** (Autonomous) may bypass permissions for the selected trusted folder. Safe is a Desk permission mode; it is not Claude CLI `--safe-mode`.
 
-Open CLI still launches Claude Code in the same folder if you want the external terminal. Close the app or Ctrl+C to stop.
+**Open in Terminal** still launches Claude Code in the same folder if you want the external terminal. Close the app or Ctrl+C to stop.
 
 ## Build a release locally
 

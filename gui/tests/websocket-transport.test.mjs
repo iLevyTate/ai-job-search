@@ -273,3 +273,25 @@ test("events after a reset are delivered even though their sequence numbers star
   await transport.close();
   server.close();
 });
+
+test("a runtime command that throws answers the page with a rejection instead of crashing", async () => {
+  const runtime = fakeRuntime();
+  runtime.interrupt = async () => { throw new Error("ProcessTransport is not ready for writing"); };
+  const server = createServer();
+  const port = await listen(server);
+  const transport = attachWebSocketTransport({ server, runtime, ...allowed(port) });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ type: "hello", conversationId: "c1", protocolVersion: 1, afterSequence: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  ws.send(JSON.stringify({ type: "turn.interrupt" }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const rejected = received.find((m) => m.type === "command.rejected");
+  assert.equal(rejected?.reason, "error");
+  assert.equal(rejected?.command, "turn.interrupt");
+  ws.close();
+  await transport.close();
+  server.close();
+});

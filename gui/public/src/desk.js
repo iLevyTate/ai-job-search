@@ -85,9 +85,12 @@ const REJECT_TEXT = {
   closed: "Claude is not running. Start a new chat.",
   "unknown-request": "That question has already been answered, or it expired.",
   malformed: "Answer every question before sending.",
+  error: "Something went wrong inside the desk while doing that. Try again; if it keeps happening, start a new chat.",
 };
 
 function notice(text) {
+  const last = [...state.cards.values()].at(-1);
+  if (last?.type === "desk.notice" && last.payload.text === text) return;
   sseEvent("desk.notice", { text });
 }
 
@@ -136,7 +139,11 @@ function markdown(text) {
         }
       });
     }
-    return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), { FORBID_TAGS: ["img", "svg", "picture", "video", "audio"] });
+    return window.DOMPurify.sanitize(window.marked.parse(text || "", { gfm: true, breaks: true }), {
+      ALLOW_DATA_ATTR: false,
+      FORBID_TAGS: ["img", "svg", "picture", "video", "audio", "form", "input", "button", "select", "textarea", "label", "style", "details", "summary", "dialog"],
+      FORBID_ATTR: ["class", "id", "style"],
+    });
   }
   return String(text || "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`).replace(/\n/g, "<br>");
 }
@@ -227,7 +234,8 @@ function setSessionLabel(data = {}) {
       : `${data.chromeGroup} · waiting for Chrome`;
     return;
   }
-  sessionEl.textContent = data.sessionId ? "Continuing from last time" : "New conversation";
+  if (data.restored) sessionEl.textContent = "Continuing from last time";
+  else if (!data.sessionId) sessionEl.textContent = "New conversation";
 }
 
 function sizePrompt() {
@@ -386,10 +394,14 @@ async function sendPrompt(prompt) {
     return true;
   }
   if (busy) {
-    notice(REJECT_TEXT.busy);
+    lastSendError = closingOld
+      ? "Still closing the old conversation. Try again in a moment."
+      : REJECT_TEXT.busy;
+    notice(lastSendError);
     return false;
   }
   if (sendPending) return false;
+  lastSendError = "";
   sendPending = true;
   try {
     if (!lastHealth?.loggedIn) {
@@ -400,6 +412,7 @@ async function sendPrompt(prompt) {
       }
     }
     if (needsInstall(lastHealth) || needsLogin(lastHealth) || !lastHealth?.installed) {
+      lastSendError = "Claude Code needs to be set up first. Follow the steps on screen.";
       applyHealth(lastHealth || { installed: false });
       if (!lastHealth?.installed && !needsInstall(lastHealth) && !needsLogin(lastHealth)) {
         sseEvent("turn.failed", { text: "Claude Code is not installed yet. Use the Connect Claude button." });
@@ -413,20 +426,29 @@ async function sendPrompt(prompt) {
     // own copy. A local copy showed every message twice.
     const messageId = `m-${Date.now()}`;
     if (runtimeSend({ type: "user.message", messageId, text })) {
+      inFlightSends.set(messageId, text);
       return true;
+    }
+    if (runtimeMode) {
+      setBusy(false);
+      lastSendError = "The desk is reconnecting to Claude. Try again in a moment.";
+      notice(lastSendError);
+      return false;
     }
     let res;
     try {
       res = await post("/send", { prompt: text });
     } catch {
       setBusy(false);
-      sseEvent("turn.failed", { text: "The desk cannot reach its local server. Close this tab and open the desk again." });
+      lastSendError = "The desk cannot reach its local server. Close this tab and open the desk again.";
+      sseEvent("turn.failed", { text: lastSendError });
       return false;
     }
     if (res.ok) return true;
     const body = await res.json().catch(() => ({}));
     if (!state.busy) setBusy(false);
-    notice(sendErrorText(res.status, body.error));
+    lastSendError = sendErrorText(res.status, body.error);
+    notice(lastSendError);
     return false;
   } finally {
     sendPending = false;
@@ -446,13 +468,25 @@ function handleRejected(message) {
   if (message.command === "user.message" || !message.command) {
     if (message.messageId) {
       state = { ...state, queued: state.queued.filter((item) => item.id !== message.messageId) };
+      // Give the words back rather than making the person retype them.
+      const text = inFlightSends.get(message.messageId);
+      inFlightSends.delete(message.messageId);
+      if (text && !promptEl.value.trim()) {
+        promptEl.value = text;
+        sizePrompt();
+      }
     }
     if (!state.busy) setBusy(false);
   } else if (message.requestId && state.cards.has(message.requestId)) {
-    // Let the person answer or decide again.
+    // Let the person answer or decide again, and keep the page in
+    // "waiting for you" rather than "Working".
     const next = structuredClone(state);
-    next.cards.get(message.requestId).entered = false;
+    const card = next.cards.get(message.requestId);
+    card.entered = false;
+    if (card.type === "question.requested") next.pendingQuestionId = message.requestId;
+    if (card.type === "permission.requested") next.pendingPermissionId = message.requestId;
     state = next;
+    paintChat();
   }
   notice(REJECT_TEXT[reason] || `The desk could not do that (${reason}).`);
 }
@@ -469,8 +503,13 @@ async function runStep(name, prompt) {
 function runAction(name) {
   const command = commands.find((item) => item.id === name);
   setMenu(false);
+  if (command && commandNeedsInput(command)) {
+    // Pasting can happen while Claude works; Run explains if it must wait.
+    openCommandSheet(command);
+    return;
+  }
   if (busy && !runtimeSocket) {
-    notice(REJECT_TEXT.busy);
+    notice(closingOld ? "Still closing the old conversation. Try again in a moment." : REJECT_TEXT.busy);
     return;
   }
   if (!command) {
@@ -539,13 +578,27 @@ function connectRuntime() {
       return;
     }
     if (message.type === "snapshot") {
-      runtimeMode = true;
+      if (!runtimeMode) {
+        runtimeMode = true;
+        state = createDeskState({ permissionMode: state.permissionMode });
+        sseSequence = 0;
+        sseTurn = 0;
+        sseTurnClosed = true;
+      }
       state = applySnapshot(state, message.snapshot || {});
       syncBusy();
       paintChat();
     } else if (message.type === "event" && message.event) {
       ingest(message.event);
+    } else if (message.type === "command.accepted") {
+      if (message.messageId) inFlightSends.delete(message.messageId);
+      if (message.command === "conversation.reset" && resetPending) {
+        resetPending = false;
+        clearConversation();
+        setBusy(false);
+      }
     } else if (message.type === "command.rejected") {
+      if (message.command === "conversation.reset") resetPending = false;
       handleRejected(message);
     } else if (message.type === "protocol.error") {
       notice(`The desk and Claude disagreed about a message (${message.error || "protocol error"}). Try again.`);
@@ -565,7 +618,7 @@ function connectRuntime() {
 const source = new EventSource("/events");
 source.addEventListener("hello", (event) => {
   const data = JSON.parse(event.data);
-  rememberSession(data);
+  rememberSession({ ...data, restored: Boolean(data.sessionId && (data.transcript || []).length) });
   if (runtimeMode) return;
   // The stream reconnects on its own after a sleep or a hiccup, and the
   // snapshot is the only complete picture: rebuild from it every time.
@@ -656,6 +709,7 @@ source.addEventListener("reset", () => {
 });
 source.addEventListener("idle", () => {
   if (runtimeMode) return;
+  closingOld = false;
   // Print mode ends a turn with idle, not turn.completed; a quiet
   // turn.interrupted closes the turn and settles any still-pulsing tool chip.
   if (state.busy) sseEvent("turn.interrupted", {});
@@ -733,7 +787,7 @@ sheetForm.addEventListener("submit", (event) => {
       sheet.close();
       return;
     }
-    sheetError.textContent = REJECT_TEXT.busy;
+    sheetError.textContent = lastSendError || REJECT_TEXT.busy;
     sheetError.hidden = false;
   });
 });
@@ -747,8 +801,35 @@ stopBtn.addEventListener("click", async () => {
     notice("Could not stop Claude: the desk is not reachable. Close this tab and open the desk again.");
   }
 });
+let resetPending = false;
+// True between New chat during a running turn and the server's idle.
+let closingOld = false;
+// Messages sent to the runtime that it has not yet accepted; a rejection puts
+// the text back in the composer instead of losing it.
+const inFlightSends = new Map();
+let lastSendError = "";
+
+function clearConversation() {
+  hasReset = true;
+  state = createDeskState({ permissionMode: state.permissionMode });
+  sseSequence = 0;
+  sseTurn = 0;
+  sseTurnClosed = true;
+  markAction(null);
+  paintChat();
+  jumpBtn.hidden = true;
+  setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: null });
+}
+
 resetBtn.addEventListener("click", async () => {
   if (!window.confirm("Start a new conversation? The current chat is cleared.")) return;
+  if (runtimeSend({ type: "conversation.reset" })) {
+    // Old events may still be in flight; the runtime's confirmation is the
+    // moment the page can start from zero without adopting a stale cursor.
+    resetPending = true;
+    statusEl.textContent = "Starting a new conversation…";
+    return;
+  }
   if (!runtimeSend({ type: "conversation.reset" })) {
     try {
       const res = await post("/reset");
@@ -761,23 +842,16 @@ resetBtn.addEventListener("click", async () => {
       return;
     }
   }
-  hasReset = true;
   const wasBusy = busy;
-  state = createDeskState({ permissionMode: state.permissionMode });
-  sseSequence = 0;
-  sseTurn = 0;
-  sseTurnClosed = true;
-  markAction(null);
-  if (wasBusy && !runtimeSocket) {
+  clearConversation();
+  if (wasBusy) {
     // The server keeps the old turn busy until Claude has really stopped
     // (idle arrives then); saying Ready now would only earn a rejected send.
+    closingOld = true;
     statusEl.textContent = "Closing the old conversation…";
   } else {
     setBusy(false);
   }
-  paintChat();
-  jumpBtn.hidden = true;
-  setSessionLabel({ chromeGroup: sessionEl.dataset.chromeGroup, sessionId: sessionEl.dataset.sessionId });
 });
 
 menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
@@ -847,14 +921,23 @@ logEl.addEventListener("click", async (event) => {
 });
 
 function restoreFocusAfterDialog() {
-  const active = document.activeElement;
-  const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
-  if (!active || active === document.body || inHiddenDock) {
-    (menuBtn.offsetParent ? menuBtn : promptEl).focus();
-  }
+  // The browser restores focus to the opener after this event; look after it.
+  window.setTimeout(() => {
+    const active = document.activeElement;
+    const inHiddenDock = dock.contains(active) && !document.body.classList.contains("menu-open") && menuBtn.offsetParent;
+    if (!active || active === document.body || inHiddenDock || (active && !active.isConnected)) {
+      (menuBtn.offsetParent ? menuBtn : promptEl).focus();
+    }
+  }, 0);
 }
 sheet.addEventListener("close", restoreFocusAfterDialog);
 palette.addEventListener("close", restoreFocusAfterDialog);
+paletteQuery?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    palette.close();
+  }
+});
 
 paletteQuery?.addEventListener("input", () => {
   renderPaletteList(paletteList, filterCommands(commands, paletteQuery.value));
@@ -891,7 +974,17 @@ function terminalPlaceholder(host, title, copy) {
   host.innerHTML = `<div class="empty"><p class="kicker">Terminal</p><h2>${title}</h2><p>${copy}</p></div>`;
 }
 
-async function ensureTerminal() {
+let terminalStarting = null;
+
+function ensureTerminal() {
+  if (terminalStarting) return terminalStarting;
+  terminalStarting = startTerminal().finally(() => {
+    terminalStarting = null;
+  });
+  return terminalStarting;
+}
+
+async function startTerminal() {
   const host = document.getElementById("panel-terminal");
   const bridge = window.deskApp?.terminal;
   if (!host || !bridge) return;
@@ -1013,6 +1106,9 @@ const tabs = mountTabs(document.getElementById("surface-tabs"), {
     if (id === "files") loadArtifacts();
     if (id === "terminal") ensureTerminal();
     if (id !== "terminal") releaseTerminal();
+    // A reply that finished while another tab was in front left the log
+    // scrolled mid-way with no Latest button.
+    if (id === "chat") requestAnimationFrame(scrollLog);
   },
 });
 filesEl.addEventListener("click", (event) => {

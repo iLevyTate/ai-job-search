@@ -96,6 +96,31 @@ per-file diff commands.
   hidden drawer, Files keeps keyboard focus after arrow keys, the header wraps
   and Files stacks on narrow screens, the Latest button sits above the
   composer, and the status line is legible.
+- Job Search Desk review pass over the three audits above. In the installed
+  app: a send during a WebSocket reconnect no longer falls back to print mode
+  with permissions skipped; New chat clears the page only once the runtime
+  confirms, so an in-flight event cannot wedge the replay cursor (and the
+  cursor also resets on every socket, not just the one that asked); the turn
+  is claimed before the prompt reaches Claude; follow-ups queued behind a
+  crash are reported instead of lost; a good turn restores the one-restart
+  budget; questions and approvals wait as long as the person needs (no
+  five-minute auto-deny); a runtime command that throws answers the page
+  instead of crashing the process; a rejected send puts the typed text back
+  in the composer; a follow-up sent mid-turn no longer resets the reply
+  segment; a replaced terminal's exit cannot hand back the newer terminal's
+  turn. Browser mode: the transcript cap counts turns, not tool rows; tool
+  rows store only what the page shows, and the file is written whole, private
+  and flushed on shutdown; a folder switch keeps the Stop escalation armed and
+  shutdown escalates too; the "no reply" check no longer misfires after a
+  tool call; parallel same-name tools keep their own inputs; process signal
+  handlers are registered once. Markdown from Claude is sanitised without
+  forms, buttons, data attributes or ids the desk's own handlers could act
+  on. First run accepts an empty folder already named ai-job-search. Small
+  things a walkthrough caught: the Apply sheet can be prepared while Claude
+  works, a blocked click posts one notice rather than a stack of them,
+  "Continuing from last time" appears only when a conversation was restored,
+  Escape closes the palette with a filter typed, and focus is checked after
+  a dialog closes rather than before.
 
 ### Changed
 - Public README describes this US Job Search Desk product. Credit for the

@@ -3,7 +3,7 @@
  * missing (common after a Start Menu launch), download the public zip instead.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, rename, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
@@ -168,7 +168,23 @@ export function humanWorkspaceError(raw) {
 export async function createWorkspace(dest, env = process.env) {
   if (existsSync(dest)) {
     if (isJobSearchWorkspace(dest)) return { ok: true };
-    return { error: `${dest} already exists and was not created by Job Search Desk. Pick an empty place, or open the folder Desk made earlier.` };
+    let entries = null;
+    try {
+      entries = readdirSync(dest);
+    } catch {
+      entries = null;
+    }
+    // An empty folder the person made themselves is fine to fill.
+    if (!entries || entries.length) {
+      return { error: `${dest} already exists and was not created by Job Search Desk. Pick an empty place, or open the folder Desk made earlier.` };
+    }
+    // The clone and the download both create the folder; remove the empty
+    // one so a rename onto it cannot fail on Windows.
+    try {
+      rmdirSync(dest);
+    } catch {
+      // Leave it; git clone copes with an empty target.
+    }
   }
 
   const cloned = await cloneWithGit(dest, env);
