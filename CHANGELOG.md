@@ -144,6 +144,11 @@ per-file diff commands.
   a dialog closes rather than before.
 
 ### Changed
+- Job Search Desk 1.3.0: Jobs and Applications tabs, a live getting-started
+  checklist, Tools check, document upload, in-app updates from GitHub
+  Releases with Restart when a new build is downloaded, an optional Setup
+  form that seeds `/setup`, a marked-fake practice posting on an empty Jobs
+  tab, and the first-use / audit fixes listed under Added and Fixed above.
 - Public README describes this US Job Search Desk product. Credit for the
   original methodology stays in Acknowledgements; Ko-fi, the upstream hiring
   story, and Intel Mac release copy are gone from the front page.
