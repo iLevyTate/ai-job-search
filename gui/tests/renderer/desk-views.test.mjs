@@ -69,6 +69,17 @@ test("applications show status, files, and next actions", () => {
   assert.equal(statusLabel("offer declined"), "Declined");
 });
 
+test("tracker cells are escaped even when they start with markup", () => {
+  const doc = document();
+  const root = doc.createElement("div");
+  renderApplications(root, { applications: [
+    { id: "app-x", date: "2026-09-01", company: "Acme", role: "Eng", status: "applied", channel: "<strong>x</strong><img src=x onerror=alert(1)>", deadline: "2026-09-30" },
+  ] });
+  assert.equal(root.querySelector("img"), null);
+  assert.match(root.querySelector(".job-meta").textContent, /<strong>x<\/strong>/);
+  assert.match(root.querySelector(".job-meta strong").textContent, /deadline 2026-09-30/);
+});
+
 test("the checklist points at the next step and warns about missing tools", () => {
   const html = renderChecklist({
     next: "documents",

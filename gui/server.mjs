@@ -43,6 +43,7 @@ import {
   readApplications,
   readJobs,
   readProgress,
+  resolveWorkspaceDir,
   resolveWorkspaceFile,
   saveDocument,
   setJobMark,
@@ -218,7 +219,14 @@ function flushTurnText() {
 
 function send(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of clients) res.write(payload);
+  for (const res of clients) {
+    try {
+      res.write(payload);
+    } catch {
+      // A client that went away mid-write must not take the desk down.
+      clients.delete(res);
+    }
+  }
 }
 
 function sendTurnError(text, detail = "") {
@@ -509,7 +517,7 @@ function runClaude(prompt, { retried = false } = {}) {
   if (!commandLooksInstalled(resolveCommand("claude"))) {
     send("turn-error", { text: MISSING_CLAUDE_TEXT });
     send("idle", snapshot());
-    return;
+    return "missing";
   }
 
   const usedResume = Boolean(sessionId);
@@ -542,7 +550,7 @@ function runClaude(prompt, { retried = false } = {}) {
     child = null;
     sendTurnError(err.message || MISSING_CLAUDE_TEXT);
     send("idle", snapshot());
-    return;
+    return "failed";
   }
   // Print mode receives its prompt as an argument and waits for a piped stdin
   // to close. Leaving this stream open makes the Desk appear busy forever.
@@ -658,19 +666,29 @@ function readRawBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
-    req.on("data", (chunk) => {
+    let tooLarge = false;
+    const onData = (chunk) => {
       total += chunk.length;
       if (total > limit) {
-        req.destroy();
+        // Drain instead of destroying the socket, so the 413 and its
+        // "larger than 25 MB" sentence still reach the page.
+        tooLarge = true;
+        req.off("data", onData);
+        req.resume();
         const err = new Error("request too large");
         err.tooLarge = true;
         reject(err);
         return;
       }
       chunks.push(chunk);
+    };
+    req.on("data", onData);
+    req.on("end", () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks));
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", () => reject(new Error("request stream error")));
+    req.on("error", () => {
+      if (!tooLarge) reject(new Error("request stream error"));
+    });
   });
 }
 
@@ -771,6 +789,16 @@ async function handleDeskDataRequest(req, res, url) {
   }
   if (req.method === "POST" && url.pathname === "/workspace-file/open") {
     const body = await readJson(req);
+    if (body?.reveal) {
+      // The Applications tab reveals the archive folder; it used to point at
+      // a job_posting.md that /apply does not always write.
+      const dir = resolveWorkspaceDir(workspace, body.path || "");
+      if (dir) {
+        systemOpener.open(dir.absolutePath);
+        json(res, 200, { ok: true, path: dir.relativePath });
+        return true;
+      }
+    }
     const found = body && resolveWorkspaceFile(workspace, body.path || "");
     if (!found) {
       json(res, 404, { ok: false, error: "That file is not in your job-search folder any more." });
@@ -881,6 +909,8 @@ async function handleRequest(req, res) {
       res.write(`event: hello\ndata: ${JSON.stringify(snapshot(true))}\n\n`);
       clients.add(res);
       req.on("close", () => clients.delete(res));
+      // An 'error' on the response with no listener is an uncaught exception.
+      res.on("error", () => clients.delete(res));
       return;
     }
 
@@ -1114,8 +1144,17 @@ async function handleRequest(req, res) {
         json(res, 400, { ok: false, error: "prompt required" });
         return;
       }
-      if (runClaude(prompt) === false) {
+      const started = runClaude(prompt);
+      if (started === false) {
         json(res, 409, { ok: false, error: "busy" });
+        return;
+      }
+      if (started === "missing") {
+        json(res, 503, { ok: false, error: MISSING_CLAUDE_TEXT });
+        return;
+      }
+      if (started === "failed") {
+        json(res, 500, { ok: false, error: "Claude Code could not start. See the card in the conversation." });
         return;
       }
       json(res, 202, { ok: true });
@@ -1123,6 +1162,18 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/stop") {
+      if (deskRuntime && !child) {
+        // The page falls back to HTTP while its WebSocket reconnects; the
+        // running turn lives in the runtime, not in print mode.
+        try {
+          await deskRuntime.interrupt();
+        } catch (err) {
+          json(res, 500, { ok: false, error: err?.message || "Could not stop the turn." });
+          return;
+        }
+        json(res, 200, { ok: true });
+        return;
+      }
       if (!child) {
         // Nothing to stop: make sure the page is not stuck showing busy.
         busy = false;
@@ -1135,6 +1186,18 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/reset") {
+      if (deskRuntime && !child) {
+        // Same fallback as /stop: clear the runtime conversation, otherwise
+        // the reconnecting page replays the "cleared" conversation.
+        try {
+          await deskRuntime.reset();
+        } catch (err) {
+          json(res, 500, { ok: false, error: err?.message || "Could not start a new conversation." });
+          return;
+        }
+        json(res, 200, { ok: true });
+        return;
+      }
       // Everything spawned so far belongs to the old conversation: its late
       // stdout must not re-save the session id it is still printing.
       resetGen = turnGen;
@@ -1194,7 +1257,11 @@ function openBrowser(href) {
   const linuxChrome = spawn("google-chrome", [href], detach);
   linuxChrome.on("error", () => {
     const chromium = spawn("chromium-browser", [href], detach);
-    chromium.on("error", () => spawn("xdg-open", [href], detach).unref());
+    chromium.on("error", () => {
+      const fallback = spawn("xdg-open", [href], detach);
+      fallback.on("error", () => console.error(`No browser opener found. Open ${href} yourself.`));
+      fallback.unref();
+    });
     chromium.unref();
   });
   linuxChrome.unref();
@@ -1220,6 +1287,26 @@ function installProcessHandlers() {
     stopHelper();
     flushTranscript();
   });
+}
+
+// 8765 first, then the next nine ports; JOB_SEARCH_GUI_PORT overrides, 0 asks
+// the OS for a free one.
+async function bindDeskPort(server, port) {
+  const preferred = port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
+  if (preferred === 0) {
+    await listen(server, HOST, 0);
+    return server.address().port;
+  }
+  for (let offset = 0; offset < 10; offset += 1) {
+    const candidate = preferred + offset;
+    try {
+      await listen(server, HOST, candidate);
+      return candidate;
+    } catch (err) {
+      if (err.code !== "EADDRINUSE" || offset === 9) throw err;
+    }
+  }
+  return preferred;
 }
 
 function listen(server, host, port) {
@@ -1260,13 +1347,21 @@ export async function startDesk(options = {}) {
   loadTranscript();
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
+  // Bind first: the runtime spawns Claude when it starts, and that child only
+  // sees JOB_SEARCH_DESK_REVIEW_URL if the port is known before the spawn.
+  const bound = await bindDeskPort(server, options.port);
+  boundPort = bound;
+  process.env.JOB_SEARCH_DESK_REVIEW_URL = `http://${HOST}:${bound}/autofill`;
   let runtime = options.runtime || null;
   if (!runtime && options.runtimeFactory) {
     try {
       runtime = await options.runtimeFactory({ workspace });
       runtimeError = "";
     } catch (error) {
-      if (!options.allowRuntimeFailure) throw error;
+      if (!options.allowRuntimeFailure) {
+        server.close();
+        throw error;
+      }
       runtime = null;
       runtimeError = error?.message || String(error);
       console.error(`Desk runtime failed to start; using print mode instead: ${runtimeError}`);
@@ -1308,25 +1403,6 @@ export async function startDesk(options = {}) {
   currentStop = stop;
   installProcessHandlers();
 
-  const preferred = options.port ?? Number(process.env.JOB_SEARCH_GUI_PORT || PORT);
-  let bound = preferred;
-  if (preferred === 0) {
-    await listen(server, HOST, 0);
-    bound = server.address().port;
-  } else {
-    for (let offset = 0; offset < 10; offset += 1) {
-      bound = preferred + offset;
-      try {
-        await listen(server, HOST, bound);
-        break;
-      } catch (err) {
-        if (err.code !== "EADDRINUSE" || offset === 9) throw err;
-      }
-    }
-  }
-
-  boundPort = bound;
-  process.env.JOB_SEARCH_DESK_REVIEW_URL = `http://${HOST}:${bound}/autofill`;
   if (runtime) {
     transport = attachWebSocketTransport({
       server,
@@ -1339,7 +1415,11 @@ export async function startDesk(options = {}) {
   console.log(`Job search desk: ${href}`);
   console.log(`Workspace: ${workspace}`);
   console.log("Same folder as node gui/server.mjs --cli. Scrapes, CVs, and applications stay here.");
-  console.log("Claude Code runs locally with --dangerously-skip-permissions.");
+  console.log(
+    runtime
+      ? "Claude Code runs locally. The page header shows whether it asks before acting."
+      : "Claude Code runs locally with --dangerously-skip-permissions.",
+  );
   console.log("Localhost only. Close this window to stop.");
   if (open) openBrowser(href);
   return {
@@ -1373,9 +1453,23 @@ if (launchedDirectly) {
     }
     started.child.on("exit", (code) => process.exit(code ?? 0));
   } else {
-    startDesk({ root }).catch((err) => {
+    startBrowserDesk(root).catch((err) => {
       console.error(err);
       process.exit(1);
     });
   }
+}
+
+// `node gui/server.mjs` gets the same Agent SDK runtime as the installed app
+// (Files tab, Needs-you cards, permission modes, persisted conversation).
+// Print mode stays the fallback when the SDK is not installed under gui/.
+async function startBrowserDesk(root) {
+  let runtimeFactory;
+  try {
+    const session = await import("./desk-session.mjs");
+    runtimeFactory = session.createDeskRuntimeFactory();
+  } catch (error) {
+    console.error(`Desk runtime unavailable (run npm ci in gui/); using print mode: ${error?.message || error}`);
+  }
+  return startDesk({ root, allowRuntimeFailure: true, runtimeFactory });
 }

@@ -10,7 +10,7 @@ Download **Job Search Desk** from [Releases](https://github.com/iLevyTate/ai-job
 | --- | --- |
 | Windows | `JobSearchDesk-*-win-x64.exe` (NSIS: replace or keep the old app) or the portable `.exe` |
 | macOS Apple Silicon | `JobSearchDesk-*-mac-arm64.dmg` |
-| Linux | `JobSearchDesk-*-linux-x64.AppImage` |
+| Linux | `JobSearchDesk-*-linux-x86_64.AppImage` |
 
 Then:
 
@@ -49,7 +49,7 @@ If `claude` lives somewhere unusual:
 CLAUDE_BIN=/path/to/claude node gui/server.mjs
 ```
 
-The desk listens on `http://127.0.0.1:8765/`. The installable app uses the same page inside its own window. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files previews generated PDFs and text. Ctrl+K opens the command palette. In browser mode the conversation is kept in `.claude/desk/transcript.json` (ignored by git) so a restart brings it back.
+The desk listens on `http://127.0.0.1:8765/` (or the next free port up to 8774; `JOB_SEARCH_GUI_PORT` overrides). The installable app uses the same page inside its own window. The browser desk runs the same Claude runtime as the app once `npm ci` has run in `gui/`; without it, the desk falls back to a plain print-mode chat. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files previews generated PDFs and text. Ctrl+K opens the command palette. In browser mode the conversation is kept in `.claude/desk/transcript.json` (ignored by git) so a restart brings it back.
 
 Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`. Without that opt-in, Claude is launched with `--no-chrome` so a missing extension cannot block a turn.
 

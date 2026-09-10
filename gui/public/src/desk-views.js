@@ -155,7 +155,7 @@ export function renderApplications(container, { applications = [], status = "rea
       app.archive ? `<button type="button" class="ghost" data-reveal="${escapeHtml(app.archive)}">Show folder</button>` : "",
     ].filter(Boolean).join("");
     row.innerHTML = `<div class="job-head"><h3>${escapeHtml(app.company || "Unknown company")} · ${escapeHtml(app.role || "role")}</h3><span class="pill${app.open ? " pill-open" : ""}">${escapeHtml(statusLabel(app.status))}</span></div>
-      <p class="job-meta">${[app.date ? `applied ${app.date}` : "", app.channel, app.fit ? `fit ${app.fit}` : "", app.deadline ? `<strong>deadline ${escapeHtml(app.deadline)}</strong>` : ""].filter(Boolean).map((bit) => bit.startsWith("<strong>") ? bit : escapeHtml(bit)).join(" · ")}</p>
+      <p class="job-meta">${[app.date ? escapeHtml(`applied ${app.date}`) : "", escapeHtml(app.channel || ""), app.fit ? escapeHtml(`fit ${app.fit}`) : "", app.deadline ? `<strong>deadline ${escapeHtml(app.deadline)}</strong>` : ""].filter(Boolean).join(" · ")}</p>
       ${app.notes ? `<p class="app-notes">${escapeHtml(app.notes)}</p>` : ""}
       <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button></div>`;
     list.append(row);

@@ -192,7 +192,10 @@ export function renderCommandForm(command) {
       return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
     }
     const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}" placeholder="${placeholder}"></label>`;
+    const bounds = argument.kind === "integer"
+      ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}`
+      : "";
+    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}"></label>`;
   });
   return fields.join("");
 }
@@ -520,7 +523,9 @@ export function renderPaletteList(container, commands) {
     button.type = "button";
     button.className = "palette-item";
     button.dataset.command = command.id;
-    button.innerHTML = `<strong>${escapeHtml(command.title)}</strong><em>${escapeHtml(command.invocation)}</em>`;
+    // A command that needs an MCP server (Gmail, Notion) says so before the click.
+    const needs = command.requirements?.length ? `<small>Needs: ${escapeHtml(command.requirements.join(", "))}</small>` : "";
+    button.innerHTML = `<strong>${escapeHtml(command.title)}</strong><em>${escapeHtml(command.invocation)}</em>${needs}`;
     container.append(button);
   }
 }

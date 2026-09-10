@@ -318,7 +318,10 @@ async function loadArtifacts() {
 
 async function showArtifactPreview(id) {
   const res = await fetch(`/artifacts/${id}/preview`);
-  if (!res.ok) throw new Error("Could not preview that file.");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Could not preview that file.");
+  }
   const type = res.headers.get("content-type") || "";
   let preview;
   if (type.includes("text/html")) preview = { kind: "html", src: `/artifacts/${id}/preview` };
@@ -326,14 +329,24 @@ async function showArtifactPreview(id) {
   else if (type.startsWith("image/")) preview = { kind: "image", src: `/artifacts/${id}/preview` };
   else if (type.includes("json")) preview = await res.json();
   else preview = { kind: "text", text: await res.text() };
-  artifactState = { ...artifactState, selectedId: id, preview, confirm: null };
+  artifactState = { ...artifactState, selectedId: id, preview, confirm: null, problem: null };
   paintFiles();
 }
 
 async function showArtifactCompare(id) {
   const res = await fetch(`/artifacts/${id}/compare`);
-  if (!res.ok) throw new Error("Could not compare that file.");
-  artifactState = { ...artifactState, selectedId: id, compare: await res.json(), confirm: null };
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Could not compare that file.");
+  }
+  artifactState = { ...artifactState, selectedId: id, compare: await res.json(), confirm: null, problem: null };
+  paintFiles();
+}
+
+// One file that cannot be previewed or opened keeps the list on screen; the
+// problem shows in the preview pane instead of replacing the whole tab.
+function showArtifactProblem(error) {
+  artifactState = { ...artifactState, preview: null, compare: null, confirm: null, problem: error?.message || "Could not load that file." };
   paintFiles();
 }
 
@@ -345,13 +358,12 @@ async function confirmArtifactAction() {
       expectedControllerGeneration: state.controllerGeneration,
     });
     if (!res.ok) {
-      artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
-      paintFiles();
+      const body = await res.json().catch(() => null);
+      showArtifactProblem(new Error(body?.error || "Could not complete that action."));
       return;
     }
   } catch {
-    artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
-    paintFiles();
+    showArtifactProblem(new Error("Could not reach the local desk."));
     return;
   }
   artifactState = { ...artifactState, confirm: null };
@@ -517,6 +529,10 @@ async function runStep(name, prompt) {
   return sent;
 }
 
+// Every step id the page may send while the folder's command metadata is
+// missing; Claude itself asks for whatever the bare command needs.
+const KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
+
 function runAction(name) {
   const command = commands.find((item) => item.id === name);
   setMenu(false);
@@ -530,7 +546,14 @@ function runAction(name) {
     return;
   }
   if (!command) {
-    if (["setup", "rank", "interview", "outcome"].includes(name)) runStep(name, `/${name}`);
+    // /commands has not answered yet, or this folder has no desk metadata for
+    // the step; Scrape, Apply, and Autofill used to do nothing at all here.
+    if (!commands.length) {
+      notice("The step list is still loading. Try again in a moment.");
+      return;
+    }
+    if (KNOWN_STEPS.includes(name)) runStep(name, `/${name}`);
+    else notice(`The ${name} step is not set up in this folder.`);
     return;
   }
   if (!commandNeedsInput(command)) {
@@ -630,6 +653,20 @@ function connectRuntime() {
   });
   socket.addEventListener("close", () => {
     if (runtimeSocket === socket) runtimeSocket = null;
+    // A message the runtime never acknowledged would otherwise sit in
+    // "Next up" forever with its text gone from the composer.
+    if (inFlightSends.size) {
+      for (const [messageId, text] of inFlightSends) {
+        state = { ...state, queued: state.queued.filter((item) => item.id !== messageId) };
+        if (text && !promptEl.value.trim()) {
+          promptEl.value = text;
+          sizePrompt();
+        }
+      }
+      inFlightSends.clear();
+      paintChat();
+      notice("The desk lost its connection before Claude took your message. It is back in the box; send it again.");
+    }
     // The installed app's runtime is the only backend once it has spoken;
     // keep trying to reach it rather than silently falling back to nothing.
     if (runtimeMode) window.setTimeout(connectRuntime, 2000);
@@ -1086,9 +1123,20 @@ paletteList?.addEventListener("click", (event) => {
   palette.close();
   runAction(item.dataset.command);
 });
+palette.querySelector("form")?.addEventListener("submit", (event) => {
+  // Enter in the search box used to close the palette without running anything.
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  const first = filterCommands(commands, paletteQuery.value)[0];
+  if (!first) return;
+  palette.close();
+  runAction(first.id);
+});
 
 document.addEventListener("keydown", (event) => {
   if (document.body.classList.contains("gated")) return;
+  // Ctrl+K on top of the Apply sheet ran a second command behind the sheet.
+  if (sheet.open || palette.open || toolsDialog?.open || modeSheet?.open) return;
   if (event.key === "Escape") {
     setMenu(false);
     return;
@@ -1322,13 +1370,13 @@ applicationsEl.addEventListener("click", async (event) => {
   const reveal = event.target.closest("[data-reveal]");
   if (reveal) {
     if (!window.confirm("Show this application's folder on your computer?")) return;
-    post("/workspace-file/open", { path: `${reveal.dataset.reveal}/job_posting.md`, reveal: true }).catch(() => {});
+    openWorkspaceFile(reveal.dataset.reveal, { reveal: true });
     return;
   }
   const open = event.target.closest("[data-open-file]");
   if (open) {
     if (!window.confirm("Open this file in its usual app (for example Word or your PDF viewer)?")) return;
-    post("/workspace-file/open", { path: open.dataset.openFile }).catch(() => notice("Could not open that file."));
+    openWorkspaceFile(open.dataset.openFile);
     return;
   }
   if (event.target.closest("[data-close-preview]")) {
@@ -1343,6 +1391,20 @@ applicationsEl.addEventListener("click", async (event) => {
   if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
   if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
 });
+
+// A 404 or 415 resolves normally, so a bare .catch() left "Show folder" and
+// "Open" silent when the file had moved.
+async function openWorkspaceFile(path, extra = {}) {
+  try {
+    const res = await post("/workspace-file/open", { path, ...extra });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      notice(body?.error || "That file is not in your job-search folder any more.");
+    }
+  } catch {
+    notice("Could not reach the local desk.");
+  }
+}
 
 async function previewWorkspaceFile(path) {
   const src = `/workspace-file?path=${encodeURIComponent(path)}`;
@@ -1451,16 +1513,13 @@ filesEl.addEventListener("click", (event) => {
   const item = event.target.closest("[data-artifact-id]");
   if (item) {
     artifactState = { ...artifactState, selectedId: item.dataset.artifactId, confirm: null };
-    showArtifactPreview(item.dataset.artifactId).catch((error) => {
-      artifactState = { ...artifactState, error: error.message, status: "error" };
-      paintFiles();
-    });
+    showArtifactPreview(item.dataset.artifactId).catch(showArtifactProblem);
     return;
   }
   const action = event.target.closest("[data-artifact-action]");
   if (action && artifactState.selectedId) {
-    if (action.dataset.artifactAction === "preview") showArtifactPreview(artifactState.selectedId);
-    else if (action.dataset.artifactAction === "compare") showArtifactCompare(artifactState.selectedId);
+    if (action.dataset.artifactAction === "preview") showArtifactPreview(artifactState.selectedId).catch(showArtifactProblem);
+    else if (action.dataset.artifactAction === "compare") showArtifactCompare(artifactState.selectedId).catch(showArtifactProblem);
     else artifactState = requestArtifactConfirm(artifactState, action.dataset.artifactAction);
     paintFiles();
     return;
@@ -1714,8 +1773,21 @@ gateCode.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   const code = gateCode.value.trim();
   if (!code) return;
-  post("/auth/code", { code });
-  gateCode.value = "";
+  gateCode.disabled = true;
+  post("/auth/code", { code })
+    .then(async (res) => {
+      if (res.ok) {
+        gateCode.value = "";
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      notice(body?.error || "That code was not accepted. Paste it again.");
+    })
+    .catch(() => notice("Could not reach the local desk."))
+    .finally(() => {
+      gateCode.disabled = false;
+      gateCode.focus();
+    });
 });
 
 fetch("/auth/meta")

@@ -107,10 +107,10 @@ A screenshot is written to `job_scraper/autofill_<timestamp>.png` for the record
 Once the user confirms they submitted, append a row to `job_search_tracker.csv`:
 
 ```
-date,company,sector,role,role_type,channel,status,contact_person,fit_rating,notes,cv_file,cover_letter_file,source
+date,company,sector,role,role_type,channel,status,contact_person,fit_rating,notes,cv_file,cover_letter_file,source,deadline
 ```
 
-Use `status=applied` and set `channel` to the ATS (greenhouse / lever / ashby / workday / other). If the user did not submit, do not add a row.
+This is the same 14-column header `/apply` and `/outcome` use (the Desk's Applications tab reads `deadline`). If the file exists with the older 13-column header, append `,deadline` to the header line only. Use `status=applied` and set `channel` to the ATS (greenhouse / lever / ashby / workday / other). If the user did not submit, do not add a row.
 
 ---
 

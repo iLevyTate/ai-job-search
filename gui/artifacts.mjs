@@ -202,6 +202,13 @@ export function createArtifactService({
     return resolved;
   }
 
+  // Open/Reveal used to answer ok for a file Claude had since deleted or
+  // renamed, and the page closed its confirm with nothing on screen.
+  async function assertStillThere(absolutePath) {
+    const stat = await fs.stat(absolutePath).catch(() => null);
+    if (!stat || !stat.isFile()) fail("unknown file: it is not in your job-search folder any more");
+  }
+
   function remember(record) {
     records.set(record.id, record);
     return record;
@@ -294,6 +301,7 @@ export function createArtifactService({
       const record = records.get(id);
       if (!record) fail("unknown artifact");
       const resolved = await resolveExisting(record.relativePath);
+      await assertStillThere(resolved.absolutePath);
       await openImpl.open(resolved.absolutePath);
       return { id, relativePath: resolved.relativePath, absolutePath: resolved.absolutePath };
     },
@@ -301,6 +309,7 @@ export function createArtifactService({
       const record = records.get(id);
       if (!record) fail("unknown artifact");
       const resolved = await resolveExisting(record.relativePath);
+      await assertStillThere(resolved.absolutePath);
       await openImpl.reveal(resolved.absolutePath);
       return { id, relativePath: resolved.relativePath, absolutePath: resolved.absolutePath };
     },

@@ -15,6 +15,7 @@ import {
   defaultBrowseDir,
   existingWorkspaceHint,
   findExistingWorkspaces,
+  humanWorkspaceError,
   NOT_A_WORKSPACE_TEXT,
   openFolderHint,
   readSharedWorkspace,
@@ -149,6 +150,13 @@ async function startUpdates() {
     setUpdateState({ channel: "manual", current });
     return;
   }
+  if (process.platform === "darwin") {
+    // The mac build is unsigned (electron-builder.yml identity: null) and
+    // Squirrel.Mac refuses to install unsigned bundles, so offer the Releases
+    // page instead of an update check that can only fail.
+    setUpdateState({ channel: "manual", current });
+    return;
+  }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("checking-for-update", () => setUpdateState({ channel: "checking", current }));
@@ -163,7 +171,10 @@ async function startUpdates() {
     setUpdateState({ channel: "error", current, error: err?.message || "Update check failed." });
   });
   registerUpdateInstaller(() => {
-    autoUpdater.quitAndInstall();
+    // Silent install picks "Replace" in installer.nsh via /SD IDYES and
+    // --force-run relaunches the app, so Restart really restarts instead of
+    // walking the person through the installer wizard.
+    autoUpdater.quitAndInstall(true, true);
   });
   try {
     await autoUpdater.checkForUpdates();
@@ -278,7 +289,9 @@ ipcMain.handle("terminal-start", async (_event, payload = {}) => {
         spawnPty: defaultSpawnPty,
       });
       pty.start({ cols, rows });
-      pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data) }));
+      // Outbound PTY chunks can exceed 8 KB on a full-screen redraw; the 8 KB
+      // cap only belongs on inbound terminal-write (claude-pty.mjs MAX_WRITE).
+      pty.onData((data) => mainWindow?.webContents.send("terminal-data", { terminalId: pty.id, data: boundedText(data, 1024 * 1024) }));
       pty.onExit(async (info) => {
         const wasActive = activePty?.id === pty.id;
         if (wasActive) activePty = null;
@@ -356,7 +369,13 @@ ipcMain.handle("clone-workspace", async () => {
   // Someone who already has a Desk folder, or made an empty ai-job-search
   // folder themselves, will pick that folder; do not nest a copy inside it.
   if (isJobSearchWorkspace(picked)) dest = picked;
-  else if (basename(picked) === "ai-job-search" && readdirSync(picked).length === 0) dest = picked;
+  else if (basename(picked) === "ai-job-search") {
+    try {
+      if (readdirSync(picked).length === 0) dest = picked;
+    } catch (err) {
+      return { error: humanWorkspaceError(err?.message || String(err)) };
+    }
+  }
   const created = await createWorkspace(dest);
   if (created.error) return created;
   try {

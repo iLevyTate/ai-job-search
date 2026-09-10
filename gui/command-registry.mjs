@@ -9,6 +9,8 @@ function workspaceRelative(workspace, absolute) {
 }
 
 function parseFrontmatter(raw) {
+  // Notepad and PowerShell's Out-File write a BOM; it must not hide a step.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (!raw.startsWith("---\n") && !raw.startsWith("---\r\n")) return { data: {}, body: raw };
   const end = raw.indexOf("\n---", 3);
   if (end === -1) return { data: {}, body: raw };
@@ -29,6 +31,9 @@ function validateArgument(argument, invocation) {
   }
   if (argument.kind === "choice" && !Array.isArray(argument.values)) {
     throw new Error(`${invocation}: choice ${argument.name} needs values`);
+  }
+  if (argument.kind === "boolean" && !argument.flag) {
+    throw new Error(`${invocation}: boolean ${argument.name} needs a flag`);
   }
   return argument;
 }
@@ -75,8 +80,9 @@ export async function createCommandRegistry({ workspace } = {}) {
     let definition;
     try {
       definition = await readDefinition(workspace, join(commandDir, name), "command");
-    } catch {
-      // One malformed file must not empty the whole palette.
+    } catch (error) {
+      // One malformed file must not empty the whole palette, but say which.
+      console.warn(`desk: skipped .claude/commands/${name}: ${error?.message || error}`);
       continue;
     }
     if (!definition || seen.has(definition.id)) continue;
@@ -98,7 +104,8 @@ export async function createCommandRegistry({ workspace } = {}) {
       if (!definition || seen.has(definition.id)) continue;
       seen.add(definition.id);
       definitions.push(definition);
-    } catch {
+    } catch (error) {
+      if (error?.code !== "ENOENT") console.warn(`desk: skipped .claude/skills/${name}/SKILL.md: ${error?.message || error}`);
       continue;
     }
   }

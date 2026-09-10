@@ -10,6 +10,7 @@ import {
   readApplications,
   readJobs,
   readProgress,
+  resolveWorkspaceDir,
   resolveWorkspaceFile,
   safeDocumentName,
   saveDocument,
@@ -80,6 +81,8 @@ test("documents are saved with a safe name inside the documents folder", () => {
   assert.equal(safeDocumentName("../../etc/passwd"), "");
   assert.equal(safeDocumentName("My CV (2026).pdf"), "My-CV-(2026).pdf");
   assert.equal(safeDocumentName("script.exe"), "");
+  assert.equal(safeDocumentName("CON.pdf"), "");
+  assert.equal(safeDocumentName("nul.txt"), "");
   const first = saveDocument(root, { name: "cv.pdf", kind: "cv", bytes: Buffer.from("one") });
   const second = saveDocument(root, { name: "cv.pdf", kind: "cv", bytes: Buffer.from("two") });
   assert.equal(first.relativePath, "documents/cv/cv.pdf");
@@ -98,6 +101,10 @@ test("only files inside the known folders can be previewed or opened", () => {
   assert.equal(resolveWorkspaceFile(root, "../cv/main.pdf"), null);
   assert.equal(resolveWorkspaceFile(root, "cv/../CLAUDE.md"), null);
   assert.equal(resolveWorkspaceFile(root, "cv"), null);
+  assert.equal(resolveWorkspaceDir(root, "cv").relativePath, "cv");
+  assert.equal(resolveWorkspaceDir(root, "cv/main.pdf"), null);
+  assert.equal(resolveWorkspaceDir(root, "."), null);
+  assert.equal(resolveWorkspaceDir(root, "../"), null);
 });
 
 test("the tools check names what is missing and how to get it", () => {

@@ -85,7 +85,7 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
   const preview = document.createElement("div");
   preview.className = "artifact-preview";
   preview.dataset.kind = state.preview?.kind || "none";
-  preview.innerHTML = previewHtml(state.preview);
+  preview.innerHTML = (state.problem ? `<p class="artifact-problem" role="alert">${escapeHtml(state.problem)}</p>` : "") + previewHtml(state.preview);
   if (state.compare?.diff) {
     const diff = document.createElement("pre");
     diff.className = "artifact-diff";
@@ -122,7 +122,7 @@ export function moveArtifactSelection(state, delta) {
   if (!state.artifacts.length) return state;
   const index = Math.max(0, state.artifacts.findIndex((item) => item.id === state.selectedId));
   const next = state.artifacts[(index + delta + state.artifacts.length) % state.artifacts.length];
-  return { ...state, selectedId: next.id, preview: null, compare: null, confirm: null };
+  return { ...state, selectedId: next.id, preview: null, compare: null, confirm: null, problem: null };
 }
 
 export function requestArtifactConfirm(state, action) {

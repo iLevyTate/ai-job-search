@@ -30,7 +30,7 @@ Download the latest installer from **[Releases](https://github.com/iLevyTate/ai-
 | --- | --- |
 | Windows | `JobSearchDesk-*-win-x64.exe` (NSIS: replace or keep the old app) or the portable `.exe` |
 | macOS Apple Silicon | `JobSearchDesk-*-mac-arm64.dmg` |
-| Linux | `JobSearchDesk-*-linux-x64.AppImage` |
+| Linux | `JobSearchDesk-*-linux-x86_64.AppImage` |
 
 Release CI does **not** build Intel Mac. Apple Silicon only on macOS.
 

@@ -1,3 +1,4 @@
+import { chromeEnabled } from "./claude.mjs";
 import { query as defaultQuery } from "@anthropic-ai/claude-agent-sdk";
 import { createAsyncMessageQueue } from "./async-message-queue.mjs";
 import { allowDangerouslySkipPermissions, sdkPermissionMode } from "./permission-policy.mjs";
@@ -87,6 +88,8 @@ export function createAgentSdkAdapter({
           settingSources: ["user", "project", "local"],
           permissionMode: sdkPermissionMode(permissionMode),
           allowDangerouslySkipPermissions: allowDangerouslySkipPermissions(permissionMode),
+          // gui/README: Claude in Chrome is off unless JOB_SEARCH_CLAUDE_CHROME=1.
+          extraArgs: chromeEnabled() ? undefined : { "no-chrome": null },
           canUseTool,
           stderr: onStderr,
         },

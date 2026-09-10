@@ -210,7 +210,7 @@ export function createSessionRuntime({
     }).catch(() => {});
   }
 
-  async function startAdapter() {
+  async function startAdapter({ retriedWithoutResume = false } = {}) {
     const current = conversation();
     adapterDead = false;
     adapter = adapterFactory({
@@ -219,7 +219,26 @@ export function createSessionRuntime({
       permissionMode: permissionPolicy?.get() ?? current?.permissionMode ?? "safe",
       onPermissionRequest: (request) => handlePermissionRequest(request),
     });
-    await adapter.start();
+    try {
+      await adapter.start();
+    } catch (error) {
+      // Claude Code forgets sessions (cleanupPeriodDays, a moved folder). A
+      // saved id it no longer knows failed start() on every launch, and the
+      // app fell back to print mode for good. Drop the id and try once fresh.
+      const stale = recoveryPolicy.classify(error, {}) === "stale-session";
+      if (!stale || retriedWithoutResume || !current?.claudeSessionId) throw error;
+      try {
+        adapter?.close?.();
+      } catch {
+        // Nothing to close.
+      }
+      await store.transact(conversationId, (next) => {
+        next.claudeSessionId = null;
+        next.recoveryAttempts = 0;
+      });
+      console.error("Desk: Claude Code no longer had the saved session; starting a fresh one.");
+      return startAdapter({ retriedWithoutResume: true });
+    }
     const currentEpoch = epoch;
     // pump recovers by re-entering startAdapter; if that restart rejects, the
     // orphaned promise would be an unhandled rejection and kill the process.
@@ -439,11 +458,31 @@ export function createSessionRuntime({
       const blocked = requireGeneration(expectedControllerGeneration);
       if (blocked) return blocked;
       const next = normalizeDeskPermissionMode(mode);
+      // Ask the live session first: persisting before it answered left the
+      // header saying "Works on its own" while Claude kept asking.
+      let relaunch = false;
+      try {
+        await adapter.setPermissionMode?.(next);
+      } catch {
+        // A Safe session is not launched with the bypass flag, so the SDK
+        // refuses "Works on its own" in place; relaunch on the same Claude
+        // session with the new mode instead.
+        relaunch = true;
+      }
       if (permissionPolicy) await permissionPolicy.set(next);
       await store.transact(conversationId, (current) => {
         current.permissionMode = next;
       });
-      await adapter.setPermissionMode?.(next);
+      if (relaunch) {
+        const previous = adapter;
+        epoch += 1;
+        try {
+          await startAdapter();
+        } catch {
+          // The next submitMessage surfaces the failure.
+        }
+        previous?.close?.();
+      }
       return commandResult(true, snapshot());
     },
     async interrupt({ expectedControllerGeneration } = {}) {

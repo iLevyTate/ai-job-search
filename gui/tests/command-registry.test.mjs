@@ -36,6 +36,30 @@ test("renders url, multiline, path, flags, and positional text exactly", async (
   assert.equal(registry.render("scrape", { mode: "broad" }), "/scrape broad");
 });
 
+test("a UTF-8 BOM on a command file does not hide the step", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "desk-registry-bom-"));
+  mkdirSync(join(workspace, ".claude", "commands"), { recursive: true });
+  writeFileSync(
+    join(workspace, ".claude", "commands", "apply.md"),
+    "\uFEFF---\ndesk:\n  id: apply\n  invocation: /apply\n  title: Apply\n---\nbody\n",
+    "utf8",
+  );
+  const registry = await createCommandRegistry({ workspace });
+  assert.ok(registry.get("apply"));
+});
+
+test("a boolean argument must carry a flag", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "desk-registry-bool-"));
+  mkdirSync(join(workspace, ".claude", "commands"), { recursive: true });
+  writeFileSync(
+    join(workspace, ".claude", "commands", "x.md"),
+    "---\ndesk:\n  id: x\n  invocation: /x\n  arguments:\n    - kind: boolean\n      name: b\n---\n",
+    "utf8",
+  );
+  const registry = await createCommandRegistry({ workspace });
+  assert.equal(registry.get("x"), undefined);
+});
+
 test("excludes skills without desk metadata", async () => {
   const registry = await createCommandRegistry({ workspace: REPO });
   assert.equal(registry.get("job-application-assistant"), undefined);

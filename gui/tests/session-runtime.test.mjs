@@ -212,6 +212,105 @@ test("permission timeout and disconnect deny through the broker", async () => {
   });
 });
 
+function recordingAdapterFactory(calls, { failStart = () => false, refuseMode = () => false } = {}) {
+  return (options) => {
+    calls.push(options);
+    let closed = false;
+    let pending = null;
+    return {
+      async start() {
+        const failure = failStart(options, calls.length);
+        if (failure) throw new Error(failure);
+        return { type: "init" };
+      },
+      messages() {
+        return {
+          next() {
+            if (closed) return Promise.resolve({ value: undefined, done: true });
+            return new Promise((resolve) => { pending = resolve; });
+          },
+          [Symbol.asyncIterator]() { return this; },
+        };
+      },
+      send() { return { accepted: true }; },
+      settlePermission() { return true; },
+      interrupt: async () => ({ type: "interrupt" }),
+      async setPermissionMode(mode) {
+        if (refuseMode(mode)) throw new Error("Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions");
+      },
+      close() {
+        closed = true;
+        pending?.({ value: undefined, done: true });
+        pending = null;
+      },
+    };
+  };
+}
+
+test("a saved Claude session the CLI no longer knows is dropped and the runtime starts fresh", async () => {
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-stale-")) });
+  const conversation = await store.createConversation();
+  await store.transact(conversation.id, (next) => { next.claudeSessionId = "stale-1"; });
+  const calls = [];
+  const runtime = createSessionRuntime({
+    workspace: "unused",
+    conversationId: conversation.id,
+    store,
+    adapterFactory: recordingAdapterFactory(calls, {
+      failStart: (options) => (options.sessionId ? `Claude Code returned an error result: No conversation found with session ID: ${options.sessionId}` : false),
+    }),
+  });
+  await runtime.start();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].sessionId, "stale-1");
+  assert.equal(calls[1].sessionId ?? null, null);
+  assert.equal(store.get(conversation.id).claudeSessionId, null);
+  await runtime.stop();
+});
+
+test("a start failure that is not a stale session still surfaces", async () => {
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-fatal-")) });
+  const conversation = await store.createConversation();
+  await store.transact(conversation.id, (next) => { next.claudeSessionId = "sess-1"; });
+  const calls = [];
+  const runtime = createSessionRuntime({
+    workspace: "unused",
+    conversationId: conversation.id,
+    store,
+    adapterFactory: recordingAdapterFactory(calls, { failStart: () => "not installed" }),
+  });
+  await assert.rejects(() => runtime.start(), /not installed/);
+  assert.equal(calls.length, 1);
+  assert.equal(store.get(conversation.id).claudeSessionId, "sess-1");
+});
+
+test("a mode switch the live session refuses relaunches the adapter in the new mode", async () => {
+  const policy = {
+    mode: "safe",
+    get() { return this.mode; },
+    async set(mode) { this.mode = mode; return mode; },
+  };
+  const store = createConversationStore({ workspace: mkdtempSync(join(tmpdir(), "desk-runtime-mode-")) });
+  const conversation = await store.createConversation();
+  const calls = [];
+  const runtime = createSessionRuntime({
+    workspace: "unused",
+    conversationId: conversation.id,
+    store,
+    permissionPolicy: policy,
+    adapterFactory: recordingAdapterFactory(calls, { refuseMode: (mode) => mode === "autonomous" }),
+  });
+  await runtime.start();
+  assert.equal(calls.length, 1);
+  const result = await runtime.setPermissionMode({ mode: "autonomous", expectedControllerGeneration: 1 });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].permissionMode, "autonomous");
+  assert.equal(runtime.snapshot().permissionMode, "autonomous");
+  assert.equal(policy.mode, "autonomous");
+  await runtime.stop();
+});
+
 test("Safe mode stays Safe when an invalid mode is requested", async () => {
   const policy = {
     mode: "safe",
