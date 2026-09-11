@@ -25,6 +25,14 @@ test("runtime dependencies are production dependencies without lifecycle scripts
   assert.ok(pkg.devDependencies["@playwright/test"]);
 });
 
+test("electron-main loads electron-updater as CommonJS, not a named ESM export", async () => {
+  const src = await readFile(new URL("../electron-main.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /import\s*\{[^}]*autoUpdater[^}]*\}\s*from\s*["']electron-updater["']/);
+  assert.match(src, /import\s+\w+\s+from\s+["']electron-updater["']/);
+  const updater = (await import("electron-updater")).default;
+  assert.ok(Object.getOwnPropertyDescriptor(updater, "autoUpdater"), "default export must expose autoUpdater");
+});
+
 test("Windows installer replaces the previous Desk and can keep a copy", async () => {
   const yml = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
   const nsis = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");

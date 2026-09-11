@@ -198,6 +198,9 @@ per-file diff commands.
   a dialog closes rather than before.
 
 ### Changed
+- Job Search Desk 1.3.3: the packaged Windows app crashed on launch with
+  "Named export 'autoUpdater' not found" because `electron-updater` is
+  CommonJS. The main process now imports the default export.
 - Job Search Desk 1.3.2: the 1.3.1 installer build finished, then failed
   because `--publish never` never writes `latest*.yml` and the workflow
   looked in `gui/gui/release`. The release now writes the updater channel
