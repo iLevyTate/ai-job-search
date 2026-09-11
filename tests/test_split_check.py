@@ -104,6 +104,23 @@ class RoleDetection(unittest.TestCase):
         git(repo, "remote", "add", "personal", PERSONAL_URL)
         self.assertEqual(split_check.detect_role(repo), "unknown")
 
+    def test_personal_survives_a_remote_tracking_ref_that_shares_the_branch_name(self):
+        # After fetching the personal remote, refs/remotes/personal/personal exists and
+        # refs/remotes/personal/HEAD points at it (git remote set-head, or a clone), so
+        # rev-parse --abbrev-ref HEAD prints "heads/personal"; the role must still be personal.
+        repo = make_repo(self.root, "personal")
+        git(repo, "update-ref", "refs/remotes/personal/personal", "HEAD")
+        git(repo, "symbolic-ref", "refs/remotes/personal/HEAD", "refs/remotes/personal/personal")
+        self.assertEqual(git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "heads/personal")
+        self.assertEqual(split_check.current_branch(repo), "personal")
+        self.assertEqual(split_check.detect_role(repo), "personal")
+
+    def test_detached_head_is_unknown(self):
+        repo = make_repo(self.root, "personal")
+        git(repo, "checkout", "-q", "--detach")
+        self.assertEqual(split_check.current_branch(repo), "")
+        self.assertEqual(split_check.detect_role(repo), "unknown")
+
 
 class StateDir(unittest.TestCase):
     def test_windows_uses_appdata(self):
@@ -691,6 +708,40 @@ class Setup(unittest.TestCase):
     def test_template_is_written_when_missing(self):
         self.run_setup(make_repo(self.root, "public"))
         self.assertTrue(self.ids.read_text(encoding="utf-8").startswith("# Personal identifiers"))
+
+    @staticmethod
+    def config_get(repo: Path, key: str) -> str:
+        """Empty when the key is unset (the module's git() would raise on git's exit 1)."""
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "config", "--get", key],
+            capture_output=True, text=True, encoding="utf-8", env=os.environ,
+        )
+        return proc.stdout.strip()
+
+    def test_personal_checkout_on_a_feature_branch_is_not_wired_as_public(self):
+        repo = make_repo(self.root, "personal")
+        git(repo, "checkout", "-q", "-b", "feature")
+        proc = self.run_setup(repo)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("personal", git(repo, "remote").stdout.split())
+        self.assertEqual(self.config_get(repo, "core.hooksPath"), "")
+        self.assertIn("git checkout personal", proc.stderr)
+
+    def test_public_setup_says_what_it_removes(self):
+        repo = make_repo(self.root, "public")
+        git(repo, "remote", "add", "personal", PERSONAL_URL)
+        proc = self.run_setup(repo)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("Removing remote personal (", proc.stdout)
+        self.assertIn("git remote add personal", proc.stdout)
+
+    def test_public_setup_refuses_when_origin_push_is_already_disabled_and_personal_remote_exists(self):
+        repo = make_repo(self.root, "public")
+        git(repo, "remote", "add", "personal", PERSONAL_URL)
+        git(repo, "config", "remote.origin.pushurl", "DISABLED")
+        proc = self.run_setup(repo)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("personal", git(repo, "remote").stdout.split())
 
     # The sh shim under .githooks forwards to split_check.py and refuses without an interpreter.
     SHIM = REPO_ROOT / ".githooks" / "split-guard"

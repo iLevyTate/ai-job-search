@@ -1003,7 +1003,7 @@ class Setup(unittest.TestCase):
         self.assertIn("unknown", proc.stdout + proc.stderr)
 ```
 
-Note: `detect_role` returns `unknown` for a public checkout that still has a `personal` remote, so `split_setup.py` must decide the role from the origin URL before it removes that remote. The implementation below does that with `intended_role`.
+Note: `detect_role` returns `unknown` for a public checkout that still has a `personal` remote, so `split_setup.py` must decide the role from the origin URL before it removes that remote. The implementation below does that with `intended_role`. That rule is tightened so a personal checkout on a side branch is never mistaken for a public one: `intended_role` returns `public` only when origin is the public URL, the branch read by `symbolic-ref` is not `personal`, no local `personal` branch exists, and `remote.origin.pushurl` is not already disabled; otherwise it refuses and, when a `personal` remote exists, tells the person to `git checkout personal` and rerun.
 
 - [ ] **Step 2: Run the test to verify it fails**
 

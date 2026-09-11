@@ -55,8 +55,20 @@ def repo_root(start: Path | None = None) -> Path:
     return Path(git(where, "rev-parse", "--show-toplevel").strip())
 
 
+def current_branch(repo: Path) -> str:
+    """The checked-out branch name, or "" on a detached HEAD.
+
+    Read through symbolic-ref, which reports the full ref. rev-parse --abbrev-ref
+    prints "heads/personal" once a remote-tracking ref shares the name
+    (refs/remotes/personal/personal, the normal state after fetching the personal
+    remote), which misclassified the real personal checkout as unknown.
+    """
+    ref = git(repo, "symbolic-ref", "-q", "HEAD", check=False).strip()
+    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+
+
 def detect_role(repo: Path) -> str:
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+    branch = current_branch(repo)
     remotes = set(git(repo, "remote", check=False).split())
     origin_url = git(repo, "config", "--get", "remote.origin.url", check=False).strip()
     if branch == "personal" and PERSONAL_REMOTE in remotes:

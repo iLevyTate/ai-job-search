@@ -100,6 +100,8 @@ Idempotent per-tree setup, run once in each checkout:
   URL, sets `remote.upstream.pushurl` to `DISABLED` if that remote exists.
 - Public: removes any remote named `personal`; sets `remote.upstream.pushurl`
   to `DISABLED` if present.
+  A tree with a `personal` remote is never wired as public unless it has no
+  local `personal` branch and origin push is not already disabled.
 - Both: sets `core.hooksPath` to `.githooks`, marks the hook files
   executable where the filesystem supports it, creates the pattern file
   with a commented template if it is missing, and finishes by printing the
