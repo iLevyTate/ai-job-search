@@ -198,6 +198,10 @@ per-file diff commands.
   a dialog closes rather than before.
 
 ### Changed
+- Job Search Desk 1.3.2: the 1.3.1 installer build finished, then failed
+  because `--publish never` never writes `latest*.yml` and the workflow
+  looked in `gui/gui/release`. The release now writes the updater channel
+  file from the artifact and checks `release/latest*.yml`.
 - Job Search Desk 1.3.1: the line-by-line audit of the 1.3.0 app (updater
   channel files so Restart can find a new build, stale Claude session
   recovery, Chrome opt-in honored, Stop/New chat during reconnect,
