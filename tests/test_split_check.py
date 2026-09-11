@@ -93,5 +93,41 @@ class StateDir(unittest.TestCase):
         )
 
 
+class Patterns(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def write(self, text: str) -> Path:
+        path = self.root / "ids.txt"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_missing_file_is_none(self):
+        self.assertIsNone(split_check.load_patterns(self.root / "nope.txt"))
+
+    def test_comments_and_blanks_are_skipped_and_matching_is_case_insensitive(self):
+        patterns = split_check.load_patterns(self.write("# names\n\nsmith\n555-01\n"))
+        self.assertEqual(len(patterns), 2)
+        hits = split_check.scan_lines([("a.md:1", "Jane SMITH wrote"), ("a.md:2", "nothing")], patterns)
+        self.assertEqual(hits, [("a.md:1", "Jane SMITH wrote")])
+
+    def test_bad_regex_names_the_line(self):
+        with self.assertRaises(ValueError) as caught:
+            split_check.load_patterns(self.write("ok\n(unclosed\n"))
+        self.assertIn("line 2", str(caught.exception))
+
+    def test_allowed_public_url_does_not_count_as_a_hit(self):
+        patterns = split_check.load_patterns(self.write("ai-job-search\n"))
+        hits = split_check.scan_lines([("a.md:1", "see https://github.com/iLevyTate/ai-job-search")], patterns)
+        self.assertEqual(hits, [])
+
+    def test_excluded_paths_are_skipped(self):
+        self.assertTrue(split_check.excluded("gui/node_modules/x/y.js"))
+        self.assertTrue(split_check.excluded("gui/public/dist/desk.js"))
+        self.assertFalse(split_check.excluded("gui/server.mjs"))
+
+
 if __name__ == "__main__":
     unittest.main()

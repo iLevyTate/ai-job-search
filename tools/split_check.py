@@ -75,5 +75,36 @@ def pattern_path(env=os.environ) -> Path:
     return Path(override) if override else state_dir(env=env) / PATTERN_FILE_NAME
 
 
+def load_patterns(path: Path):
+    """None when the file is absent; ValueError naming the line on a bad regex."""
+    if not path.exists():
+        return None
+    patterns = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            patterns.append(re.compile(line, re.IGNORECASE))
+        except re.error as err:
+            raise ValueError(f"{path}: line {number}: {err}") from None
+    return patterns
+
+
+def excluded(rel_path: str) -> bool:
+    rel = rel_path.replace("\\", "/")
+    return any(rel.startswith(prefix) for prefix in SCAN_EXCLUDES)
+
+
+def scan_lines(located_lines, patterns):
+    """located_lines: iterable of (location, text). Returns the matching pairs."""
+    hits = []
+    for location, text in located_lines:
+        probe = text.replace(ALLOWED_TEXT, "")
+        if any(p.search(probe) for p in patterns):
+            hits.append((location, text))
+    return hits
+
+
 if __name__ == "__main__":
     sys.exit(0)
