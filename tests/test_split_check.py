@@ -128,6 +128,11 @@ class Patterns(unittest.TestCase):
         self.assertTrue(split_check.excluded("gui/public/dist/desk.js"))
         self.assertFalse(split_check.excluded("gui/server.mjs"))
 
+    def test_allowed_url_filter_is_case_insensitive(self):
+        patterns = split_check.load_patterns(self.write("ai-job-search\n"))
+        hits = split_check.scan_lines([("a.md:1", "see ilevytate/ai-job-search")], patterns)
+        self.assertEqual(hits, [])
+
 
 class GitHelpers(unittest.TestCase):
     def setUp(self):
@@ -166,6 +171,42 @@ class GitHelpers(unittest.TestCase):
             git_dir = self.repo / git_dir
         (git_dir / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
         self.assertTrue(split_check.merge_in_progress(self.repo))
+
+    def test_added_line_starting_with_plus_plus_is_content_not_a_header(self):
+        (self.repo / "README.md").write_text("hello\n++ Jane Smith\n", encoding="utf-8")
+        git(self.repo, "add", "README.md")
+        self.assertIn(("README.md:2", "++ Jane Smith"), list(split_check.staged_added_lines(self.repo)))
+        self.assertEqual(split_check.hook_pre_commit(self.repo, "public", [re.compile("smith", re.I)]).code, 1)
+
+    def test_tree_hits_use_python_regex_syntax(self):
+        (self.repo / "cv" / "main.tex").write_text("call 555-0100\n", encoding="utf-8")
+        git(self.repo, "commit", "-q", "-am", "add a number")
+        sha = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        patterns = [re.compile(r"\d{3}-\d{4}", re.I)]
+        self.assertEqual(split_check.tree_hits(self.repo, sha, patterns), [("cv/main.tex:1", "call 555-0100")])
+        refs = [f"refs/heads/main {sha} refs/heads/main {'0' * 40}"]
+        self.assertEqual(split_check.hook_pre_push(self.repo, "public", patterns, "origin", refs).code, 1)
+
+    def test_tree_hits_skip_binary_blobs(self):
+        (self.repo / "cv" / "blob.bin").write_bytes(b"Jane Smith\x00\x01\x02")
+        git(self.repo, "add", "cv/blob.bin")
+        git(self.repo, "commit", "-q", "-m", "add a binary")
+        sha = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(split_check.tree_hits(self.repo, sha, [re.compile("smith", re.I)]), [])
+
+    def test_tree_hits_with_no_ref_scan_the_working_tree(self):
+        (self.repo / "README.md").write_text("Jane Smith\n", encoding="utf-8")
+        (self.repo / "cv" / "notes.txt").write_text("nothing\nalso Jane Smith\n", encoding="utf-8")
+        (self.repo / "cv" / "blob.bin").write_bytes(b"Jane Smith\x00")
+        hits = split_check.tree_hits(self.repo, None, [re.compile("smith", re.I)])
+        self.assertEqual(sorted(hits), [("README.md:1", "Jane Smith"), ("cv/notes.txt:2", "also Jane Smith")])
+
+    def test_staged_paths_include_deletions_and_both_sides_of_a_rename(self):
+        git(self.repo, "rm", "-q", "gui/server.mjs")
+        self.assertEqual(split_check.staged_paths(self.repo), ["gui/server.mjs"])
+        git(self.repo, "reset", "-q", "--hard")
+        git(self.repo, "mv", "gui/server.mjs", "cv/server.mjs")
+        self.assertEqual(sorted(split_check.staged_paths(self.repo)), ["cv/server.mjs", "gui/server.mjs"])
 
 
 ZEROS = "0" * 40
@@ -222,6 +263,20 @@ class PreCommitHook(unittest.TestCase):
         self.assertEqual(result.code, 1)
         self.assertIn("unknown", result.message)
 
+    def test_personal_refuses_a_gui_deletion(self):
+        repo = make_repo(self.root, "personal")
+        git(repo, "rm", "-q", "gui/server.mjs")
+        result = split_check.hook_pre_commit(repo, "personal", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("gui/server.mjs", result.message)
+
+    def test_personal_refuses_a_rename_out_of_gui(self):
+        repo = make_repo(self.root, "personal")
+        git(repo, "mv", "gui/server.mjs", "cv/server.mjs")
+        result = split_check.hook_pre_commit(repo, "personal", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("gui/server.mjs", result.message)
+
 
 class PrePushHook(unittest.TestCase):
     def setUp(self):
@@ -251,6 +306,13 @@ class PrePushHook(unittest.TestCase):
         sha = git(repo, "rev-parse", "HEAD").stdout.strip()
         self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", [f"refs/heads/main {sha} refs/heads/main {ZEROS}"]).code, 0)
         self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", [f"(delete) {ZEROS} refs/heads/old {sha}"]).code, 0)
+
+    def test_public_passes_with_a_warning_when_no_pattern_file(self):
+        repo = make_repo(self.root, "public")
+        sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+        result = split_check.hook_pre_push(repo, "public", None, "origin", [f"refs/heads/main {sha} refs/heads/main {ZEROS}"])
+        self.assertEqual(result.code, 0)
+        self.assertIn("no identifier file", result.message)
 
 
 class ClaudeGuard(unittest.TestCase):
@@ -283,6 +345,27 @@ class ClaudeGuard(unittest.TestCase):
     def test_unknown_blocks(self):
         repo = make_repo(self.root, "unknown")
         self.assertEqual(split_check.claude_guard(repo, "unknown", self.patterns, self.payload(repo, "README.md", "x")).code, 2)
+
+    def test_personal_allows_gui_writes_during_a_merge(self):
+        repo = make_repo(self.root, "personal")
+        (repo / ".git" / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        self.assertEqual(split_check.claude_guard(repo, "personal", self.patterns, self.payload(repo, "gui/x.mjs", "x")).code, 0)
+
+    def test_public_scans_multiedit_new_strings(self):
+        repo = make_repo(self.root, "public")
+        payload = {"tool_name": "MultiEdit", "tool_input": {
+            "file_path": str(repo / "README.md"),
+            "edits": [{"old_string": "hello", "new_string": "contact Jane Smith"}, {"old_string": "a", "new_string": "b"}],
+        }}
+        result = split_check.claude_guard(repo, "public", self.patterns, payload)
+        self.assertEqual(result.code, 2)
+        self.assertIn("README.md:1", result.message)
+
+    def test_public_warns_when_no_pattern_file(self):
+        repo = make_repo(self.root, "public")
+        result = split_check.claude_guard(repo, "public", None, self.payload(repo, "README.md", "Jane Smith"))
+        self.assertEqual(result.code, 0)
+        self.assertIn("no identifier file", result.message)
 
 
 class ReportAndCli(unittest.TestCase):
@@ -322,12 +405,50 @@ class ReportAndCli(unittest.TestCase):
 
     def test_personal_report_flags_origin_push_and_gui_drift(self):
         repo = make_repo(self.root, "personal")
+        git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+        (repo / "gui" / "server.mjs").write_text("// desk\n// edited here\n", encoding="utf-8")
+        git(repo, "commit", "-q", "-am", "edit gui locally")
         self.wire(repo, "personal")
         git(repo, "config", "remote.origin.pushurl", PUBLIC_URL)
         proc = self.run_cli(repo)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("remote.origin.pushurl", proc.stdout)
-        self.assertIn("origin/master", proc.stdout)
+        self.assertIn("gui/ differs from origin/master", proc.stdout)
+
+    def test_unknown_banner_and_report_name_both_expected_shapes(self):
+        repo = make_repo(self.root, "unknown")
+        proc = self.run_cli(repo, "--banner")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("branch 'personal'", proc.stdout)
+        self.assertIn("iLevyTate/ai-job-search", proc.stdout)
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("branch 'personal'", proc.stdout)
+        self.assertIn("iLevyTate/ai-job-search", proc.stdout)
+
+    def test_report_scans_the_working_tree(self):
+        repo = make_repo(self.root, "public")
+        self.wire(repo, "public")
+        (repo / "README.md").write_text("hello\ncontact Jane Smith\n", encoding="utf-8")
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("README.md:2", proc.stdout)
+
+    def test_report_flags_a_missing_identifier_file(self):
+        repo = make_repo(self.root, "public")
+        self.wire(repo, "public")
+        self.env["SPLIT_IDENTIFIERS_FILE"] = str(self.root / "does-not-exist.txt")
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("identifier file missing", proc.stdout)
+
+    def test_report_flags_a_personal_remote_in_a_public_tree(self):
+        repo = make_repo(self.root, "public")
+        self.wire(repo, "public")
+        git(repo, "remote", "add", "personal", PERSONAL_URL)
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("a 'personal' remote exists", proc.stdout)
 
     def test_hook_cli_exit_codes(self):
         repo = make_repo(self.root, "personal")

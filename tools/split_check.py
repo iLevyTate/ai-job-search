@@ -31,6 +31,8 @@ GUI_PREFIX = "gui/"
 PATTERN_FILE_NAME = "split-identifiers.txt"
 SCAN_EXCLUDES = ("gui/node_modules/", "gui/release/", "gui/public/dist/", "gui/public/vendor/")
 ALLOWED_TEXT = "iLevyTate/ai-job-search"
+ALLOWED_RE = re.compile(re.escape(ALLOWED_TEXT), re.IGNORECASE)
+BINARY_PROBE_BYTES = 8000
 
 PUBLIC_CHECKOUT_HINT = "the public checkout (ai-job-search-public)"
 
@@ -100,7 +102,7 @@ def scan_lines(located_lines, patterns):
     """located_lines: iterable of (location, text). Returns the matching pairs."""
     hits = []
     for location, text in located_lines:
-        probe = text.replace(ALLOWED_TEXT, "")
+        probe = ALLOWED_RE.sub("", text)
         if any(p.search(probe) for p in patterns):
             hits.append((location, text))
     return hits
@@ -109,53 +111,118 @@ def scan_lines(located_lines, patterns):
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
+def git_bytes(repo: Path, *args: str, input: bytes | None = None) -> bytes:
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, input=input)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.decode('utf-8', 'replace').strip()}")
+    return proc.stdout
+
+
 def staged_paths(repo: Path):
-    return [p for p in git(repo, "diff", "--cached", "--name-only", "--diff-filter=AMR").splitlines() if p]
+    """Every path touched by the staged change: added, modified, deleted, and both sides of a rename or copy."""
+    fields = [f for f in git_bytes(repo, "diff", "--cached", "--name-status", "-M", "-z").split(b"\x00") if f]
+    paths = []
+    index = 0
+    while index < len(fields):
+        status = fields[index].decode("utf-8", "replace")
+        count = 2 if status[:1] in ("R", "C") else 1
+        for raw in fields[index + 1:index + 1 + count]:
+            paths.append(raw.decode("utf-8", "replace"))
+        index += 1 + count
+    return paths
 
 
 def staged_added_lines(repo: Path):
-    """Yield (path:line, text) for every added line in the staged diff."""
+    """Yield (path:line, text) for every added line in the staged diff.
+
+    A "+++ " line is a file header only outside a hunk and directly after a
+    "--- " line; inside a hunk it is an added line that starts with "++".
+    """
     out = git(repo, "diff", "--cached", "--diff-filter=AM", "-U0", "--no-color", "--no-ext-diff")
     path = None
     line_no = 0
     skip = False
+    in_hunk = False
+    previous = ""
     for raw in out.splitlines():
-        if raw.startswith("+++ "):
+        if raw.startswith("diff --git"):
+            path = None
+            skip = False
+            in_hunk = False
+        elif not in_hunk and raw.startswith("+++ ") and previous.startswith("--- "):
             path = raw[4:]
             path = path[2:] if path.startswith("b/") else path
             skip = excluded(path)
-            continue
-        if raw.startswith("--- ") or raw.startswith("diff --git") or raw.startswith("index "):
-            continue
-        match = HUNK_RE.match(raw)
-        if match:
-            line_no = int(match.group(1))
-            continue
-        if raw.startswith("+") and path and not skip:
-            yield (f"{path}:{line_no}", raw[1:])
+        elif HUNK_RE.match(raw):
+            in_hunk = True
+            line_no = int(HUNK_RE.match(raw).group(1))
+        elif in_hunk and raw.startswith("+") and path:
+            if not skip:
+                yield (f"{path}:{line_no}", raw[1:])
             line_no += 1
-        elif raw.startswith("+") and path:
-            line_no += 1
+        previous = raw
 
 
-def tree_hits(repo: Path, ref: str, patterns):
-    """Scan every text file in a committed tree. Returns [(path:line, text)]."""
+def _text_lines(path: str, data: bytes):
+    """(path:line, text) pairs for a blob, or nothing when it looks binary."""
+    if b"\x00" in data:
+        return []
+    text = data.decode("utf-8", errors="replace")
+    return [(f"{path}:{number}", line) for number, line in enumerate(text.splitlines(), start=1)]
+
+
+def _ref_blobs(repo: Path, ref: str, paths):
+    """Yield (path, bytes) for every blob at ref, read through one git cat-file --batch process."""
+    request = b"".join(ref.encode("utf-8") + b":" + raw + b"\n" for raw in paths)
+    data = git_bytes(repo, "cat-file", "--batch", input=request)
+    position = 0
+    for raw in paths:
+        newline = data.index(b"\n", position)
+        header = data[position:newline]
+        position = newline + 1
+        if header.endswith(b" missing"):
+            continue
+        _, kind, size = header.rsplit(b" ", 2)
+        body = data[position:position + int(size)]
+        position += int(size) + 1
+        if kind == b"blob":
+            yield raw.decode("utf-8", "replace"), body
+
+
+def _worktree_blobs(repo: Path, paths):
+    """Yield (path, bytes) for every regular text file on disk; missing paths and directories are skipped."""
+    for raw in paths:
+        name = raw.decode("utf-8", "replace")
+        full = repo / name
+        try:
+            if not full.is_file():
+                continue
+            with open(full, "rb") as handle:
+                head = handle.read(BINARY_PROBE_BYTES)
+                if b"\x00" in head:
+                    continue
+                yield name, head + handle.read()
+        except OSError:
+            continue
+
+
+def tree_hits(repo: Path, ref, patterns):
+    """Scan every text file in a committed tree, or in the working tree when ref is None.
+
+    Returns [(path:line, text)]. Patterns are Python regular expressions, matched in-process.
+    """
     if not patterns:
         return []
-    args = ["grep", "-I", "-i", "-n", "-E"]
-    for p in patterns:
-        args += ["-e", p.pattern]
-    args += [ref, "--", "."] + [f":!{prefix.rstrip('/')}" for prefix in SCAN_EXCLUDES]
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if proc.returncode not in (0, 1):
-        raise RuntimeError(f"git grep failed: {proc.stderr.strip()}")
-    located = []
-    for raw in proc.stdout.splitlines():
-        # ref:path:line:text
-        _, rest = raw.split(":", 1)
-        path, line, text = rest.split(":", 2)
-        located.append((f"{path}:{line}", text))
-    return scan_lines(located, patterns)
+    if ref is None:
+        listing = git_bytes(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    else:
+        listing = git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", ref)
+    paths = [raw for raw in listing.split(b"\x00") if raw and not excluded(raw.decode("utf-8", "replace"))]
+    blobs = _worktree_blobs(repo, paths) if ref is None else _ref_blobs(repo, ref, paths)
+    hits = []
+    for name, data in blobs:
+        hits.extend(scan_lines(_text_lines(name, data), patterns))
+    return hits
 
 
 def merge_in_progress(repo: Path) -> bool:
@@ -257,10 +324,17 @@ def claude_guard(repo: Path, role: str, patterns, payload) -> Outcome:
                 f"Edit it in {PUBLIC_CHECKOUT_HINT} and merge origin/master here."
             ))
         return Outcome(0)
+    if patterns is None:
+        return Outcome(0, NO_PATTERNS_MESSAGE.format(path=pattern_path()))
     if not patterns:
         return Outcome(0)
-    content = tool_input.get("content") or tool_input.get("new_string") or ""
-    located = [(rel, rel)] + [(f"{rel}:{n}", line) for n, line in enumerate(str(content).splitlines(), start=1)]
+    edits = tool_input.get("edits")
+    sources = [tool_input.get("content"), tool_input.get("new_string")]
+    sources += [edit.get("new_string") for edit in (edits if isinstance(edits, list) else []) if isinstance(edit, dict)]
+    located = [(rel, rel)]
+    for text in sources:
+        if text:
+            located += [(f"{rel}:{n}", line) for n, line in enumerate(str(text).splitlines(), start=1)]
     hits = scan_lines(located, patterns)
     if hits:
         return Outcome(2, "split guard: this is the public checkout and the write contains personal identifiers.\n" + _format_hits(hits))
@@ -272,7 +346,10 @@ def banner(role: str) -> str:
         return "Workspace role: personal (push: personal remote only; gui/ is read-only here, edit it in the public checkout)"
     if role == "public":
         return "Workspace role: public (iLevyTate/ai-job-search; personal identifiers are refused here)"
-    return "Workspace role: UNKNOWN (every split guard refuses; run python tools/split_check.py)"
+    return (
+        "Workspace role: UNKNOWN (personal = branch 'personal' with a remote named 'personal'; "
+        f"public = origin {PUBLIC_ORIGIN} with no 'personal' remote; every split guard refuses)"
+    )
 
 
 def report(repo: Path, role: str) -> Outcome:
@@ -300,8 +377,8 @@ def report(repo: Path, role: str) -> Outcome:
             diff = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", "origin/master", "--", "gui"], capture_output=True)
             if diff.returncode != 0:
                 drift.append("gui/ differs from origin/master (Desk source is read-only here)")
-    if role == "public" and PERSONAL_REMOTE in remotes:
-        drift.append("a 'personal' remote exists in a public checkout")
+    if role != "personal" and PERSONAL_REMOTE in remotes:
+        drift.append("a 'personal' remote exists but this is not the personal checkout (branch 'personal')")
     ids = pattern_path()
     try:
         patterns = load_patterns(ids)
@@ -314,9 +391,9 @@ def report(repo: Path, role: str) -> Outcome:
     else:
         lines.append(f"identifier file: {ids} ({len(patterns)} patterns)")
         if role == "public" and patterns:
-            hits = tree_hits(repo, "HEAD", patterns)
+            hits = tree_hits(repo, None, patterns)
             if hits:
-                drift.append("personal identifiers in HEAD:\n" + _format_hits(hits))
+                drift.append("personal identifiers in the working tree:\n" + _format_hits(hits))
     if drift:
         lines.append("Drift:")
         lines += [f"  - {item}" for item in drift]
