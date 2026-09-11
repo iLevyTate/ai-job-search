@@ -79,12 +79,12 @@ jobs:
       - run: npx electron-builder ${{ matrix.args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      # electron-updater reads latest.yml / latest-mac.yml / latest-linux.yml
-      # from the release; without them every installed Desk fails its update
-      # check and the Restart button never appears.
+      # --publish never skips latest.yml. Write it from the artifact so
+      # electron-updater can find the next build. cwd is already gui/.
+      - run: node scripts/write-updater-yml.mjs
       - name: Check the updater channel file was written
         shell: bash
-        run: ls gui/release/latest*.yml
+        run: ls release/latest*.yml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desk-${{ matrix.label }}
