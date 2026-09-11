@@ -1,5 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
+
+// electron-updater is CommonJS. A named ESM import crashes the packaged
+// Windows app: "Named export 'autoUpdater' not found".
+const { autoUpdater } = electronUpdater;
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
