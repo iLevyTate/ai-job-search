@@ -8,9 +8,16 @@ desk:
     - kind: url
       name: url
       required: false
+      label: Job URL
+      placeholder: https://
+      hint: A posting you found yourself. It gets stored alongside scraped jobs so it dedupes and feeds straight into apply.
     - kind: multiline
       name: posting
       required: false
+      label: Or paste the posting
+      hint: Use this when the board blocks the URL. Several postings at once are fine.
+  examples:
+    - /import https://jobs.example.com/123
 ---
 
 # /import - Ingest Hand-Found Jobs

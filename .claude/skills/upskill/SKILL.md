@@ -14,6 +14,12 @@ desk:
     - kind: url
       name: url
       required: false
+      label: One posting only
+      placeholder: https://
+      hint: Blank compares every job you have tracked against your profile. A URL narrows the gap analysis to that single posting.
+  examples:
+    - /upskill
+    - /upskill https://jobs.example.com/123
 
 ---
 

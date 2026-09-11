@@ -9,9 +9,14 @@ desk:
     - kind: url
       name: url
       required: false
+      label: Job URL
+      placeholder: https://
+      hint: Paste a posting URL if the page can be fetched.
     - kind: multiline
       name: posting
       required: false
+      label: Or paste the posting
+      hint: Use this when LinkedIn, Indeed, or Dice block the URL.
   examples:
     - /apply https://example.com/jobs/1
 ---

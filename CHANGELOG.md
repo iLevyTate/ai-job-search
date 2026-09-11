@@ -16,6 +16,7 @@ per-file diff commands.
 ### Added
 - Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
 - Tools check explains what each program means for the search.
+- Every command field says what it is for and what happens when you leave it blank. Setup can update one part of the profile, and Reset spells out what each mode deletes. An expired Claude login opens Sign in from the error and from the account chip.
 
 ### Security
 - CI and Desk release runs execute the security guards, the Python tool tests (including rank candidate limits), and the placeholder-integrity checks on this public template. A personalized fork still skips the placeholder checks after `/setup`.

@@ -10,6 +10,9 @@ desk:
       name: company
       required: false
       positional: true
+      label: Which interview
+      placeholder: Acme Engineer
+      hint: Blank lists your tracked applications so you can pick one. Add the role too if you applied to the same company twice.
   examples:
     - /interview
     - /interview Acme Engineer

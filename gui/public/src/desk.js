@@ -14,6 +14,7 @@ import {
 import { mountTabs } from "./tabs.js";
 import { filterJobs, renderApplications, renderChecklist, renderJobs, renderTools } from "./desk-views.js";
 import { createTerminalView } from "./terminal-view.js";
+import { isExpiredAuthError } from "./auth-errors.js";
 import {
   answersFromQuestionForm,
   commandInputError,
@@ -22,6 +23,7 @@ import {
   filterCommands,
   renderChat,
   renderCommandForm,
+  renderCommandGuide,
   renderCommandInvocation,
   renderPaletteList,
   renderSidebar,
@@ -48,6 +50,7 @@ const sheetKicker = document.getElementById("sheet-kicker");
 const sheetCopy = document.getElementById("sheet-copy");
 const sheetFields = document.getElementById("sheet-fields");
 const sheetError = document.getElementById("sheet-error");
+const sheetGuide = document.getElementById("sheet-guide");
 const clockEl = document.getElementById("clock");
 const menuBtn = document.getElementById("menu");
 const scrim = document.getElementById("scrim");
@@ -290,6 +293,12 @@ function ingest(event) {
       refreshDeskData();
     } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
     else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
+    if (
+      event.type === "turn.failed"
+      && isExpiredAuthError(event.payload?.text || event.payload?.reason)
+    ) {
+      recoverExpiredLogin();
+    }
   }
   if (event.type === "artifact.discovered") {
     const incoming = {
@@ -560,6 +569,10 @@ async function runStep(name, prompt) {
 const KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
 
 function runAction(name) {
+  if (name === "signin") {
+    recoverExpiredLogin();
+    return;
+  }
   const command = commands.find((item) => item.id === name);
   setMenu(false);
   if (command && commandNeedsInput(command)) {
@@ -601,8 +614,16 @@ function openCommandSheet(command) {
     sheetCopy.textContent = command.description || "Add what the step needs, then run.";
   }
   sheetFields.innerHTML = renderCommandForm(command);
-  sheetError.hidden = true;
-  sheetError.textContent = "";
+  if (sheetError) {
+    sheetError.hidden = true;
+    sheetError.textContent = "";
+  }
+  if (sheetGuide) {
+    sheetGuide.innerHTML = renderCommandGuide(command);
+    sheetGuide.hidden = !sheetGuide.innerHTML;
+  }
+  const runBtn = document.getElementById("sheet-run");
+  if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
   sheet.showModal();
   sheetFields.querySelector("input, textarea, select")?.focus();
 }
@@ -1668,8 +1689,8 @@ function describeAccount(health) {
     if (document.body.classList.contains("demo")) return `Signed in${plan}`;
     return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
   }
-  if (health?.error) return "Claude status unknown";
-  if (needsLogin(health)) return "Signed out";
+  if (health?.error) return "Claude status unknown. Click to retry.";
+  if (needsLogin(health)) return "Sign in with Claude";
   return "localhost only";
 }
 
@@ -1685,10 +1706,24 @@ async function readHealth() {
   return res.json();
 }
 
+function recoverExpiredLogin() {
+  lastHealth = {
+    installed: true,
+    loggedIn: false,
+    ...(lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }),
+  };
+  claudeAutoStarted = false;
+  applyHealth(lastHealth);
+  bootstrapClaude();
+}
+
 function applyHealth(health) {
   lastHealth = health;
   accountLabel.textContent = describeAccount(health);
   accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+  accountLabel.title = health?.loggedIn
+    ? "Signed in. Click to sign in again if chat stops with a login error."
+    : "Sign in with Claude";
   gateCancel.hidden = true;
   if (health.loggedIn) {
     setGate(false);
@@ -1805,6 +1840,7 @@ gateAction.addEventListener("click", () => {
   bootstrapClaude();
 });
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
+accountLabel?.addEventListener("click", () => recoverExpiredLogin());
 
 function paintGateChrome(info) {
   if (!gateChrome) return;

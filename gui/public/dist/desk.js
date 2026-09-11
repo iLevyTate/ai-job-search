@@ -9835,6 +9835,11 @@ ${incoming}`;
     };
   }
 
+  // public/src/auth-errors.js
+  function isExpiredAuthError(text) {
+    return /oauth session expired|could not be refreshed|failed to authenticate|not logged in|please (run )?\/login/i.test(String(text || ""));
+  }
+
   // public/src/chat-view.js
   function escapeHtml3(text) {
     return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -9859,6 +9864,7 @@ ${incoming}`;
   }
   function commandNeedsInput(command) {
     if (!command) return false;
+    if (command.form === "always") return true;
     if (command.id === "setup") return true;
     if (commandTakesPaste(command)) return true;
     return (command.arguments || []).some((argument) => argument.required);
@@ -9972,9 +9978,32 @@ ${incoming}`;
     return multiline ? `${rendered}
 ${multiline}` : rendered;
   }
+  function renderArgumentFields(command, include) {
+    return (command.arguments || []).filter(include).map((argument) => {
+      const name = escapeHtml3(argument.name);
+      const label = escapeHtml3(labelFor(argument));
+      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
+      const hint = argument.hint ? `<small class="field-hint">${escapeHtml3(argument.hint)}</small>` : "";
+      if (argument.kind === "choice") {
+        const blank = argument.required === true ? "" : `<option value="">${escapeHtml3(argument.placeholder || "No preference")}</option>`;
+        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
+        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${blank}${options}</select>${hint}</label>`;
+      }
+      if (argument.kind === "boolean") {
+        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}${hint}</label>`;
+      }
+      if (argument.kind === "multiline") {
+        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea>${hint}</label>`;
+      }
+      const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
+      const bounds = argument.kind === "integer" ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}` : "";
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}">${hint}</label>`;
+    }).join("");
+  }
   function renderCommandForm(command) {
     if (command?.id === "setup") {
-      return `<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
+      const section = renderArgumentFields(command, (argument) => argument.kind === "choice");
+      return `${section}<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
 <label data-arg="setupLocation"><span>Where you live</span><input name="setupLocation" type="text" autocomplete="address-level2" placeholder="City, state. Remote is fine."></label>
 <label data-arg="setupTarget"><span>Roles you want</span><input name="setupTarget" type="text" placeholder="Staff engineer, research scientist"></label>
 <label data-arg="setupNotes"><span>Anything else Claude should know</span><textarea name="setupNotes" rows="4" placeholder="Optional. Skip any field; Claude will ask."></textarea></label>`;
@@ -9983,25 +10012,21 @@ ${multiline}` : rendered;
       const placeholder = escapeHtml3(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
       return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
     }
-    const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
-      const name = escapeHtml3(argument.name);
-      const label = escapeHtml3(labelFor(argument));
-      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
-      if (argument.kind === "choice") {
-        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
-        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
-      }
-      if (argument.kind === "boolean") {
-        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
-      }
-      if (argument.kind === "multiline") {
-        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
-      }
-      const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      const bounds = argument.kind === "integer" ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}` : "";
-      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}"></label>`;
-    });
-    return fields.join("");
+    const showOptional = command.form === "always";
+    return renderArgumentFields(command, (argument) => showOptional || argument.required);
+  }
+  function renderCommandGuide(command) {
+    const blocks = [];
+    const requirements = command.requirements || [];
+    if (requirements.length) {
+      blocks.push(`<p class="sheet-note">Needs ${requirements.map((item) => escapeHtml3(item)).join(", ")}.</p>`);
+    }
+    const examples = command.examples || [];
+    if (examples.length) {
+      const items = examples.map((example) => `<li><code>${escapeHtml3(example)}</code></li>`).join("");
+      blocks.push(`<p class="sheet-note">Same thing typed by hand:</p><ul class="sheet-examples">${items}</ul>`);
+    }
+    return blocks.join("");
   }
   function valuesFromForm(form2) {
     const values = {};
@@ -10183,6 +10208,13 @@ ${multiline}` : rendered;
       return `<p class="tool done">Saved ${escapeHtml3(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
+    if (card.type === "turn.failed" && isExpiredAuthError(text)) {
+      return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>
+      <p class="hint">Your Claude login expired. Sign in again in this window, then retry the step.</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="signin">Sign in with Claude</button>
+      </div>`;
+    }
     if (card.type === "turn.failed" && card.payload.detail) {
       return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml3(card.payload.detail)}</pre></details>`;
     }
@@ -10314,6 +10346,7 @@ ${multiline}` : rendered;
   var sheetCopy = document.getElementById("sheet-copy");
   var sheetFields = document.getElementById("sheet-fields");
   var sheetError = document.getElementById("sheet-error");
+  var sheetGuide = document.getElementById("sheet-guide");
   var clockEl = document.getElementById("clock");
   var menuBtn = document.getElementById("menu");
   var scrim = document.getElementById("scrim");
@@ -10524,6 +10557,9 @@ ${multiline}` : rendered;
         refreshDeskData();
       } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
       else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
+      if (event.type === "turn.failed" && isExpiredAuthError(event.payload?.text || event.payload?.reason)) {
+        recoverExpiredLogin();
+      }
     }
     if (event.type === "artifact.discovered") {
       const incoming = {
@@ -10764,6 +10800,10 @@ ${multiline}` : rendered;
   }
   var KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
   function runAction(name) {
+    if (name === "signin") {
+      recoverExpiredLogin();
+      return;
+    }
     const command = commands.find((item) => item.id === name);
     setMenu(false);
     if (command && commandNeedsInput(command)) {
@@ -10801,8 +10841,16 @@ ${multiline}` : rendered;
       sheetCopy.textContent = command.description || "Add what the step needs, then run.";
     }
     sheetFields.innerHTML = renderCommandForm(command);
-    sheetError.hidden = true;
-    sheetError.textContent = "";
+    if (sheetError) {
+      sheetError.hidden = true;
+      sheetError.textContent = "";
+    }
+    if (sheetGuide) {
+      sheetGuide.innerHTML = renderCommandGuide(command);
+      sheetGuide.hidden = !sheetGuide.innerHTML;
+    }
+    const runBtn = document.getElementById("sheet-run");
+    if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
     sheet.showModal();
     sheetFields.querySelector("input, textarea, select")?.focus();
   }
@@ -11766,8 +11814,8 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
       if (document.body.classList.contains("demo")) return `Signed in${plan}`;
       return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
     }
-    if (health?.error) return "Claude status unknown";
-    if (needsLogin(health)) return "Signed out";
+    if (health?.error) return "Claude status unknown. Click to retry.";
+    if (needsLogin(health)) return "Sign in with Claude";
     return "localhost only";
   }
   function waitForAuth(kind) {
@@ -11780,10 +11828,21 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (!res.ok) throw new Error("Could not read Claude status.");
     return res.json();
   }
+  function recoverExpiredLogin() {
+    lastHealth = {
+      installed: true,
+      loggedIn: false,
+      ...lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }
+    };
+    claudeAutoStarted = false;
+    applyHealth(lastHealth);
+    bootstrapClaude();
+  }
   function applyHealth(health) {
     lastHealth = health;
     accountLabel.textContent = describeAccount(health);
     accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+    accountLabel.title = health?.loggedIn ? "Signed in. Click to sign in again if chat stops with a login error." : "Sign in with Claude";
     gateCancel.hidden = true;
     if (health.loggedIn) {
       setGate(false);
@@ -11893,6 +11952,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     bootstrapClaude();
   });
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
+  accountLabel?.addEventListener("click", () => recoverExpiredLogin());
   function paintGateChrome(info) {
     if (!gateChrome) return;
     if (info?.installed || info?.forcedOff) {

@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/mascot/pip_flight_loop.gif" alt="Pip, the courier bird" height="140">
   &nbsp;&nbsp;
-  <img src="gui/build/icon.png" alt="Job Search Desk" height="140">
+  <img src="assets/mascot/desk_pulse_loop.gif" alt="Job Search Desk" height="140">
 </p>
 
 # Job Search Desk

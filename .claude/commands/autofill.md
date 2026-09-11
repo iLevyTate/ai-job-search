@@ -9,6 +9,9 @@ desk:
     - kind: url
       name: url
       required: true
+      label: Application URL
+      placeholder: https://
+      hint: The employer's application form, not the job ad. Nothing is submitted. The filled-in browser is handed back to you to check and send yourself.
   examples:
     - /autofill https://boards.example.com/jobs/1
 ---

@@ -1,3 +1,5 @@
+import { isExpiredAuthError } from "./auth-errors.js";
+
 function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
@@ -41,9 +43,20 @@ export function commandTakesPaste(command) {
 
 export function commandNeedsInput(command) {
   if (!command) return false;
+  if (command.form === "always") return true;
   if (command.id === "setup") return true;
   if (commandTakesPaste(command)) return true;
   return (command.arguments || []).some((argument) => argument.required);
+}
+
+export function commandOpensForm(command) {
+  if (!command) return false;
+  if (command.form === "always") return true;
+  return (command.arguments || []).some((argument) => (
+    argument.required === true
+    || argument.kind === "url"
+    || argument.kind === "multiline"
+  ));
 }
 
 export function seedSetupPrompt(values = {}) {
@@ -166,9 +179,41 @@ export function renderCommandInvocation(command, values = {}) {
   return multiline ? `${rendered}\n${multiline}` : rendered;
 }
 
+function renderArgumentFields(command, include) {
+  return (command.arguments || []).filter(include).map((argument) => {
+    const name = escapeHtml(argument.name);
+    const label = escapeHtml(labelFor(argument));
+    const placeholder = escapeHtml(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
+    const hint = argument.hint
+      ? `<small class="field-hint">${escapeHtml(argument.hint)}</small>`
+      : "";
+    if (argument.kind === "choice") {
+      // An optional choice needs a blank first option, or the select silently
+      // submits its first value and the user can never mean "not this".
+      const blank = argument.required === true
+        ? ""
+        : `<option value="">${escapeHtml(argument.placeholder || "No preference")}</option>`;
+      const options = (argument.values || []).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+      return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${blank}${options}</select>${hint}</label>`;
+    }
+    if (argument.kind === "boolean") {
+      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}${hint}</label>`;
+    }
+    if (argument.kind === "multiline") {
+      return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea>${hint}</label>`;
+    }
+    const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
+    const bounds = argument.kind === "integer"
+      ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}`
+      : "";
+    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}">${hint}</label>`;
+  }).join("");
+}
+
 export function renderCommandForm(command) {
   if (command?.id === "setup") {
-    return `<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
+    const section = renderArgumentFields(command, (argument) => argument.kind === "choice");
+    return `${section}<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
 <label data-arg="setupLocation"><span>Where you live</span><input name="setupLocation" type="text" autocomplete="address-level2" placeholder="City, state. Remote is fine."></label>
 <label data-arg="setupTarget"><span>Roles you want</span><input name="setupTarget" type="text" placeholder="Staff engineer, research scientist"></label>
 <label data-arg="setupNotes"><span>Anything else Claude should know</span><textarea name="setupNotes" rows="4" placeholder="Optional. Skip any field; Claude will ask."></textarea></label>`;
@@ -177,27 +222,22 @@ export function renderCommandForm(command) {
     const placeholder = escapeHtml(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
     return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
   }
-  const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
-    const name = escapeHtml(argument.name);
-    const label = escapeHtml(labelFor(argument));
-    const placeholder = escapeHtml(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
-    if (argument.kind === "choice") {
-      const options = (argument.values || []).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
-      return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
-    }
-    if (argument.kind === "boolean") {
-      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
-    }
-    if (argument.kind === "multiline") {
-      return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
-    }
-    const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-    const bounds = argument.kind === "integer"
-      ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}`
-      : "";
-    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}"></label>`;
-  });
-  return fields.join("");
+  const showOptional = command.form === "always";
+  return renderArgumentFields(command, (argument) => showOptional || argument.required);
+}
+
+export function renderCommandGuide(command) {
+  const blocks = [];
+  const requirements = command.requirements || [];
+  if (requirements.length) {
+    blocks.push(`<p class="sheet-note">Needs ${requirements.map((item) => escapeHtml(item)).join(", ")}.</p>`);
+  }
+  const examples = command.examples || [];
+  if (examples.length) {
+    const items = examples.map((example) => `<li><code>${escapeHtml(example)}</code></li>`).join("");
+    blocks.push(`<p class="sheet-note">Same thing typed by hand:</p><ul class="sheet-examples">${items}</ul>`);
+  }
+  return blocks.join("");
 }
 
 export function valuesFromForm(form) {
@@ -415,6 +455,13 @@ function bodyHtml(card, { markdown } = {}) {
     return `<p class="tool done">Saved ${escapeHtml(card.payload.relativePath || "a file")}</p>`;
   }
   const text = card.payload.text || card.payload.reason || "";
+  if (card.type === "turn.failed" && isExpiredAuthError(text)) {
+    return `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>
+      <p class="hint">Your Claude login expired. Sign in again in this window, then retry the step.</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="signin">Sign in with Claude</button>
+      </div>`;
+  }
   if (card.type === "turn.failed" && card.payload.detail) {
     return `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml(card.payload.detail)}</pre></details>`;
   }

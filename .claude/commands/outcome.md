@@ -10,9 +10,13 @@ desk:
       name: query
       required: false
       positional: true
+      label: Which application
+      placeholder: acme, or followup
+      hint: Blank lists your open applications so you can pick one. A company name jumps straight to it. Type followup to draft chase notes for everything that has gone quiet, or followup 14 to change the 10-day default.
   examples:
     - /outcome
-    - /outcome followup 7
+    - /outcome acme ml engineer
+    - /outcome followup 14
 ---
 
 # /outcome - Record the Result of an Application
