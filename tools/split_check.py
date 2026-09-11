@@ -233,5 +233,147 @@ def hook_pre_push(repo: Path, role: str, patterns, remote_name: str, ref_lines) 
     return Outcome(0)
 
 
+def _relative_to_repo(repo: Path, file_path: str):
+    try:
+        return Path(file_path).resolve().relative_to(repo.resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def claude_guard(repo: Path, role: str, patterns, payload) -> Outcome:
+    """Claude Code PreToolUse: exit 2 blocks the tool call."""
+    if role == "unknown":
+        return Outcome(2, UNKNOWN_MESSAGE)
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    if not isinstance(tool_input, dict) or not tool_input.get("file_path"):
+        return Outcome(0, "split guard: tool input has no file_path; letting it through (git hooks still apply).")
+    rel = _relative_to_repo(repo, str(tool_input["file_path"]))
+    if rel is None:
+        return Outcome(0)
+    if role == "personal":
+        if rel.startswith(GUI_PREFIX) and not merge_in_progress(repo):
+            return Outcome(2, (
+                f"split guard: {rel} is Desk source, which is read-only in the personal checkout. "
+                f"Edit it in {PUBLIC_CHECKOUT_HINT} and merge origin/master here."
+            ))
+        return Outcome(0)
+    if not patterns:
+        return Outcome(0)
+    content = tool_input.get("content") or tool_input.get("new_string") or ""
+    located = [(rel, rel)] + [(f"{rel}:{n}", line) for n, line in enumerate(str(content).splitlines(), start=1)]
+    hits = scan_lines(located, patterns)
+    if hits:
+        return Outcome(2, "split guard: this is the public checkout and the write contains personal identifiers.\n" + _format_hits(hits))
+    return Outcome(0)
+
+
+def banner(role: str) -> str:
+    if role == "personal":
+        return "Workspace role: personal (push: personal remote only; gui/ is read-only here, edit it in the public checkout)"
+    if role == "public":
+        return "Workspace role: public (iLevyTate/ai-job-search; personal identifiers are refused here)"
+    return "Workspace role: UNKNOWN (every split guard refuses; run python tools/split_check.py)"
+
+
+def report(repo: Path, role: str) -> Outcome:
+    drift = []
+    lines = [banner(role), f"Checkout: {repo}"]
+    if role == "unknown":
+        drift.append("role is unknown (see the banner for the two expected shapes)")
+    hooks_path = git(repo, "config", "--get", "core.hooksPath", check=False).strip()
+    lines.append(f"core.hooksPath: {hooks_path or '(unset)'}")
+    if hooks_path != ".githooks":
+        drift.append("core.hooksPath is not .githooks (run python tools/split_setup.py)")
+    remotes = set(git(repo, "remote", check=False).split())
+    for name in sorted(remotes):
+        fetch = git(repo, "config", "--get", f"remote.{name}.url", check=False).strip()
+        push = git(repo, "config", "--get", f"remote.{name}.pushurl", check=False).strip() or fetch
+        lines.append(f"remote {name}: fetch {fetch} | push {push}")
+    if role == "personal":
+        origin_push = git(repo, "config", "--get", "remote.origin.pushurl", check=False).strip()
+        if origin_push != "DISABLED":
+            drift.append("remote.origin.pushurl is not DISABLED")
+        head = git(repo, "rev-parse", "--verify", "-q", "origin/master", check=False).strip()
+        if not head:
+            drift.append("origin/master is not fetched, so gui/ cannot be compared (git fetch origin)")
+        else:
+            diff = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", "origin/master", "--", "gui"], capture_output=True)
+            if diff.returncode != 0:
+                drift.append("gui/ differs from origin/master (Desk source is read-only here)")
+    if role == "public" and PERSONAL_REMOTE in remotes:
+        drift.append("a 'personal' remote exists in a public checkout")
+    ids = pattern_path()
+    try:
+        patterns = load_patterns(ids)
+    except ValueError as err:
+        patterns = None
+        drift.append(str(err))
+    if patterns is None:
+        lines.append(f"identifier file: missing ({ids})")
+        drift.append(f"identifier file missing at {ids} (run python tools/split_setup.py)")
+    else:
+        lines.append(f"identifier file: {ids} ({len(patterns)} patterns)")
+        if role == "public" and patterns:
+            hits = tree_hits(repo, "HEAD", patterns)
+            if hits:
+                drift.append("personal identifiers in HEAD:\n" + _format_hits(hits))
+    if drift:
+        lines.append("Drift:")
+        lines += [f"  - {item}" for item in drift]
+        return Outcome(1, "\n".join(lines))
+    lines.append("Split guard: no drift.")
+    return Outcome(0, "\n".join(lines))
+
+
+def main(argv=None) -> int:
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="Personal/public split guardrails.")
+    parser.add_argument("--hook", choices=["pre-commit", "pre-push"])
+    parser.add_argument("--claude-guard", action="store_true")
+    parser.add_argument("--banner", action="store_true")
+    parser.add_argument("hook_args", nargs="*")
+    args = parser.parse_args(argv)
+
+    try:
+        repo = repo_root()
+    except RuntimeError as err:
+        print(f"split guard: not inside a git checkout ({err})", file=sys.stderr)
+        return 0 if args.claude_guard else 1
+    role = detect_role(repo)
+
+    if args.banner:
+        print(banner(role))
+        return 0
+
+    try:
+        patterns = load_patterns(pattern_path())
+    except ValueError as err:
+        print(f"split guard: {err}", file=sys.stderr)
+        return 2 if args.claude_guard else 1
+
+    if args.hook == "pre-commit":
+        outcome = hook_pre_commit(repo, role, patterns)
+    elif args.hook == "pre-push":
+        remote_name = args.hook_args[0] if args.hook_args else ""
+        ref_lines = [line for line in sys.stdin.read().splitlines() if line.strip()]
+        outcome = hook_pre_push(repo, role, patterns, remote_name, ref_lines)
+    elif args.claude_guard:
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        outcome = claude_guard(repo, role, patterns, payload)
+    else:
+        outcome = report(repo, role)
+        print(outcome.message)
+        return outcome.code
+
+    if outcome.message:
+        print(outcome.message, file=sys.stderr)
+    return outcome.code
+
+
 if __name__ == "__main__":
-    sys.exit(0)
+    sys.exit(main())

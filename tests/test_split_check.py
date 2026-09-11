@@ -253,5 +253,99 @@ class PrePushHook(unittest.TestCase):
         self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", [f"(delete) {ZEROS} refs/heads/old {sha}"]).code, 0)
 
 
+class ClaudeGuard(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.patterns = [re.compile("smith", re.I)]
+
+    def payload(self, repo: Path, rel: str, content: str, key: str = "content"):
+        return {"tool_name": "Write", "tool_input": {"file_path": str(repo / rel), key: content}}
+
+    def test_personal_blocks_gui_writes_but_not_cv(self):
+        repo = make_repo(self.root, "personal")
+        self.assertEqual(split_check.claude_guard(repo, "personal", self.patterns, self.payload(repo, "gui/x.mjs", "x")).code, 2)
+        self.assertEqual(split_check.claude_guard(repo, "personal", self.patterns, self.payload(repo, "cv/x.tex", "x")).code, 0)
+
+    def test_public_blocks_identifier_content_and_paths(self):
+        repo = make_repo(self.root, "public")
+        self.assertEqual(split_check.claude_guard(repo, "public", self.patterns, self.payload(repo, "README.md", "Jane Smith", key="new_string")).code, 2)
+        self.assertEqual(split_check.claude_guard(repo, "public", self.patterns, self.payload(repo, "cv/Jane_Smith_Resume.tex", "x")).code, 2)
+        self.assertEqual(split_check.claude_guard(repo, "public", self.patterns, self.payload(repo, "README.md", "plain")).code, 0)
+
+    def test_paths_outside_the_repo_and_unparseable_input_pass(self):
+        repo = make_repo(self.root, "public")
+        outside = {"tool_name": "Write", "tool_input": {"file_path": str(self.root / "elsewhere.txt"), "content": "Jane Smith"}}
+        self.assertEqual(split_check.claude_guard(repo, "public", self.patterns, outside).code, 0)
+        self.assertEqual(split_check.claude_guard(repo, "public", self.patterns, {"tool_name": "Write"}).code, 0)
+
+    def test_unknown_blocks(self):
+        repo = make_repo(self.root, "unknown")
+        self.assertEqual(split_check.claude_guard(repo, "unknown", self.patterns, self.payload(repo, "README.md", "x")).code, 2)
+
+
+class ReportAndCli(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.ids = self.root / "ids.txt"
+        self.ids.write_text("smith\n", encoding="utf-8")
+        self.env = {**os.environ, "SPLIT_IDENTIFIERS_FILE": str(self.ids)}
+
+    def run_cli(self, repo: Path, *args: str, input: str | None = None):
+        return subprocess.run(
+            [sys.executable, str(REPO_ROOT / "tools" / "split_check.py"), *args],
+            cwd=repo, capture_output=True, text=True, encoding="utf-8", input=input, env=self.env,
+        )
+
+    def wire(self, repo: Path, role: str):
+        git(repo, "config", "core.hooksPath", ".githooks")
+        if role == "personal":
+            git(repo, "config", "remote.origin.pushurl", "DISABLED")
+
+    def test_banner_names_the_role(self):
+        proc = self.run_cli(make_repo(self.root, "public"), "--banner")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Workspace role: public", proc.stdout)
+
+    def test_report_lists_drift_and_exits_1_then_0_when_clean(self):
+        repo = make_repo(self.root, "public")
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("core.hooksPath", proc.stdout)
+        self.wire(repo, "public")
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("no drift", proc.stdout)
+
+    def test_personal_report_flags_origin_push_and_gui_drift(self):
+        repo = make_repo(self.root, "personal")
+        self.wire(repo, "personal")
+        git(repo, "config", "remote.origin.pushurl", PUBLIC_URL)
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("remote.origin.pushurl", proc.stdout)
+        self.assertIn("origin/master", proc.stdout)
+
+    def test_hook_cli_exit_codes(self):
+        repo = make_repo(self.root, "personal")
+        (repo / "gui" / "server.mjs").write_text("// edited\n", encoding="utf-8")
+        git(repo, "add", "gui/server.mjs")
+        proc = self.run_cli(repo, "--hook", "pre-commit")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("read-only", proc.stderr)
+        proc = self.run_cli(repo, "--hook", "pre-push", "origin", PUBLIC_URL, input="")
+        self.assertEqual(proc.returncode, 1)
+
+    def test_claude_guard_cli_reads_json_on_stdin(self):
+        repo = make_repo(self.root, "personal")
+        payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(repo / "gui" / "x.mjs"), "content": "x"}})
+        proc = self.run_cli(repo, "--claude-guard", input=payload)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("read-only", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
