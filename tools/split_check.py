@@ -106,5 +106,64 @@ def scan_lines(located_lines, patterns):
     return hits
 
 
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def staged_paths(repo: Path):
+    return [p for p in git(repo, "diff", "--cached", "--name-only", "--diff-filter=AMR").splitlines() if p]
+
+
+def staged_added_lines(repo: Path):
+    """Yield (path:line, text) for every added line in the staged diff."""
+    out = git(repo, "diff", "--cached", "--diff-filter=AM", "-U0", "--no-color", "--no-ext-diff")
+    path = None
+    line_no = 0
+    skip = False
+    for raw in out.splitlines():
+        if raw.startswith("+++ "):
+            path = raw[4:]
+            path = path[2:] if path.startswith("b/") else path
+            skip = excluded(path)
+            continue
+        if raw.startswith("--- ") or raw.startswith("diff --git") or raw.startswith("index "):
+            continue
+        match = HUNK_RE.match(raw)
+        if match:
+            line_no = int(match.group(1))
+            continue
+        if raw.startswith("+") and path and not skip:
+            yield (f"{path}:{line_no}", raw[1:])
+            line_no += 1
+        elif raw.startswith("+") and path:
+            line_no += 1
+
+
+def tree_hits(repo: Path, ref: str, patterns):
+    """Scan every text file in a committed tree. Returns [(path:line, text)]."""
+    if not patterns:
+        return []
+    args = ["grep", "-I", "-i", "-n", "-E"]
+    for p in patterns:
+        args += ["-e", p.pattern]
+    args += [ref, "--", "."] + [f":!{prefix.rstrip('/')}" for prefix in SCAN_EXCLUDES]
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode not in (0, 1):
+        raise RuntimeError(f"git grep failed: {proc.stderr.strip()}")
+    located = []
+    for raw in proc.stdout.splitlines():
+        # ref:path:line:text
+        _, rest = raw.split(":", 1)
+        path, line, text = rest.split(":", 2)
+        located.append((f"{path}:{line}", text))
+    return scan_lines(located, patterns)
+
+
+def merge_in_progress(repo: Path) -> bool:
+    git_dir = Path(git(repo, "rev-parse", "--git-dir").strip())
+    if not git_dir.is_absolute():
+        git_dir = repo / git_dir
+    return (git_dir / "MERGE_HEAD").exists()
+
+
 if __name__ == "__main__":
     sys.exit(0)

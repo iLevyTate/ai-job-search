@@ -129,5 +129,44 @@ class Patterns(unittest.TestCase):
         self.assertFalse(split_check.excluded("gui/server.mjs"))
 
 
+class GitHelpers(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_repo(self.root, "public")
+
+    def test_staged_paths_and_added_lines(self):
+        (self.repo / "cv" / "new.tex").write_text("one\nJane Smith\n", encoding="utf-8")
+        (self.repo / "gui" / "server.mjs").write_text("// desk\n// changed\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        self.assertEqual(sorted(split_check.staged_paths(self.repo)), ["cv/new.tex", "gui/server.mjs"])
+        added = list(split_check.staged_added_lines(self.repo))
+        self.assertIn(("cv/new.tex:2", "Jane Smith"), added)
+        self.assertIn(("gui/server.mjs:2", "// changed"), added)
+
+    def test_staged_added_lines_skip_excluded_folders(self):
+        (self.repo / "gui" / "node_modules").mkdir()
+        (self.repo / "gui" / "node_modules" / "x.js").write_text("Jane Smith\n", encoding="utf-8")
+        git(self.repo, "add", "-f", "gui/node_modules/x.js")
+        self.assertEqual(list(split_check.staged_added_lines(self.repo)), [])
+
+    def test_tree_hits_scan_a_ref(self):
+        (self.repo / "cv" / "main.tex").write_text("% Jane Smith\n", encoding="utf-8")
+        git(self.repo, "commit", "-q", "-am", "add a name")
+        sha = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        patterns = [re.compile("smith", re.I)]
+        self.assertEqual(split_check.tree_hits(self.repo, sha, patterns), [("cv/main.tex:1", "% Jane Smith")])
+        self.assertEqual(split_check.tree_hits(self.repo, sha, [re.compile("nobody", re.I)]), [])
+
+    def test_merge_in_progress_reads_merge_head(self):
+        self.assertFalse(split_check.merge_in_progress(self.repo))
+        git_dir = Path(git(self.repo, "rev-parse", "--git-dir").stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = self.repo / git_dir
+        (git_dir / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        self.assertTrue(split_check.merge_in_progress(self.repo))
+
+
 if __name__ == "__main__":
     unittest.main()
