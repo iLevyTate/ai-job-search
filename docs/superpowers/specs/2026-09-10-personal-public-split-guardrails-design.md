@@ -79,13 +79,17 @@ One module, no third-party imports, runs on the system Python in either tree.
   personal tree whether `gui/` differs from `origin/master`. Exit 1 on any
   drift so it can run in a shell prompt or a scheduled check.
 
-### `.githooks/pre-commit` and `.githooks/pre-push`
+### `.githooks/split-guard`, `.githooks/pre-commit`, and `.githooks/pre-push`
 
-Two POSIX `sh` scripts of a few lines each, tracked in both repos, that
-locate a Python interpreter (`python3`, then `python`, then `py -3`) and run
-`tools/split_check.py --hook <name>` with the hook's arguments and stdin.
-If no interpreter is found they print a sentence and exit 1: a missing guard
-is a failure, not a pass.
+Three POSIX `sh` scripts, tracked in both repos. `split-guard` is the shim:
+it locates a Python interpreter (`python3`, then `python`, then `py -3`) and
+runs `tools/split_check.py`, forwarding all of its arguments and stdin. The
+`pre-commit` and `pre-push` files are one-line wrappers that `exec` the shim
+with `--hook <name>` and the hook's arguments. If no interpreter is found
+the shim prints a sentence and exits 2 (non-zero, so git refuses; 2 so
+Claude Code blocks the tool call): a missing guard is a failure, not a
+pass. `.gitattributes` pins `.githooks/*` to LF so a CRLF shebang never
+breaks `sh`.
 
 ### `tools/split_setup.py`
 
@@ -103,9 +107,9 @@ Idempotent per-tree setup, run once in each checkout:
 
 ### Claude Code hooks (`.claude/settings.json` in both repos)
 
-- `SessionStart`: `python tools/split_check.py --banner`.
+- `SessionStart`: `sh .githooks/split-guard --banner`.
 - `PreToolUse` with matcher `Edit|Write|MultiEdit`:
-  `python tools/split_check.py --claude-guard`.
+  `sh .githooks/split-guard --claude-guard`.
 
 `tools/security_guards.py` in both repos gains the two commands on its hook
 allowlist, and its test pins them.
@@ -158,7 +162,7 @@ one-time per tree ──────► split_setup.py ──► remotes, hooksP
 ## Error handling
 
 - `unknown` role: every mode refuses and prints both expected shapes.
-- Missing Python in a hook: refuse with a sentence.
+- Missing Python in a hook: refuse with a sentence, exit 2.
 - Missing pattern file: personal tree, no effect (it scans nothing there);
   public tree, warn and pass in hooks, flag in report.
 - A pattern that fails to compile: report the line number, refuse.
