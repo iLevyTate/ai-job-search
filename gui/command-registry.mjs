@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 const ARGUMENT_KINDS = new Set(["text", "url", "path", "integer", "boolean", "choice", "multiline"]);
+const FORM_MODES = new Set(["auto", "always"]);
 
 function workspaceRelative(workspace, absolute) {
   return relative(workspace, absolute).split("\\").join("/");
@@ -33,6 +34,14 @@ function validateArgument(argument, invocation) {
   return argument;
 }
 
+function validateForm(desk) {
+  const mode = desk.form || "auto";
+  if (!FORM_MODES.has(mode)) {
+    throw new Error(`${desk.invocation}: unknown form mode ${mode}`);
+  }
+  return mode;
+}
+
 function definitionFromDesk(desk, sourcePath, sourceKind) {
   if (!desk || typeof desk !== "object") return null;
   if (!desk.id || !desk.invocation) {
@@ -46,6 +55,7 @@ function definitionFromDesk(desk, sourcePath, sourceKind) {
     sourcePath,
     sourceKind,
     primaryOrder: desk.primaryOrder,
+    form: validateForm(desk),
     arguments: Object.freeze((desk.arguments || []).map((argument) => Object.freeze(validateArgument(argument, desk.invocation)))),
     examples: Object.freeze([...(desk.examples || [])]),
     requirements: Object.freeze([...(desk.requirements || [])]),

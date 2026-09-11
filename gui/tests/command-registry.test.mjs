@@ -36,6 +36,44 @@ test("renders url, multiline, path, flags, and positional text exactly", async (
   assert.equal(registry.render("scrape", { mode: "broad" }), "/scrape broad");
 });
 
+test("every argument a user can fill carries a label and a hint", async () => {
+  const registry = await createCommandRegistry({ workspace: REPO });
+  for (const command of registry.list()) {
+    for (const argument of command.arguments) {
+      assert.ok(argument.label, `${command.invocation} ${argument.name} has no label`);
+      // A boolean checkbox explains itself through its label; everything else
+      // needs a sentence saying what happens when it is left blank.
+      if (argument.kind !== "boolean") {
+        assert.ok(argument.hint, `${command.invocation} ${argument.name} has no hint`);
+      }
+    }
+  }
+});
+
+test("choice values stay inside what the prompt body accepts", async () => {
+  const registry = await createCommandRegistry({ workspace: REPO });
+  assert.deepEqual(registry.get("scrape").arguments[0].values, ["broad", "health"]);
+  assert.deepEqual(
+    registry.get("setup").arguments[0].values,
+    ["identity", "education", "experience", "skills", "publications", "behavioral", "goals", "references", "search"],
+  );
+  assert.equal(registry.render("setup", { section: "search" }), "/setup --section search");
+  assert.equal(registry.render("setup", { section: "" }), "/setup");
+});
+
+test("form mode defaults to auto and is validated", async () => {
+  const registry = await createCommandRegistry({ workspace: REPO });
+  assert.equal(registry.get("setup").form, "always");
+  assert.equal(registry.get("reset").form, "always");
+  assert.equal(registry.get("apply").form, "auto");
+
+  const root = mkdtempSync(join(tmpdir(), "desk-form-"));
+  mkdirSync(join(root, ".claude", "commands"), { recursive: true });
+  writeFileSync(join(root, ".claude", "commands", "bad.md"), "---\ndesk:\n  id: bad\n  invocation: /bad\n  form: sometimes\n---\n");
+  const fixture = await createCommandRegistry({ workspace: root });
+  assert.equal(fixture.get("bad"), undefined);
+});
+
 test("excludes skills without desk metadata", async () => {
   const registry = await createCommandRegistry({ workspace: REPO });
   assert.equal(registry.get("job-application-assistant"), undefined);

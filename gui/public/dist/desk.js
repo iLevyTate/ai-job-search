@@ -9556,6 +9556,11 @@ ${h2.join(`
     };
   }
 
+  // public/src/auth-errors.js
+  function isExpiredAuthError(text) {
+    return /oauth session expired|could not be refreshed|failed to authenticate|not logged in|please (run )?\/login/i.test(String(text || ""));
+  }
+
   // public/src/chat-view.js
   function escapeHtml2(text) {
     return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -9570,6 +9575,15 @@ ${h2.join(`
   }
   function primaryCommands(commands2) {
     return commands2.filter((command) => Number.isFinite(command.primaryOrder)).sort((left, right) => left.primaryOrder - right.primaryOrder);
+  }
+  function commandOpensForm(command) {
+    if (command.form === "always") return true;
+    return (command.arguments || []).some((argument) => argument.required === true || argument.kind === "url" || argument.kind === "multiline");
+  }
+  function argumentLabel(argument) {
+    if (argument.label) return argument.label;
+    const name = String(argument.name || "");
+    return name.replace(/[-_]/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
   }
   function renderCommandInvocation(command, values = {}) {
     const parts = [command.invocation];
@@ -9598,20 +9612,37 @@ ${multiline}` : rendered;
   function renderCommandForm(command) {
     const fields = (command.arguments || []).map((argument) => {
       const name = escapeHtml2(argument.name);
+      const label = escapeHtml2(argumentLabel(argument));
+      const hint = argument.hint ? `<small class="field-hint">${escapeHtml2(argument.hint)}</small>` : "";
       if (argument.kind === "choice") {
+        const blank = argument.required === true ? "" : `<option value="">${escapeHtml2(argument.placeholder || "No preference")}</option>`;
         const options = (argument.values || []).map((value) => `<option value="${escapeHtml2(value)}">${escapeHtml2(value)}</option>`).join("");
-        return `<label data-arg="${name}"><span>${name}</span><select name="${name}">${options}</select></label>`;
+        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${blank}${options}</select>${hint}</label>`;
       }
       if (argument.kind === "boolean") {
-        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${name}</label>`;
+        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}${hint}</label>`;
       }
       if (argument.kind === "multiline") {
-        return `<label data-arg="${name}"><span>${name}</span><textarea name="${name}" rows="8"></textarea></label>`;
+        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${escapeHtml2(argument.placeholder || "")}"></textarea>${hint}</label>`;
       }
       const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      return `<label data-arg="${name}"><span>${name}</span><input name="${name}" type="${type}"></label>`;
+      const placeholder = argument.placeholder ? ` placeholder="${escapeHtml2(argument.placeholder)}"` : "";
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${placeholder}>${hint}</label>`;
     });
     return fields.join("");
+  }
+  function renderCommandGuide(command) {
+    const blocks = [];
+    const requirements = command.requirements || [];
+    if (requirements.length) {
+      blocks.push(`<p class="sheet-note">Needs ${requirements.map((item) => escapeHtml2(item)).join(", ")}.</p>`);
+    }
+    const examples = command.examples || [];
+    if (examples.length) {
+      const items = examples.map((example) => `<li><code>${escapeHtml2(example)}</code></li>`).join("");
+      blocks.push(`<p class="sheet-note">Same thing typed by hand:</p><ul class="sheet-examples">${items}</ul>`);
+    }
+    return blocks.join("");
   }
   function valuesFromForm(form2) {
     const values = {};
@@ -9687,6 +9718,13 @@ ${multiline}` : rendered;
       return `<p class="tool ${phase}">${escapeHtml2(card.payload.name || "tool")} ${phase === "done" ? "done" : ""}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
+    if (card.type === "turn.failed" && isExpiredAuthError(text)) {
+      return `<p>${escapeHtml2(text).replace(/\n/g, "<br>")}</p>
+      <p class="hint">Your Claude login expired. Sign in again in this window, then retry Setup.</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="signin">Sign in with Claude</button>
+      </div>`;
+    }
     if (markdown2 && (card.type === "assistant.message" || card.type === "turn.completed")) {
       return markdown2(text);
     }
@@ -9761,6 +9799,7 @@ ${multiline}` : rendered;
   var sheetKicker = document.getElementById("sheet-kicker");
   var sheetCopy = document.getElementById("sheet-copy");
   var sheetFields = document.getElementById("sheet-fields");
+  var sheetGuide = document.getElementById("sheet-guide");
   var clockEl = document.getElementById("clock");
   var menuBtn = document.getElementById("menu");
   var scrim = document.getElementById("scrim");
@@ -9886,6 +9925,9 @@ ${multiline}` : rendered;
     state = reduceDeskEvent(state, event);
     paintChat();
     if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
+    if (event.type === "turn.failed" && !replayingTranscript && isExpiredAuthError(event.payload?.text || event.payload?.reason)) {
+      recoverExpiredLogin();
+    }
     if (event.type === "artifact.discovered") {
       const incoming = {
         id: event.payload.artifactId || event.payload.entityId,
@@ -10044,6 +10086,10 @@ ${multiline}` : rendered;
     }
   }
   function runAction(name) {
+    if (name === "signin") {
+      recoverExpiredLogin();
+      return;
+    }
     const command = commands.find((item) => item.id === name);
     markAction(name);
     setMenu(false);
@@ -10054,7 +10100,7 @@ ${multiline}` : rendered;
       else if (name === "outcome") sendPrompt("/outcome");
       return;
     }
-    if (!command.arguments?.length) {
+    if (!commandOpensForm(command)) {
       sendPrompt(command.invocation);
       return;
     }
@@ -10064,8 +10110,14 @@ ${multiline}` : rendered;
     activeCommand = command;
     sheetKicker.textContent = command.invocation;
     sheetTitle.textContent = command.title;
-    sheetCopy.textContent = command.description || "Fill the fields you need, then run.";
+    sheetCopy.textContent = command.description || "Add what this step needs, then run.";
     sheetFields.innerHTML = renderCommandForm(command);
+    if (sheetGuide) {
+      sheetGuide.innerHTML = renderCommandGuide(command);
+      sheetGuide.hidden = !sheetGuide.innerHTML;
+    }
+    const runBtn = document.getElementById("sheet-run");
+    if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
     sheet.showModal();
     sheetFields.querySelector("input, textarea, select")?.focus();
   }
@@ -10516,8 +10568,8 @@ ${multiline}` : rendered;
       const plan = health.subscriptionType ? ` \xB7 ${health.subscriptionType}` : "";
       return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
     }
-    if (health?.error) return "Claude status unknown";
-    if (needsLogin(health)) return "Signed out";
+    if (health?.error) return "Claude status unknown. Click to retry.";
+    if (needsLogin(health)) return "Sign in with Claude";
     return "localhost only";
   }
   function waitForAuth(kind) {
@@ -10530,10 +10582,21 @@ ${multiline}` : rendered;
     if (!res.ok) throw new Error("Could not read Claude status.");
     return res.json();
   }
+  function recoverExpiredLogin() {
+    lastHealth = {
+      installed: true,
+      loggedIn: false,
+      ...lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }
+    };
+    claudeAutoStarted = false;
+    applyHealth(lastHealth);
+    bootstrapClaude();
+  }
   function applyHealth(health) {
     lastHealth = health;
     accountLabel.textContent = describeAccount(health);
     accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+    accountLabel.title = health?.loggedIn ? "Signed in. Click to sign in again if chat stops with a login error." : "Sign in with Claude";
     gateCancel.hidden = true;
     gateCodeWrap.hidden = true;
     if (health.loggedIn) {
@@ -10626,6 +10689,7 @@ ${url}`);
   });
   gateAction.addEventListener("click", () => bootstrapClaude());
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
+  accountLabel.addEventListener("click", () => recoverExpiredLogin());
   gateCode.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key !== "Enter") return;

@@ -9,9 +9,16 @@ desk:
       name: path
       required: false
       positional: true
+      label: Save it to
+      placeholder: reports/tracker.html
+      hint: Blank writes to the default report path.
     - kind: boolean
       name: open
       flag: --open
+      label: Open it in the browser when it is done
+  examples:
+    - /html-report
+    - /html-report reports/tracker.html --open
 ---
 
 # /html-report - Generate Application Tracker Dashboard

@@ -13,10 +13,13 @@ import {
 } from "./artifact-view.js";
 import { mountTabs } from "./tabs.js";
 import { createTerminalView } from "./terminal-view.js";
+import { isExpiredAuthError } from "./auth-errors.js";
 import {
+  commandOpensForm,
   filterCommands,
   renderChat,
   renderCommandForm,
+  renderCommandGuide,
   renderCommandInvocation,
   renderPaletteList,
   renderSidebar,
@@ -40,6 +43,7 @@ const sheetTitle = document.getElementById("sheet-title");
 const sheetKicker = document.getElementById("sheet-kicker");
 const sheetCopy = document.getElementById("sheet-copy");
 const sheetFields = document.getElementById("sheet-fields");
+const sheetGuide = document.getElementById("sheet-guide");
 const clockEl = document.getElementById("clock");
 const menuBtn = document.getElementById("menu");
 const scrim = document.getElementById("scrim");
@@ -183,6 +187,13 @@ function ingest(event) {
   state = reduceDeskEvent(state, event);
   paintChat();
   if (!replayingTranscript && state.busy !== wasBusy) setBusy(state.busy);
+  if (
+    event.type === "turn.failed"
+    && !replayingTranscript
+    && isExpiredAuthError(event.payload?.text || event.payload?.reason)
+  ) {
+    recoverExpiredLogin();
+  }
   if (event.type === "artifact.discovered") {
     const incoming = {
       id: event.payload.artifactId || event.payload.entityId,
@@ -351,6 +362,10 @@ async function sendPrompt(prompt) {
 }
 
 function runAction(name) {
+  if (name === "signin") {
+    recoverExpiredLogin();
+    return;
+  }
   const command = commands.find((item) => item.id === name);
   markAction(name);
   setMenu(false);
@@ -361,7 +376,7 @@ function runAction(name) {
     else if (name === "outcome") sendPrompt("/outcome");
     return;
   }
-  if (!command.arguments?.length) {
+  if (!commandOpensForm(command)) {
     sendPrompt(command.invocation);
     return;
   }
@@ -372,8 +387,14 @@ function openCommandSheet(command) {
   activeCommand = command;
   sheetKicker.textContent = command.invocation;
   sheetTitle.textContent = command.title;
-  sheetCopy.textContent = command.description || "Fill the fields you need, then run.";
+  sheetCopy.textContent = command.description || "Add what this step needs, then run.";
   sheetFields.innerHTML = renderCommandForm(command);
+  if (sheetGuide) {
+    sheetGuide.innerHTML = renderCommandGuide(command);
+    sheetGuide.hidden = !sheetGuide.innerHTML;
+  }
+  const runBtn = document.getElementById("sheet-run");
+  if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
   sheet.showModal();
   sheetFields.querySelector("input, textarea, select")?.focus();
 }
@@ -854,8 +875,8 @@ function describeAccount(health) {
     const plan = health.subscriptionType ? ` · ${health.subscriptionType}` : "";
     return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
   }
-  if (health?.error) return "Claude status unknown";
-  if (needsLogin(health)) return "Signed out";
+  if (health?.error) return "Claude status unknown. Click to retry.";
+  if (needsLogin(health)) return "Sign in with Claude";
   return "localhost only";
 }
 
@@ -871,10 +892,24 @@ async function readHealth() {
   return res.json();
 }
 
+function recoverExpiredLogin() {
+  lastHealth = {
+    installed: true,
+    loggedIn: false,
+    ...(lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }),
+  };
+  claudeAutoStarted = false;
+  applyHealth(lastHealth);
+  bootstrapClaude();
+}
+
 function applyHealth(health) {
   lastHealth = health;
   accountLabel.textContent = describeAccount(health);
   accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+  accountLabel.title = health?.loggedIn
+    ? "Signed in. Click to sign in again if chat stops with a login error."
+    : "Sign in with Claude";
   gateCancel.hidden = true;
   gateCodeWrap.hidden = true;
   if (health.loggedIn) {
@@ -970,6 +1005,7 @@ source.addEventListener("auth-done", (event) => {
 
 gateAction.addEventListener("click", () => bootstrapClaude());
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
+accountLabel.addEventListener("click", () => recoverExpiredLogin());
 gateCode.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key !== "Enter") return;

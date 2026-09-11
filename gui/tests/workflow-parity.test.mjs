@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createCommandRegistry } from "../command-registry.mjs";
 import {
+  commandOpensForm,
   primaryCommands,
   renderCommandForm,
   renderCommandInvocation,
@@ -28,6 +29,14 @@ test("all 16 workflow commands are registered and raw invocations stay available
   }
   assert.equal(registry.render("scrape", {}), "/scrape");
   assert.equal(registry.render("rank", {}), "/rank");
+  // Setup and Reset opt into the sheet so their one choice is discoverable;
+  // Rank and Scrape stay one-click.
+  assert.equal(commandOpensForm(registry.get("setup")), true);
+  assert.equal(commandOpensForm(registry.get("reset")), true);
+  assert.equal(commandOpensForm(registry.get("rank")), false);
+  assert.equal(commandOpensForm(registry.get("scrape")), false);
+  assert.equal(commandOpensForm(registry.get("apply")), true);
+  assert.equal(commandOpensForm(registry.get("autofill")), true);
 });
 
 test("primary sidebar derives from metadata and Apply keeps pasted newlines", async () => {

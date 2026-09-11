@@ -9,6 +9,9 @@ desk:
       name: query
       required: false
       positional: true
+      label: Narrow the mailbox scan
+      placeholder: acme
+      hint: Blank scans recent mail for every tracked application. A company name limits it to that one.
   requirements:
     - Gmail MCP
 ---

@@ -9,12 +9,22 @@ desk:
       name: source
       required: false
       positional: true
+      label: Template file
+      placeholder: templates/my-cv.tex
+      hint: A LaTeX, Typst, or other source file that compiles to PDF from the command line.
     - kind: boolean
       name: list
       flag: --list
+      label: Just show the templates I already registered
     - kind: text
       name: use
       flag: --use
+      label: Switch future applications to a registered template
+      placeholder: my-cv
+      hint: Use a name from the list.
+  examples:
+    - /add-template --list
+    - /add-template templates/my-cv.tex
 ---
 
 # /add-template - Register a Custom CV or Cover Letter Template

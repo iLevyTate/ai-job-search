@@ -8,9 +8,16 @@ desk:
     - kind: url
       name: url
       required: false
+      label: Portal search URL
+      placeholder: https://
+      hint: A results page from the board you want covered, with your filters already applied.
     - kind: boolean
       name: list
       flag: --list
+      label: Just show the portals I already have
+  examples:
+    - /add-portal --list
+    - /add-portal https://jobs.example.com/search?q=engineer
 ---
 
 # /add-portal - Generate a Job-Portal Search Skill for Your Local Market

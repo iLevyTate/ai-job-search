@@ -1,3 +1,5 @@
+import { isExpiredAuthError } from "./auth-errors.js";
+
 function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
@@ -18,6 +20,21 @@ export function primaryCommands(commands) {
   return commands
     .filter((command) => Number.isFinite(command.primaryOrder))
     .sort((left, right) => left.primaryOrder - right.primaryOrder);
+}
+
+export function commandOpensForm(command) {
+  if (command.form === "always") return true;
+  return (command.arguments || []).some((argument) => (
+    argument.required === true
+    || argument.kind === "url"
+    || argument.kind === "multiline"
+  ));
+}
+
+function argumentLabel(argument) {
+  if (argument.label) return argument.label;
+  const name = String(argument.name || "");
+  return name.replace(/[-_]/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function renderCommandInvocation(command, values = {}) {
@@ -47,20 +64,44 @@ export function renderCommandInvocation(command, values = {}) {
 export function renderCommandForm(command) {
   const fields = (command.arguments || []).map((argument) => {
     const name = escapeHtml(argument.name);
+    const label = escapeHtml(argumentLabel(argument));
+    const hint = argument.hint
+      ? `<small class="field-hint">${escapeHtml(argument.hint)}</small>`
+      : "";
     if (argument.kind === "choice") {
+      // An optional choice needs a blank first option, or the select silently
+      // submits its first value and the user can never mean "not this".
+      const blank = argument.required === true
+        ? ""
+        : `<option value="">${escapeHtml(argument.placeholder || "No preference")}</option>`;
       const options = (argument.values || []).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
-      return `<label data-arg="${name}"><span>${name}</span><select name="${name}">${options}</select></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${blank}${options}</select>${hint}</label>`;
     }
     if (argument.kind === "boolean") {
-      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${name}</label>`;
+      return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}${hint}</label>`;
     }
     if (argument.kind === "multiline") {
-      return `<label data-arg="${name}"><span>${name}</span><textarea name="${name}" rows="8"></textarea></label>`;
+      return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${escapeHtml(argument.placeholder || "")}"></textarea>${hint}</label>`;
     }
     const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-    return `<label data-arg="${name}"><span>${name}</span><input name="${name}" type="${type}"></label>`;
+    const placeholder = argument.placeholder ? ` placeholder="${escapeHtml(argument.placeholder)}"` : "";
+    return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${placeholder}>${hint}</label>`;
   });
   return fields.join("");
+}
+
+export function renderCommandGuide(command) {
+  const blocks = [];
+  const requirements = command.requirements || [];
+  if (requirements.length) {
+    blocks.push(`<p class="sheet-note">Needs ${requirements.map((item) => escapeHtml(item)).join(", ")}.</p>`);
+  }
+  const examples = command.examples || [];
+  if (examples.length) {
+    const items = examples.map((example) => `<li><code>${escapeHtml(example)}</code></li>`).join("");
+    blocks.push(`<p class="sheet-note">Same thing typed by hand:</p><ul class="sheet-examples">${items}</ul>`);
+  }
+  return blocks.join("");
 }
 
 export function valuesFromForm(form) {
@@ -149,6 +190,13 @@ function bodyHtml(card, { markdown } = {}) {
     return `<p class="tool ${phase}">${escapeHtml(card.payload.name || "tool")} ${phase === "done" ? "done" : ""}</p>`;
   }
   const text = card.payload.text || card.payload.reason || "";
+  if (card.type === "turn.failed" && isExpiredAuthError(text)) {
+    return `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>
+      <p class="hint">Your Claude login expired. Sign in again in this window, then retry Setup.</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="signin">Sign in with Claude</button>
+      </div>`;
+  }
   if (markdown && (card.type === "assistant.message" || card.type === "turn.completed")) {
     return markdown(text);
   }

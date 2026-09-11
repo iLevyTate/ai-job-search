@@ -3,17 +3,23 @@ desk:
   id: setup
   invocation: /setup
   title: Setup
-  description: Collect profile information and populate workspace files.
+  description: Fill in your profile so scrape and apply have something to work with.
   primaryOrder: 1
+  form: always
   arguments:
-    - kind: text
+    - kind: choice
       name: section
       flag: --section
       required: false
       positional: false
+      values: [identity, education, experience, skills, publications, behavioral, goals, references, search]
+      placeholder: Everything (first-time setup)
+      label: Update one part only
+      hint: First time here? Leave this on "Everything". Once your profile exists, pick a single part to re-interview and rewrite, so the rest is left untouched.
   examples:
     - /setup
     - /setup --section search
+    - /setup --section experience
 ---
 
 # /setup - Profile Onboarding
@@ -26,7 +32,25 @@ There are three paths into setup. Step 0 picks the right one; all three converge
 
 ## Step 0: Welcome & Choose Path
 
-If `$ARGUMENTS` contains `--section <name>`, skip directly to that section in Path C for an update-only flow. Do not run the path-selection prompt below.
+If `$ARGUMENTS` contains `--section <name>`, skip directly to that section in Path C for an update-only flow. Do not run the path-selection prompt below, and do not touch any file the named section does not own.
+
+These are the accepted names. Each one maps to a single Path C section and the files it writes:
+
+| `--section` | Path C section | Writes |
+|---|---|---|
+| `identity` | 1: Identity & Contact | `CLAUDE.md`, `01-candidate-profile.md`, `cv/main_example.tex` |
+| `education` | 2: Education | `01-candidate-profile.md` |
+| `experience` | 3: Professional Experience | `01-candidate-profile.md`, `cv/main_example.tex` |
+| `skills` | 4: Technical Skills | `01-candidate-profile.md`, `04-job-evaluation.md` |
+| `publications` | 5: Publications & Awards | `01-candidate-profile.md` |
+| `behavioral` | 6: Behavioral Profile | `02-behavioral-profile.md` |
+| `goals` | 7: Career Goals & Preferences | `CLAUDE.md`, `04-job-evaluation.md` |
+| `references` | 8: References | `01-candidate-profile.md` |
+| `search` | 9: Job Search Configuration | `.claude/skills/job-scraper/search-queries.md`, `CLAUDE.md` (CV language) |
+
+Run that section's interview, write only the files listed for it, then go straight to Step 4 and report just what changed. Skip Step 3's other substeps entirely.
+
+If the name is not in the table, do not guess. List the nine accepted names and ask which one they meant.
 
 Otherwise, first check where this working copy would publish to, **before anything is
 written, not after** (the Step 4 privacy note fires only once every file is already on

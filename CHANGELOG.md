@@ -14,6 +14,22 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Changed
+- Public README hero shows Pip beside a looping Desk pulse GIF.
+- Every command field in the Desk now says what it is for and what happens
+  when you leave it blank. Setup asks which part of your profile to update
+  with a dropdown that defaults to "Everything (first-time setup)" instead
+  of an empty box labelled `section`, and its nine accepted section names
+  are documented rather than guessed. Reset spells out what `profile`,
+  `documents`, and `all` each delete. Optional dropdowns can now be left
+  unset at all, where before they silently submitted their first value.
+  Each sheet also lists the equivalent typed command, and any MCP it needs.
+- Rank, Interview, and the other optional-only commands still run as soon as
+  you click them. Apply and Autofill still ask for a URL or pasted posting.
+  An expired Claude login opens Sign in in the app; the account chip in the
+  sidebar does the same.
+- Scrape no longer offers a `focused` mode that its own instructions do not
+  recognize, which had been read as a search keyword and narrowed the run to
+  postings about the word "focused".
 - Public README describes this US Job Search Desk product. Credit for the
   original methodology stays in Acknowledgements; Ko-fi, the upstream hiring
   story, and Intel Mac release copy are gone from the front page.

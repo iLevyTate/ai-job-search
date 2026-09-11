@@ -278,6 +278,7 @@ body.working .workline {
 
 .account {
   display: block;
+  width: 100%;
   margin: 0.8rem 0 0;
   padding: 0.5rem 0.6rem 0.5rem 1.45rem;
   overflow: hidden;
@@ -287,9 +288,17 @@ body.working .workline {
   font-family: var(--mono);
   font-size: 0.62rem;
   letter-spacing: 0.02em;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
   position: relative;
+  cursor: pointer;
+}
+
+.account:hover,
+.account:focus-visible {
+  border-color: var(--moss);
+  color: var(--paper);
 }
 
 .account::before {
@@ -762,17 +771,24 @@ body.working .status::before {
 .sheet p:not(.kicker), .sheet span { color: var(--fade); font-size: 0.86rem; line-height: 1.55; }
 .sheet label { display: grid; gap: 0.34rem; margin: 0.85rem 0; }
 .sheet label.check { display: flex; align-items: center; gap: 0.5rem; }
-.sheet input, .sheet textarea, .gate-card input {
+.sheet input, .sheet textarea, .sheet select, .gate-card input {
   border: 1px solid var(--line-strong);
   background: var(--well);
   color: var(--paper);
   padding: 0.65rem 0.75rem;
   font: inherit;
 }
-.sheet input:focus, .sheet textarea:focus, .gate-card input:focus {
+.sheet input:focus, .sheet textarea:focus, .sheet select:focus, .gate-card input:focus {
   outline: 0;
   border-color: rgba(208, 138, 58, 0.7);
 }
+.sheet-fields label > span { color: var(--paper); font-size: 0.9rem; }
+.sheet .field-hint { color: var(--fade); font-size: 0.78rem; line-height: 1.5; }
+.sheet-guide[hidden] { display: none; }
+.sheet-guide { margin: 0.9rem 0 0.2rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
+.sheet-note { margin: 0 0 0.35rem; }
+.sheet-examples { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.25rem; }
+.sheet-examples code { color: var(--fade); font-size: 0.78rem; }
 .sheet-actions { display: flex; gap: 0.5rem; margin-top: 0.45rem; }
 
 .gate {
@@ -1135,6 +1151,12 @@ body.gated .stage {
 .card-question label {
   display: grid;
   gap: 0.35rem;
+}
+
+.field-hint {
+  color: var(--fade);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .palette-list {

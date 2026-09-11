@@ -16,13 +16,19 @@ desk:
   arguments:
     - kind: choice
       name: mode
-      values: [focused, broad, health]
+      values: [broad, health]
       required: false
       positional: true
+      placeholder: Top priorities only (default)
+      label: Search mode
+      hint: broad runs every search category, which finds more and returns more noise. health only checks that your portal tools still work, without searching.
     - kind: text
       name: focus
       required: false
       positional: true
+      label: Focus area
+      placeholder: data science
+      hint: Optional. Prioritizes the queries in that category for this run.
   examples:
     - /scrape
     - /scrape broad

@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import {
+  commandOpensForm,
   filterCommands,
   primaryCommands,
   renderChat,
   renderCommandForm,
+  renderCommandGuide,
   renderCommandInvocation,
   renderPaletteList,
   renderSidebar,
 } from "../../public/src/chat-view.js";
+import { isExpiredAuthError } from "../../public/src/auth-errors.js";
 import { createDeskState, markEntered, queueFollowUp, reduceDeskEvent } from "../../public/src/event-store.js";
 
 const commands = [
@@ -22,6 +25,72 @@ const commands = [
 function document() {
   return new Window({ url: "http://127.0.0.1/" }).document;
 }
+
+test("optional text commands run without a form; URL and posting still open one", () => {
+  const setup = {
+    id: "setup",
+    invocation: "/setup",
+    arguments: [{ kind: "text", name: "section", flag: "--section", required: false }],
+  };
+  const apply = commands[2];
+  const scrape = commands[1];
+  assert.equal(commandOpensForm(setup), false);
+  assert.equal(commandOpensForm(scrape), false);
+  assert.equal(commandOpensForm(apply), true);
+  assert.equal(commandOpensForm({ id: "autofill", arguments: [{ kind: "url", name: "url", required: true }] }), true);
+  assert.match(renderCommandForm(apply), /Job URL|url/);
+  // A command whose only argument is optional stays invisible unless it opts in.
+  assert.equal(commandOpensForm({ ...setup, form: "always" }), true);
+});
+
+test("an optional choice can be left unset and explains itself", () => {
+  const section = {
+    kind: "choice",
+    name: "section",
+    flag: "--section",
+    required: false,
+    values: ["skills", "search"],
+    placeholder: "Everything (first-time setup)",
+    label: "Update one part only",
+    hint: "Leave this alone the first time.",
+  };
+  const html = renderCommandForm({ id: "setup", invocation: "/setup", arguments: [section] });
+  assert.match(html, /<option value="">Everything \(first-time setup\)<\/option>\s*<option value="skills">/);
+  assert.match(html, /<span>Update one part only<\/span>/);
+  assert.match(html, /class="field-hint">Leave this alone the first time\./);
+
+  const required = renderCommandForm({ id: "x", invocation: "/x", arguments: [{ ...section, required: true }] });
+  assert.doesNotMatch(required, /<option value="">/);
+});
+
+test("the sheet shows requirements and the equivalent typed command", () => {
+  assert.equal(renderCommandGuide({ id: "expand", invocation: "/expand" }), "");
+  const guide = renderCommandGuide({
+    id: "gmail-sync",
+    invocation: "/gmail-sync",
+    requirements: ["Gmail MCP"],
+    examples: ["/gmail-sync", "/gmail-sync acme"],
+  });
+  assert.match(guide, /Needs Gmail MCP\./);
+  assert.match(guide, /<code>\/gmail-sync acme<\/code>/);
+});
+
+test("expired Claude login is recognized and offers Sign in on the error card", () => {
+  assert.equal(isExpiredAuthError("Failed to authenticate: OAuth session expired and could not be refreshed"), true);
+  assert.equal(isExpiredAuthError("The desk could not reach the local server."), false);
+  const doc = document();
+  const root = doc.createElement("section");
+  let state = createDeskState();
+  state = reduceDeskEvent(state, {
+    eventId: "e-auth",
+    sequence: 1,
+    type: "turn.failed",
+    payload: { text: "Failed to authenticate: OAuth session expired and could not be refreshed" },
+  });
+  renderChat(root, state);
+  assert.ok(root.querySelector('[data-action="signin"]'));
+  assert.match(root.textContent, /Sign in with Claude/);
+});
 
 test("command palette filters and renders invocations", () => {
   assert.deepEqual(filterCommands(commands, "html").map((item) => item.id), ["html-report"]);
