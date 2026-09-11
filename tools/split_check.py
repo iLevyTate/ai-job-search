@@ -137,8 +137,11 @@ def staged_added_lines(repo: Path):
 
     A "+++ " line is a file header only outside a hunk and directly after a
     "--- " line; inside a hunk it is an added line that starts with "++".
+    Renames are not detected here (--no-renames) so a renamed-and-edited file
+    shows up as a fresh addition and every line of it is scanned; git appends
+    a tab to header paths that contain spaces, which is stripped.
     """
-    out = git(repo, "diff", "--cached", "--diff-filter=AM", "-U0", "--no-color", "--no-ext-diff")
+    out = git(repo, "diff", "--cached", "--diff-filter=AM", "--no-renames", "-U0", "--no-color", "--no-ext-diff")
     path = None
     line_no = 0
     skip = False
@@ -150,7 +153,7 @@ def staged_added_lines(repo: Path):
             skip = False
             in_hunk = False
         elif not in_hunk and raw.startswith("+++ ") and previous.startswith("--- "):
-            path = raw[4:]
+            path = raw[4:].rstrip("\t")
             path = path[2:] if path.startswith("b/") else path
             skip = excluded(path)
         elif HUNK_RE.match(raw):

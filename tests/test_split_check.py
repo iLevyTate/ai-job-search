@@ -208,6 +208,26 @@ class GitHelpers(unittest.TestCase):
         git(self.repo, "mv", "gui/server.mjs", "cv/server.mjs")
         self.assertEqual(sorted(split_check.staged_paths(self.repo)), ["cv/server.mjs", "gui/server.mjs"])
 
+    def test_renamed_and_edited_file_is_scanned_by_the_public_pre_commit(self):
+        (self.repo / "README.md").write_text("".join(f"line {n}\n" for n in range(20)), encoding="utf-8")
+        git(self.repo, "commit", "-q", "-am", "longer readme")
+        git(self.repo, "mv", "README.md", "docs.md")
+        with open(self.repo / "docs.md", "a", encoding="utf-8") as handle:
+            handle.write("contact Jane Smith\n")
+        git(self.repo, "add", "docs.md")
+        status = git(self.repo, "diff", "--cached", "--name-status", "-M").stdout
+        self.assertTrue(status.startswith("R"), status)
+        result = split_check.hook_pre_commit(self.repo, "public", [re.compile("smith", re.I)])
+        self.assertEqual(result.code, 1)
+        self.assertIn("docs.md", result.message)
+
+    def test_header_path_with_spaces_has_no_trailing_tab(self):
+        (self.repo / "cv" / "my file.tex").write_text("Jane Smith\n", encoding="utf-8")
+        git(self.repo, "add", "cv/my file.tex")
+        added = list(split_check.staged_added_lines(self.repo))
+        self.assertEqual(added, [("cv/my file.tex:1", "Jane Smith")])
+        self.assertFalse(any("\t" in location for location, _ in added))
+
 
 ZEROS = "0" * 40
 
