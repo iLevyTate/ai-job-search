@@ -13,7 +13,9 @@ export function createClaudeBootstrap({
   let inflight = null;
 
   function snapshot() {
-    return { status: state.status, health: state.health };
+    // The page shows `error`; dropping it made every failure read
+    // "Claude Code did not install." with no reason.
+    return { status: state.status, health: state.health, error: state.error || "", code: state.code ?? null };
   }
 
   function watchInstall(proc) {
@@ -40,9 +42,9 @@ export function createClaudeBootstrap({
       };
     };
     proc.once("close", (code) => {
-      finish(code).catch(() => {
+      finish(code).catch((err) => {
         clearTimeoutImpl(watchdog);
-        state = { status: "failed", health: state.health, process: null };
+        state = { status: "failed", health: state.health, process: null, error: err?.message || "Claude Code could not be checked after the installer finished." };
       });
     });
     proc.once("error", (err) => {

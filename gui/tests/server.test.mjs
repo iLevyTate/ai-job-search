@@ -86,6 +86,19 @@ test("a GET with no Origin (curl, CLI) still works", async () => {
   assert.ok("chromeExtensionUrl" in body);
 });
 
+test("an upload over 25 MB answers 413 with a sentence instead of resetting the connection", async () => {
+  const res = await fetch(`${base}/documents?name=big.pdf&kind=cv`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: Buffer.alloc(26 * 1024 * 1024, 1),
+  });
+  assert.equal(res.status, 413);
+  const body = await res.json();
+  assert.match(body.error, /25 MB/);
+  const alive = await fetch(`${base}/workspace`);
+  assert.equal(alive.status, 200);
+});
+
 test("GET /commands lists discovered workflows", async () => {
   const res = await fetch(`${base}/commands`);
   assert.equal(res.status, 200);

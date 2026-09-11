@@ -5,9 +5,9 @@
  * workflows already write; nothing is a second source of truth.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { resolveCommand } from "./claude.mjs";
 
 const IS_WIN = process.platform === "win32";
@@ -234,9 +234,11 @@ function countDocuments(workspace) {
 const DOCUMENT_EXTENSIONS = new Set([".pdf", ".tex", ".txt", ".md", ".docx", ".doc", ".rtf", ".odt", ".png", ".jpg", ".jpeg"]);
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 
+const DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
 export function safeDocumentName(name) {
   const base = basename(String(name || "")).replace(/[\\/:*?"<>|\u0000-\u001f -]+/g, "-").trim();
-  if (!base || base.startsWith(".")) return "";
+  if (!base || base.startsWith(".") || DEVICE_NAME.test(base)) return "";
   if (!DOCUMENT_EXTENSIONS.has(extname(base).toLowerCase())) return "";
   return base.slice(0, 120);
 }
@@ -274,6 +276,41 @@ export function resolveWorkspaceFile(workspace, candidate) {
   const first = rel.split(sep)[0];
   if (!OPENABLE_ROOTS.includes(first)) return null;
   if (!existsSync(absolute) || !statSync(absolute).isFile()) return null;
+  // A junction or symlink under cv/ must not serve a file from outside the
+  // folder (artifacts.mjs guards its own routes the same way).
+  let real;
+  let realRoot;
+  try {
+    real = realpathSync(absolute);
+    realRoot = realpathSync(workspace);
+  } catch {
+    return null;
+  }
+  const realRel = relative(realRoot, real);
+  if (!realRel || realRel.startsWith("..") || isAbsolute(realRel)) return null;
+  return { absolutePath: absolute, relativePath: rel.split(sep).join("/") };
+}
+
+// Same guards as resolveWorkspaceFile, for a folder (an application archive).
+export function resolveWorkspaceDir(workspace, candidate) {
+  const text = String(candidate || "");
+  if (!text || text.includes("\u0000")) return null;
+  const absolute = resolve(workspace, normalize(text));
+  const rel = relative(workspace, absolute);
+  if (!rel || rel.startsWith("..") || rel.includes(`..${sep}`)) return null;
+  const first = rel.split(sep)[0];
+  if (!OPENABLE_ROOTS.includes(first)) return null;
+  if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return null;
+  let real;
+  let realRoot;
+  try {
+    real = realpathSync(absolute);
+    realRoot = realpathSync(workspace);
+  } catch {
+    return null;
+  }
+  const realRel = relative(realRoot, real);
+  if (!realRel || realRel.startsWith("..") || isAbsolute(realRel)) return null;
   return { absolutePath: absolute, relativePath: rel.split(sep).join("/") };
 }
 
@@ -292,7 +329,9 @@ export const systemOpener = { open: openWithSystem, reveal: revealWithSystem };
 export function openWithSystem(absolutePath) {
   const detach = { detached: true, stdio: "ignore" };
   let child;
-  if (IS_WIN) child = spawn("cmd", ["/c", "start", "", absolutePath], detach);
+  // explorer.exe takes the path as one argument; `cmd /c start` re-parses
+  // it, so a company name with & or | in the file name ran as a command.
+  if (IS_WIN) child = spawn("explorer.exe", [absolutePath], detach);
   else if (process.platform === "darwin") child = spawn("open", [absolutePath], detach);
   else child = spawn("xdg-open", [absolutePath], detach);
   child.on("error", () => {});

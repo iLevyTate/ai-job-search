@@ -9454,7 +9454,7 @@ ${incoming}`;
     const preview = document2.createElement("div");
     preview.className = "artifact-preview";
     preview.dataset.kind = state2.preview?.kind || "none";
-    preview.innerHTML = previewHtml(state2.preview);
+    preview.innerHTML = (state2.problem ? `<p class="artifact-problem" role="alert">${escapeHtml(state2.problem)}</p>` : "") + previewHtml(state2.preview);
     if (state2.compare?.diff) {
       const diff = document2.createElement("pre");
       diff.className = "artifact-diff";
@@ -9487,7 +9487,7 @@ ${incoming}`;
     if (!state2.artifacts.length) return state2;
     const index = Math.max(0, state2.artifacts.findIndex((item) => item.id === state2.selectedId));
     const next = state2.artifacts[(index + delta + state2.artifacts.length) % state2.artifacts.length];
-    return { ...state2, selectedId: next.id, preview: null, compare: null, confirm: null };
+    return { ...state2, selectedId: next.id, preview: null, compare: null, confirm: null, problem: null };
   }
   function requestArtifactConfirm(state2, action) {
     if (action !== "open" && action !== "reveal") return { ...state2, confirm: null };
@@ -9713,7 +9713,7 @@ ${incoming}`;
         app.archive ? `<button type="button" class="ghost" data-reveal="${escapeHtml2(app.archive)}">Show folder</button>` : ""
       ].filter(Boolean).join("");
       row.innerHTML = `<div class="job-head"><h3>${escapeHtml2(app.company || "Unknown company")} \xB7 ${escapeHtml2(app.role || "role")}</h3><span class="pill${app.open ? " pill-open" : ""}">${escapeHtml2(statusLabel(app.status))}</span></div>
-      <p class="job-meta">${[app.date ? `applied ${app.date}` : "", app.channel, app.fit ? `fit ${app.fit}` : "", app.deadline ? `<strong>deadline ${escapeHtml2(app.deadline)}</strong>` : ""].filter(Boolean).map((bit) => bit.startsWith("<strong>") ? bit : escapeHtml2(bit)).join(" \xB7 ")}</p>
+      <p class="job-meta">${[app.date ? escapeHtml2(`applied ${app.date}`) : "", escapeHtml2(app.channel || ""), app.fit ? escapeHtml2(`fit ${app.fit}`) : "", app.deadline ? `<strong>deadline ${escapeHtml2(app.deadline)}</strong>` : ""].filter(Boolean).join(" \xB7 ")}</p>
       ${app.notes ? `<p class="app-notes">${escapeHtml2(app.notes)}</p>` : ""}
       <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button></div>`;
       list.append(row);
@@ -9996,7 +9996,8 @@ ${multiline}` : rendered;
         return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
       }
       const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}" placeholder="${placeholder}"></label>`;
+      const bounds = argument.kind === "integer" ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}` : "";
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}"></label>`;
     });
     return fields.join("");
   }
@@ -10274,7 +10275,8 @@ ${multiline}` : rendered;
       button.type = "button";
       button.className = "palette-item";
       button.dataset.command = command.id;
-      button.innerHTML = `<strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.invocation)}</em>`;
+      const needs = command.requirements?.length ? `<small>Needs: ${escapeHtml3(command.requirements.join(", "))}</small>` : "";
+      button.innerHTML = `<strong>${escapeHtml3(command.title)}</strong><em>${escapeHtml3(command.invocation)}</em>${needs}`;
       container.append(button);
     }
   }
@@ -10549,7 +10551,10 @@ ${multiline}` : rendered;
   }
   async function showArtifactPreview(id) {
     const res = await fetch(`/artifacts/${id}/preview`);
-    if (!res.ok) throw new Error("Could not preview that file.");
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error || "Could not preview that file.");
+    }
     const type = res.headers.get("content-type") || "";
     let preview;
     if (type.includes("text/html")) preview = { kind: "html", src: `/artifacts/${id}/preview` };
@@ -10557,13 +10562,20 @@ ${multiline}` : rendered;
     else if (type.startsWith("image/")) preview = { kind: "image", src: `/artifacts/${id}/preview` };
     else if (type.includes("json")) preview = await res.json();
     else preview = { kind: "text", text: await res.text() };
-    artifactState = { ...artifactState, selectedId: id, preview, confirm: null };
+    artifactState = { ...artifactState, selectedId: id, preview, confirm: null, problem: null };
     paintFiles();
   }
   async function showArtifactCompare(id) {
     const res = await fetch(`/artifacts/${id}/compare`);
-    if (!res.ok) throw new Error("Could not compare that file.");
-    artifactState = { ...artifactState, selectedId: id, compare: await res.json(), confirm: null };
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error || "Could not compare that file.");
+    }
+    artifactState = { ...artifactState, selectedId: id, compare: await res.json(), confirm: null, problem: null };
+    paintFiles();
+  }
+  function showArtifactProblem(error) {
+    artifactState = { ...artifactState, preview: null, compare: null, confirm: null, problem: error?.message || "Could not load that file." };
     paintFiles();
   }
   async function confirmArtifactAction() {
@@ -10574,13 +10586,12 @@ ${multiline}` : rendered;
         expectedControllerGeneration: state.controllerGeneration
       });
       if (!res.ok) {
-        artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
-        paintFiles();
+        const body = await res.json().catch(() => null);
+        showArtifactProblem(new Error(body?.error || "Could not complete that action."));
         return;
       }
     } catch {
-      artifactState = { ...artifactState, status: "error", error: "Could not complete that action." };
-      paintFiles();
+      showArtifactProblem(new Error("Could not reach the local desk."));
       return;
     }
     artifactState = { ...artifactState, confirm: null };
@@ -10729,6 +10740,7 @@ ${multiline}` : rendered;
     }
     return sent;
   }
+  var KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
   function runAction(name) {
     const command = commands.find((item) => item.id === name);
     setMenu(false);
@@ -10741,7 +10753,12 @@ ${multiline}` : rendered;
       return;
     }
     if (!command) {
-      if (["setup", "rank", "interview", "outcome"].includes(name)) runStep(name, `/${name}`);
+      if (!commands.length) {
+        notice("The step list is still loading. Try again in a moment.");
+        return;
+      }
+      if (KNOWN_STEPS.includes(name)) runStep(name, `/${name}`);
+      else notice(`The ${name} step is not set up in this folder.`);
       return;
     }
     if (!commandNeedsInput(command)) {
@@ -10835,6 +10852,18 @@ ${multiline}` : rendered;
     });
     socket.addEventListener("close", () => {
       if (runtimeSocket === socket) runtimeSocket = null;
+      if (inFlightSends.size) {
+        for (const [messageId, text] of inFlightSends) {
+          state = { ...state, queued: state.queued.filter((item) => item.id !== messageId) };
+          if (text && !promptEl.value.trim()) {
+            promptEl.value = text;
+            sizePrompt();
+          }
+        }
+        inFlightSends.clear();
+        paintChat();
+        notice("The desk lost its connection before Claude took your message. It is back in the box; send it again.");
+      }
       if (runtimeMode) window.setTimeout(connectRuntime, 2e3);
     });
     socket.addEventListener("error", () => {
@@ -11239,8 +11268,17 @@ ${multiline}` : rendered;
     palette.close();
     runAction(item.dataset.command);
   });
+  palette.querySelector("form")?.addEventListener("submit", (event) => {
+    if (event.submitter?.value === "cancel") return;
+    event.preventDefault();
+    const first = filterCommands(commands, paletteQuery.value)[0];
+    if (!first) return;
+    palette.close();
+    runAction(first.id);
+  });
   document.addEventListener("keydown", (event) => {
     if (document.body.classList.contains("gated")) return;
+    if (sheet.open || palette.open || toolsDialog?.open || modeSheet?.open) return;
     if (event.key === "Escape") {
       setMenu(false);
       return;
@@ -11464,14 +11502,13 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     const reveal = event.target.closest("[data-reveal]");
     if (reveal) {
       if (!window.confirm("Show this application's folder on your computer?")) return;
-      post("/workspace-file/open", { path: `${reveal.dataset.reveal}/job_posting.md`, reveal: true }).catch(() => {
-      });
+      openWorkspaceFile(reveal.dataset.reveal, { reveal: true });
       return;
     }
     const open = event.target.closest("[data-open-file]");
     if (open) {
       if (!window.confirm("Open this file in its usual app (for example Word or your PDF viewer)?")) return;
-      post("/workspace-file/open", { path: open.dataset.openFile }).catch(() => notice("Could not open that file."));
+      openWorkspaceFile(open.dataset.openFile);
       return;
     }
     if (event.target.closest("[data-close-preview]")) {
@@ -11486,6 +11523,17 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
     if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
   });
+  async function openWorkspaceFile(path, extra = {}) {
+    try {
+      const res = await post("/workspace-file/open", { path, ...extra });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        notice(body?.error || "That file is not in your job-search folder any more.");
+      }
+    } catch {
+      notice("Could not reach the local desk.");
+    }
+  }
   async function previewWorkspaceFile(path) {
     const src = `/workspace-file?path=${encodeURIComponent(path)}`;
     try {
@@ -11583,16 +11631,13 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     const item = event.target.closest("[data-artifact-id]");
     if (item) {
       artifactState = { ...artifactState, selectedId: item.dataset.artifactId, confirm: null };
-      showArtifactPreview(item.dataset.artifactId).catch((error) => {
-        artifactState = { ...artifactState, error: error.message, status: "error" };
-        paintFiles();
-      });
+      showArtifactPreview(item.dataset.artifactId).catch(showArtifactProblem);
       return;
     }
     const action = event.target.closest("[data-artifact-action]");
     if (action && artifactState.selectedId) {
-      if (action.dataset.artifactAction === "preview") showArtifactPreview(artifactState.selectedId);
-      else if (action.dataset.artifactAction === "compare") showArtifactCompare(artifactState.selectedId);
+      if (action.dataset.artifactAction === "preview") showArtifactPreview(artifactState.selectedId).catch(showArtifactProblem);
+      else if (action.dataset.artifactAction === "compare") showArtifactCompare(artifactState.selectedId).catch(showArtifactProblem);
       else artifactState = requestArtifactConfirm(artifactState, action.dataset.artifactAction);
       paintFiles();
       return;
@@ -11823,8 +11868,18 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (event.key !== "Enter") return;
     const code = gateCode.value.trim();
     if (!code) return;
-    post("/auth/code", { code });
-    gateCode.value = "";
+    gateCode.disabled = true;
+    post("/auth/code", { code }).then(async (res) => {
+      if (res.ok) {
+        gateCode.value = "";
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      notice(body?.error || "That code was not accepted. Paste it again.");
+    }).catch(() => notice("Could not reach the local desk.")).finally(() => {
+      gateCode.disabled = false;
+      gateCode.focus();
+    });
   });
   fetch("/auth/meta").then((res) => res.json()).then((meta) => {
     if (meta.chromeExtensionUrl) gateChrome.href = meta.chromeExtensionUrl;

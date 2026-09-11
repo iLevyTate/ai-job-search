@@ -141,7 +141,11 @@ test("resolveCommand prefers claude.cmd over the extensionless npm shim", (t) =>
 
 test("interactive Claude args resume the session and add bypass only in Autonomous", () => {
   assert.deepEqual(
-    buildInteractiveClaudeArgs({ sessionId: "sess-1", permissionMode: "safe" }),
+    buildInteractiveClaudeArgs({ sessionId: "sess-1", permissionMode: "safe", chrome: false }),
+    ["--resume", "sess-1", "--name", "Job Search Desk", "--no-chrome"],
+  );
+  assert.deepEqual(
+    buildInteractiveClaudeArgs({ sessionId: "sess-1", permissionMode: "safe", chrome: true }),
     ["--resume", "sess-1", "--name", "Job Search Desk"],
   );
   assert.ok(buildInteractiveClaudeArgs({ sessionId: "sess-1", permissionMode: "autonomous" }).includes("--dangerously-skip-permissions"));

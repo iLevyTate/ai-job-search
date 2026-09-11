@@ -310,11 +310,12 @@ export function exitErrorText(code, stopRequested) {
   return `Claude Code stopped before it finished (error ${code}). Send the message again. If it keeps happening, click New chat, or reload this page to check the installation.`;
 }
 
-export function buildInteractiveClaudeArgs({ sessionId, permissionMode, name = DESK_SESSION_NAME } = {}) {
+export function buildInteractiveClaudeArgs({ sessionId, permissionMode, name = DESK_SESSION_NAME, chrome = chromeEnabled() } = {}) {
   if (!sessionId || typeof sessionId !== "string") {
     throw new Error("session-id-required");
   }
   const args = ["--resume", sessionId, "--name", name];
+  if (!chrome) args.push("--no-chrome");
   if (permissionMode === "autonomous") args.push("--dangerously-skip-permissions");
   return args;
 }

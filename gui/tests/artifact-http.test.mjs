@@ -62,6 +62,29 @@ async function withDesk(testFn) {
   }
 }
 
+test("opening an artifact whose file was deleted answers 404, not ok", async () => {
+  await withDesk(async ({ base, opened }) => {
+    const listed = await (await fetch(`${base}/artifacts`)).json();
+    const notes = listed.artifacts.find((item) => item.relativePath === "documents/notes.md");
+    assert.ok(notes, "fixture artifact missing");
+    const path = join(REPO, "documents", "notes.md");
+    rmSync(path, { force: true });
+    try {
+      const res = await fetch(`${base}/artifacts/${notes.id}/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedControllerGeneration: 2 }),
+      });
+      assert.equal(res.status, 404);
+      const body = await res.json();
+      assert.match(body.error, /not in your job-search folder/);
+      assert.equal(opened.length, 0);
+    } finally {
+      write(REPO, join("documents", "notes.md"), "after");
+    }
+  });
+});
+
 test("artifact routes look up opaque IDs and protect previews", async () => {
   await withDesk(async ({ base, artifacts, opened, revealed }) => {
     const listed = await (await fetch(`${base}/artifacts`)).json();

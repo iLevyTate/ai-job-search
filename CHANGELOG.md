@@ -13,6 +13,56 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Fixed
+- Job Search Desk, after a line-by-line audit of the 1.3.0 app:
+  - Updates: the release workflow now publishes electron-updater's
+    `latest*.yml` next to the installers, so the installed app can actually
+    find a new build and show **Restart** (every check used to fail on a
+    missing channel file). Restart installs silently and relaunches instead
+    of walking through the installer wizard. The unsigned macOS build, which
+    cannot self-update, shows **Get latest Desk** like the portable exe.
+  - A saved Claude session the CLI no longer knew (sessions expire, folders
+    move) failed the runtime on every launch and dropped the app into
+    print mode with permissions bypassed; the desk now forgets the stale id
+    and starts fresh. The autofill review URL is set before the Claude child
+    is spawned, so the Continue/Cancel card reaches the desk in the first
+    conversation. Switching to **Works on its own** relaunches the session
+    when Claude refuses the change in place, instead of a header that lies.
+  - `node gui/server.mjs` (the browser desk) runs the same runtime as the
+    installed app once `npm ci` has run in `gui/`: Files tab, Needs-you
+    cards, permission modes. Print mode stays the fallback.
+  - Claude in Chrome is really off unless `JOB_SEARCH_CLAUDE_CHROME=1`, in
+    the SDK session and the Terminal tab too, not only in print mode.
+  - Terminal tab output is no longer cut at 8 KB per chunk (full-screen
+    redraws lost their tail). An upload over 25 MB answers 413 with a
+    sentence instead of resetting the connection. Stop and New chat reach
+    the runtime conversation while the page's socket is reconnecting.
+  - Enter in the Ctrl+K palette runs the first match. Scrape, Apply, and
+    Autofill say why a click did nothing while the step list loads. Show
+    folder and Open in the Applications tab report a missing file instead
+    of staying silent; Show folder opens the application's folder itself.
+    One file that cannot be previewed keeps the Files list on screen. A
+    message in flight when the connection drops goes back into the composer.
+    A login code that is refused says so. Shortcuts no longer stack a
+    second dialog on an open sheet. The palette shows what a step needs
+    (Gmail MCP, Notion MCP) and the Rank form enforces `--top` at least 1.
+  - Tracker cells are always escaped (a channel value starting with
+    `<strong>` used to be injected as markup). Windows device names (`CON`,
+    `NUL`) are refused as document names, `/workspace-file` re-checks the
+    real path so a junction cannot serve a file from outside the folder,
+    and files open through `explorer.exe` rather than `cmd /c start`, which
+    re-parsed `&` in a file name as a command. Open and Show in folder on a
+    file Claude has since deleted answer 404. An SSE client that vanishes
+    mid-write, and a Linux box with no `xdg-open`, no longer take the desk
+    down. A command file saved with a UTF-8 BOM no longer vanishes from the
+    sidebar, and a skipped command file is named in the console. A failed
+    Claude Code install keeps its reason. An unreadable folder picked on
+    first run gets a sentence, not Electron's raw IPC error.
+  - Docs: the Linux asset is `linux-x86_64.AppImage`; the port fallback and
+    `JOB_SEARCH_GUI_PORT` are documented; `/autofill` writes the same
+    14-column tracker header as `/apply` and `/outcome`; the issue templates
+    point at this repo.
+
 ### Added
 - Personal/public split guardrails: `tools/split_check.py` and
   `tools/split_setup.py`, tracked git hooks under `.githooks/`, and two Claude

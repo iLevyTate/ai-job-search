@@ -4,7 +4,7 @@ about: A defect or improvement in the framework itself — not your personal job
 ---
 
 <!-- Heads-up before you file: if you are working in a personalized fork,
-     note that the gh CLI points issue creation at this UPSTREAM repo by
+     note that the gh CLI points issue creation at this PUBLIC repo by
      default (`gh repo fork --clone` sets it as the default repository).
      Personal application tracking, job evaluations, and incident logs
      belong in YOUR fork or private repo - this tracker is public. Run
