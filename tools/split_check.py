@@ -165,5 +165,73 @@ def merge_in_progress(repo: Path) -> bool:
     return (git_dir / "MERGE_HEAD").exists()
 
 
+class Outcome:
+    """code 0 allows; anything else refuses. message goes to stderr either way when non-empty."""
+
+    def __init__(self, code: int, message: str = ""):
+        self.code = code
+        self.message = message
+
+
+UNKNOWN_MESSAGE = (
+    "split guard: this checkout's role is unknown, so the action is refused.\n"
+    "  personal = branch 'personal' with a remote named 'personal'\n"
+    "  public   = remote.origin.url is iLevyTate/ai-job-search and no 'personal' remote\n"
+    "Run: python tools/split_check.py   for the full report."
+)
+NO_PATTERNS_MESSAGE = "split guard: no identifier file at {path}; skipping the personal-content scan."
+
+
+def _format_hits(hits, limit: int = 8) -> str:
+    shown = [f"  {loc}: {text.strip()[:100]}" for loc, text in hits[:limit]]
+    if len(hits) > limit:
+        shown.append(f"  ... and {len(hits) - limit} more")
+    return "\n".join(shown)
+
+
+def hook_pre_commit(repo: Path, role: str, patterns) -> Outcome:
+    if role == "unknown":
+        return Outcome(1, UNKNOWN_MESSAGE)
+    if role == "personal":
+        gui = [p for p in staged_paths(repo) if p.replace("\\", "/").startswith(GUI_PREFIX)]
+        if gui and not merge_in_progress(repo):
+            return Outcome(1, (
+                "split guard: Desk source is read-only in the personal checkout. Edit gui/ in "
+                f"{PUBLIC_CHECKOUT_HINT}, then bring it here with: git fetch origin && git merge origin/master\n"
+                "Staged under gui/:\n" + "\n".join(f"  {p}" for p in gui)
+            ))
+        return Outcome(0)
+    if patterns is None:
+        return Outcome(0, NO_PATTERNS_MESSAGE.format(path=pattern_path()))
+    hits = scan_lines(staged_added_lines(repo), patterns)
+    if hits:
+        return Outcome(1, "split guard: personal identifiers in the staged change; this is the public repo.\n" + _format_hits(hits))
+    return Outcome(0)
+
+
+def hook_pre_push(repo: Path, role: str, patterns, remote_name: str, ref_lines) -> Outcome:
+    if role == "unknown":
+        return Outcome(1, UNKNOWN_MESSAGE)
+    if role == "personal":
+        if remote_name != PERSONAL_REMOTE:
+            return Outcome(1, f"split guard: the personal checkout pushes to the '{PERSONAL_REMOTE}' remote only, not '{remote_name}'.")
+        return Outcome(0)
+    if remote_name == PERSONAL_REMOTE:
+        return Outcome(1, "split guard: the public checkout must not push to the personal remote.")
+    if patterns is None:
+        return Outcome(0, NO_PATTERNS_MESSAGE.format(path=pattern_path()))
+    for line in ref_lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        local_sha = parts[1]
+        if set(local_sha) == {"0"}:
+            continue
+        hits = tree_hits(repo, local_sha, patterns)
+        if hits:
+            return Outcome(1, f"split guard: personal identifiers in the tree of {parts[0]} ({local_sha[:10]}); refusing to push to '{remote_name}'.\n" + _format_hits(hits))
+    return Outcome(0)
+
+
 if __name__ == "__main__":
     sys.exit(0)

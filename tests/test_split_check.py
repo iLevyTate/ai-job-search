@@ -168,5 +168,90 @@ class GitHelpers(unittest.TestCase):
         self.assertTrue(split_check.merge_in_progress(self.repo))
 
 
+ZEROS = "0" * 40
+
+
+class PreCommitHook(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.patterns = [re.compile("smith", re.I)]
+
+    def stage(self, repo: Path, rel: str, text: str):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        git(repo, "add", rel)
+
+    def test_personal_refuses_gui_and_names_the_public_checkout(self):
+        repo = make_repo(self.root, "personal")
+        self.stage(repo, "gui/server.mjs", "// edited\n")
+        result = split_check.hook_pre_commit(repo, "personal", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("read-only", result.message)
+        self.assertIn("ai-job-search-public", result.message)
+        self.assertIn("gui/server.mjs", result.message)
+
+    def test_personal_allows_cv_and_allows_gui_during_a_merge(self):
+        repo = make_repo(self.root, "personal")
+        self.stage(repo, "cv/x.tex", "x\n")
+        self.assertEqual(split_check.hook_pre_commit(repo, "personal", self.patterns).code, 0)
+        self.stage(repo, "gui/server.mjs", "// edited\n")
+        (repo / ".git" / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        self.assertEqual(split_check.hook_pre_commit(repo, "personal", self.patterns).code, 0)
+
+    def test_public_refuses_an_added_identifier_line(self):
+        repo = make_repo(self.root, "public")
+        self.stage(repo, "README.md", "hello\ncontact Jane Smith\n")
+        result = split_check.hook_pre_commit(repo, "public", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("README.md:2", result.message)
+
+    def test_public_passes_with_a_warning_when_no_pattern_file(self):
+        repo = make_repo(self.root, "public")
+        self.stage(repo, "README.md", "hello\ncontact Jane Smith\n")
+        result = split_check.hook_pre_commit(repo, "public", None)
+        self.assertEqual(result.code, 0)
+        self.assertIn("no identifier file", result.message)
+
+    def test_unknown_refuses(self):
+        repo = make_repo(self.root, "unknown")
+        self.stage(repo, "README.md", "x\n")
+        result = split_check.hook_pre_commit(repo, "unknown", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("unknown", result.message)
+
+
+class PrePushHook(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.patterns = [re.compile("smith", re.I)]
+
+    def test_personal_refuses_any_remote_but_personal(self):
+        repo = make_repo(self.root, "personal")
+        self.assertEqual(split_check.hook_pre_push(repo, "personal", self.patterns, "origin", []).code, 1)
+        self.assertEqual(split_check.hook_pre_push(repo, "personal", self.patterns, "personal", []).code, 0)
+
+    def test_public_refuses_the_personal_remote_and_a_tree_hit(self):
+        repo = make_repo(self.root, "public")
+        self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "personal", []).code, 1)
+        (repo / "cv" / "main.tex").write_text("% Jane Smith\n", encoding="utf-8")
+        git(repo, "commit", "-q", "-am", "name")
+        sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+        refs = [f"refs/heads/main {sha} refs/heads/main {ZEROS}"]
+        result = split_check.hook_pre_push(repo, "public", self.patterns, "origin", refs)
+        self.assertEqual(result.code, 1)
+        self.assertIn("cv/main.tex:1", result.message)
+
+    def test_public_passes_a_clean_tree_and_a_branch_deletion(self):
+        repo = make_repo(self.root, "public")
+        sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", [f"refs/heads/main {sha} refs/heads/main {ZEROS}"]).code, 0)
+        self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", [f"(delete) {ZEROS} refs/heads/old {sha}"]).code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
