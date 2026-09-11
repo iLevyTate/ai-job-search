@@ -1,0 +1,14 @@
+#!/bin/sh
+# Personal/public split guard shim. Finds a Python interpreter and forwards
+# every argument and stdin to tools/split_check.py. Activated per checkout by
+# tools/split_setup.py (git config core.hooksPath .githooks) and used by the
+# Claude Code hooks in .claude/settings.json. A missing interpreter refuses:
+# a guard that cannot run is a failure, not a pass.
+root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+for py in python3 python "py -3"; do
+  if $py -c "import sys" >/dev/null 2>&1; then
+    exec $py "$root/tools/split_check.py" "$@"
+  fi
+done
+echo "split guard: no Python interpreter found (python3, python, py -3); refusing." >&2
+exit 2

@@ -627,5 +627,45 @@ class MainInProcess(unittest.TestCase):
         self.assertIn("internal error", stderr.getvalue())
 
 
+class Setup(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.ids = self.root / "ids.txt"
+        self.env = {**os.environ, "SPLIT_IDENTIFIERS_FILE": str(self.ids)}
+
+    def run_setup(self, repo: Path):
+        return subprocess.run(
+            [sys.executable, str(REPO_ROOT / "tools" / "split_setup.py")],
+            cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.env,
+        )
+
+    def test_personal_setup_disables_origin_push_and_is_idempotent(self):
+        repo = make_repo(self.root, "personal")
+        git(repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+        first = self.run_setup(repo)
+        self.assertEqual(git(repo, "config", "--get", "remote.origin.pushurl").stdout.strip(), "DISABLED")
+        self.assertEqual(git(repo, "config", "--get", "remote.upstream.pushurl").stdout.strip(), "DISABLED")
+        self.assertEqual(git(repo, "config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
+        self.assertTrue(self.ids.exists())
+        second = self.run_setup(repo)
+        first_lines = [line for line in first.stdout.splitlines() if not line.startswith("Created ")]
+        self.assertEqual(first_lines, second.stdout.splitlines())
+
+    def test_public_setup_removes_the_personal_remote(self):
+        repo = make_repo(self.root, "public")
+        git(repo, "remote", "add", "personal", PERSONAL_URL)
+        proc = self.run_setup(repo)
+        self.assertNotIn("personal", git(repo, "remote").stdout.split())
+        self.assertEqual(git(repo, "config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
+        self.assertIn("Workspace role: public", proc.stdout)
+
+    def test_unknown_setup_refuses(self):
+        proc = self.run_setup(make_repo(self.root, "unknown"))
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("unknown", (proc.stdout + proc.stderr).lower())
+
+
 if __name__ == "__main__":
     unittest.main()
