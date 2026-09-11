@@ -18,6 +18,33 @@ To prevent duplication and configuration drift across different AI agent framewo
 3. **Portal Search Skills:**
    - Job-portal search CLIs live under [.agents/skills/](.agents/skills/) in the portable Agent Skills format (with a `SKILL.md` per portal). Codex and Antigravity discover these automatically; the `/scrape` workflow in [.claude/skills/job-scraper/](.claude/skills/job-scraper/) orchestrates them.
 
+## Private fork guardrails
+
+If you keep a private job-search checkout next to this public one, the two
+must never share a push target. `tools/split_check.py` derives a checkout's
+role from git: **personal** is branch `personal` with a remote named
+`personal`; **public** is `remote.origin.url` on `iLevyTate/ai-job-search`
+with no `personal` remote; anything else is unknown and every guard refuses.
+
+Run once per checkout: `python tools/split_setup.py`. It disables pushing to
+`origin` from a personal checkout, removes a `personal` remote from a public
+one, activates the tracked hooks in `.githooks/`, and creates the identifier
+file (`split-identifiers.txt` in the Desk's shared state folder, one regular
+expression per line; never committed).
+
+What the guards enforce:
+- Personal: `git push` only to `personal`; `gui/` is read-only (edit the
+  Desk in the public checkout, then `git fetch origin && git merge
+  origin/master`); a merge in progress may touch `gui/`.
+- Public: no push to `personal`; staged lines, file names, and pushed trees
+  that match the identifier file are refused.
+- Claude Code: the same guard runs before Edit, Write, and MultiEdit, and a
+  role banner prints at session start.
+
+`python tools/split_check.py` with no arguments prints a drift report and
+exits 1 on drift. Never copy files from the personal tree into the public
+one; port by hand.
+
 ## Learned User Preferences
 
 - Extend the existing Claude/Cowork job-search architecture instead of adding parallel frameworks; read existing files fully before changing them.

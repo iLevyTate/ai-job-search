@@ -14,6 +14,10 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Added
+- Personal/public split guardrails: `tools/split_check.py` and
+  `tools/split_setup.py`, tracked git hooks under `.githooks/`, and two Claude
+  Code hooks that refuse a push to the wrong remote, a Desk edit in a private
+  checkout, or personal identifiers in the public one. See AGENTS.md.
 - Job Search Desk first-timer follow-through: the installed app checks GitHub
   Releases and offers **Restart** when a new Desk build is downloaded
   (portable builds link to Releases instead). **Setup** is a short optional
