@@ -1295,7 +1295,7 @@ Under `## [Unreleased]` / `### Added`, add as the first bullet:
 python -m unittest discover -s tests -t .
 python tools/lint_skills.py
 python tools/security_guards.py
-git grep -iIE "kennedy|ai-job-search-personal|jamestown|labcorp|336-252" -- . ':!gui/node_modules' | grep -v 'iLevyTate/ai-job-search'
+python tools/split_check.py   # drift report; the identifier list lives outside the repo
 ```
 Expected: `OK` (360 tests), `lint_skills: OK`, `security_guards: OK`, and an empty grep.
 

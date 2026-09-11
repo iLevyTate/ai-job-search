@@ -183,8 +183,8 @@ class Patterns(unittest.TestCase):
         self.assertEqual(hits, [])
 
     def test_allowed_url_filter_does_not_hide_a_private_remote_url(self):
-        patterns = split_check.load_patterns(self.write("ai-job-search-personal\n"))
-        line = "git remote add personal https://github.com/iLevyTate/ai-job-search-personal.git"
+        patterns = split_check.load_patterns(self.write("ai-job-search-private\n"))
+        line = "git remote add personal https://github.com/iLevyTate/ai-job-search-private.git"
         self.assertEqual(split_check.scan_lines([("a.md:1", line)], patterns), [("a.md:1", line)])
 
     def test_allowed_url_filter_still_covers_git_suffix_and_sub_paths(self):
