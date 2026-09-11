@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 import split_check  # noqa: E402
+import split_setup  # noqa: E402
 
 PUBLIC_URL = "https://github.com/iLevyTate/ai-job-search.git"
 PERSONAL_URL = "https://example.invalid/ai-job-search-private.git"
@@ -665,6 +667,64 @@ class Setup(unittest.TestCase):
         proc = self.run_setup(make_repo(self.root, "unknown"))
         self.assertEqual(proc.returncode, 1)
         self.assertIn("unknown", (proc.stdout + proc.stderr).lower())
+
+    def test_public_setup_disables_upstream_push(self):
+        repo = make_repo(self.root, "public")
+        git(repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+        self.run_setup(repo)
+        self.assertEqual(git(repo, "config", "--get", "remote.upstream.pushurl").stdout.strip(), "DISABLED")
+
+    def test_personal_setup_keeps_the_fetch_url(self):
+        repo = make_repo(self.root, "personal")
+        self.run_setup(repo)
+        self.assertEqual(git(repo, "config", "--get", "remote.origin.url").stdout.strip(), PUBLIC_URL)
+
+    def test_setup_is_idempotent_on_config(self):
+        repo = make_repo(self.root, "personal")
+        self.run_setup(repo)
+        first = git(repo, "config", "--list", "--local").stdout
+        self.run_setup(repo)
+        second = git(repo, "config", "--list", "--local").stdout
+        self.assertEqual(first, second)
+        self.assertEqual(self.ids.read_text(encoding="utf-8"), split_setup.TEMPLATE)
+
+    def test_template_is_written_when_missing(self):
+        self.run_setup(make_repo(self.root, "public"))
+        self.assertTrue(self.ids.read_text(encoding="utf-8").startswith("# Personal identifiers"))
+
+    # The sh shim under .githooks forwards to split_check.py and refuses without an interpreter.
+    SHIM = REPO_ROOT / ".githooks" / "split-guard"
+
+    def require_sh(self) -> str:
+        sh = shutil.which("sh")
+        if not sh:
+            self.skipTest("sh is not available")
+        return sh
+
+    def test_shim_refuses_without_an_interpreter(self):
+        sh = self.require_sh()
+        empty = self.root / "empty-path"
+        empty.mkdir()
+        proc = subprocess.run(
+            [sh, str(self.SHIM), "--banner"],
+            cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**self.env, "PATH": str(empty)},
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("no Python interpreter", proc.stderr)
+
+    def test_shim_forwards_arguments_and_stdin(self):
+        sh = self.require_sh()
+        repo = make_repo(self.root, "personal")
+        (repo / "tools").mkdir()
+        shutil.copy(REPO_ROOT / "tools" / "split_check.py", repo / "tools" / "split_check.py")
+        payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(repo / "gui" / "x.mjs"), "content": "x"}})
+        proc = subprocess.run(
+            [sh, str(self.SHIM), "--claude-guard"],
+            cwd=repo, input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.env,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("read-only", proc.stderr)
 
 
 if __name__ == "__main__":
