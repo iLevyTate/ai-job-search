@@ -198,6 +198,11 @@ per-file diff commands.
   a dialog closes rather than before.
 
 ### Changed
+- Job Search Desk 1.3.1: the line-by-line audit of the 1.3.0 app (updater
+  channel files so Restart can find a new build, stale Claude session
+  recovery, Chrome opt-in honored, Stop/New chat during reconnect,
+  Jobs/Files/palette failures, Windows path hardening) plus personal/public
+  split guardrails already on master (PRs 21-23).
 - Job Search Desk 1.3.0: Jobs and Applications tabs, a live getting-started
   checklist, Tools check, document upload, in-app updates from GitHub
   Releases with Restart when a new build is downloaded, an optional Setup
