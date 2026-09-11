@@ -1,0 +1,2 @@
+# Hook shims must stay LF: a CRLF shebang breaks sh on every platform.
+.githooks/* text eol=lf
