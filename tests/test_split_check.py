@@ -4,6 +4,7 @@ Every repo is built in a temp dir; nothing here touches the real checkouts or
 the real identifier file (SPLIT_IDENTIFIERS_FILE points at a temp file).
 """
 
+import io
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -20,12 +22,40 @@ import split_check  # noqa: E402
 PUBLIC_URL = "https://github.com/iLevyTate/ai-job-search.git"
 PERSONAL_URL = "https://example.invalid/ai-job-search-private.git"
 
+_isolation = None
+_saved_env = {}
+
+
+def setUpModule():
+    """Point every git call (in-process and CLI subprocess) at an empty global config and no system config."""
+    global _isolation
+    _isolation = tempfile.TemporaryDirectory()
+    empty_config = Path(_isolation.name) / "gitconfig"
+    empty_config.write_text("", encoding="utf-8")
+    for key, value in (("GIT_CONFIG_GLOBAL", str(empty_config)), ("GIT_CONFIG_NOSYSTEM", "1")):
+        _saved_env[key] = os.environ.get(key)
+        os.environ[key] = value
+
+
+def tearDownModule():
+    for key, value in _saved_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    _isolation.cleanup()
+
 
 def git(repo: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
-        capture_output=True, text=True, encoding="utf-8", input=input, check=True,
+        capture_output=True, text=True, encoding="utf-8", input=input, check=True, env=os.environ,
     )
+
+
+def git_dir(repo: Path) -> Path:
+    found = Path(git(repo, "rev-parse", "--git-dir").stdout.strip())
+    return found if found.is_absolute() else repo / found
 
 
 def make_repo(root: Path, kind: str) -> Path:
@@ -133,6 +163,19 @@ class Patterns(unittest.TestCase):
         hits = split_check.scan_lines([("a.md:1", "see ilevytate/ai-job-search")], patterns)
         self.assertEqual(hits, [])
 
+    def test_allowed_url_filter_does_not_hide_a_private_remote_url(self):
+        patterns = split_check.load_patterns(self.write("ai-job-search-personal\n"))
+        line = "git remote add personal https://github.com/iLevyTate/ai-job-search-personal.git"
+        self.assertEqual(split_check.scan_lines([("a.md:1", line)], patterns), [("a.md:1", line)])
+
+    def test_allowed_url_filter_still_covers_git_suffix_and_sub_paths(self):
+        patterns = split_check.load_patterns(self.write("ai-job-search\n"))
+        located = [
+            ("a.md:1", "clone https://github.com/iLevyTate/ai-job-search.git"),
+            ("a.md:2", "see https://github.com/iLevyTate/ai-job-search/issues/1"),
+        ]
+        self.assertEqual(split_check.scan_lines(located, patterns), [])
+
 
 class GitHelpers(unittest.TestCase):
     def setUp(self):
@@ -166,11 +209,25 @@ class GitHelpers(unittest.TestCase):
 
     def test_merge_in_progress_reads_merge_head(self):
         self.assertFalse(split_check.merge_in_progress(self.repo))
-        git_dir = Path(git(self.repo, "rev-parse", "--git-dir").stdout.strip())
-        if not git_dir.is_absolute():
-            git_dir = self.repo / git_dir
-        (git_dir / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        (git_dir(self.repo) / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
         self.assertTrue(split_check.merge_in_progress(self.repo))
+
+    def test_tree_hits_scan_file_names_too(self):
+        (self.repo / "cv" / "Jane_Smith_Resume.tex").write_text("", encoding="utf-8")
+        git(self.repo, "add", "cv/Jane_Smith_Resume.tex")
+        git(self.repo, "commit", "-q", "-m", "add an empty resume")
+        sha = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        patterns = [re.compile("smith", re.I)]
+        expected = [("cv/Jane_Smith_Resume.tex", "cv/Jane_Smith_Resume.tex")]
+        self.assertEqual(split_check.tree_hits(self.repo, sha, patterns), expected)
+        self.assertEqual(split_check.tree_hits(self.repo, None, patterns), expected)
+
+    def test_non_ascii_staged_paths_are_not_quoted(self):
+        (self.repo / "cv" / "résumé.tex").write_text("Jane Smith\n", encoding="utf-8")
+        git(self.repo, "add", "cv/résumé.tex")
+        added = list(split_check.staged_added_lines(self.repo))
+        self.assertEqual(added, [("cv/résumé.tex:1", "Jane Smith")])
+        self.assertIn("cv/résumé.tex", split_check.staged_paths(self.repo))
 
     def test_added_line_starting_with_plus_plus_is_content_not_a_header(self):
         (self.repo / "README.md").write_text("hello\n++ Jane Smith\n", encoding="utf-8")
@@ -259,8 +316,15 @@ class PreCommitHook(unittest.TestCase):
         self.stage(repo, "cv/x.tex", "x\n")
         self.assertEqual(split_check.hook_pre_commit(repo, "personal", self.patterns).code, 0)
         self.stage(repo, "gui/server.mjs", "// edited\n")
-        (repo / ".git" / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        (git_dir(repo) / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
         self.assertEqual(split_check.hook_pre_commit(repo, "personal", self.patterns).code, 0)
+
+    def test_public_refuses_an_identifier_in_a_staged_file_name(self):
+        repo = make_repo(self.root, "public")
+        self.stage(repo, "cv/Jane_Smith_Resume.tex", "")
+        result = split_check.hook_pre_commit(repo, "public", self.patterns)
+        self.assertEqual(result.code, 1)
+        self.assertIn("cv/Jane_Smith_Resume.tex", result.message)
 
     def test_public_refuses_an_added_identifier_line(self):
         repo = make_repo(self.root, "public")
@@ -334,6 +398,21 @@ class PrePushHook(unittest.TestCase):
         self.assertEqual(result.code, 0)
         self.assertIn("no identifier file", result.message)
 
+    def test_public_scans_each_pushed_sha_once(self):
+        repo = make_repo(self.root, "public")
+        sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+        scanned = []
+        real = split_check.tree_hits
+
+        def counting(repo_, ref, patterns):
+            scanned.append(ref)
+            return real(repo_, ref, patterns)
+
+        refs = [f"refs/heads/a {sha} refs/heads/a {ZEROS}", f"refs/heads/b {sha} refs/heads/b {ZEROS}"]
+        with mock.patch.object(split_check, "tree_hits", counting):
+            self.assertEqual(split_check.hook_pre_push(repo, "public", self.patterns, "origin", refs).code, 0)
+        self.assertEqual(scanned, [sha])
+
 
 class ClaudeGuard(unittest.TestCase):
     def setUp(self):
@@ -368,7 +447,7 @@ class ClaudeGuard(unittest.TestCase):
 
     def test_personal_allows_gui_writes_during_a_merge(self):
         repo = make_repo(self.root, "personal")
-        (repo / ".git" / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+        (git_dir(repo) / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
         self.assertEqual(split_check.claude_guard(repo, "personal", self.patterns, self.payload(repo, "gui/x.mjs", "x")).code, 0)
 
     def test_public_scans_multiedit_new_strings(self):
@@ -400,8 +479,40 @@ class ReportAndCli(unittest.TestCase):
     def run_cli(self, repo: Path, *args: str, input: str | None = None):
         return subprocess.run(
             [sys.executable, str(REPO_ROOT / "tools" / "split_check.py"), *args],
-            cwd=repo, capture_output=True, text=True, encoding="utf-8", input=input, env=self.env,
+            cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", input=input, env=self.env,
         )
+
+    def test_claude_guard_judges_the_target_files_repo_not_the_cwd(self):
+        personal = make_repo(self.root, "personal")
+        public = make_repo(self.root, "public")
+        into_public = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(public / "README.md"), "content": "Jane Smith"}})
+        proc = self.run_cli(personal, "--claude-guard", input=into_public)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        into_personal_gui = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(personal / "gui" / "s.mjs"), "content": "x"}})
+        proc = self.run_cli(public, "--claude-guard", input=into_personal_gui)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+
+    def test_claude_guard_reads_stdin_as_utf8(self):
+        repo = make_repo(self.root, "public")
+        self.ids.write_text("müller\n", encoding="utf-8")
+        payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(repo / "README.md"), "content": "Hans Müller"}}, ensure_ascii=False)
+        proc = self.run_cli(repo, "--claude-guard", input=payload)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+
+    def test_report_prints_non_ascii_hits_without_a_traceback(self):
+        repo = make_repo(self.root, "public")
+        self.wire(repo, "public")
+        (repo / "README.md").write_text("hello\ncontact Jane Smith (Смит)\n", encoding="utf-8")
+        proc = self.run_cli(repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("README.md:2", proc.stdout)
+
+    def test_claude_guard_treats_malformed_json_as_an_empty_payload(self):
+        repo = make_repo(self.root, "personal")
+        proc = self.run_cli(repo, "--claude-guard", input="{not json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("no file_path", proc.stderr)
 
     def wire(self, repo: Path, role: str):
         git(repo, "config", "core.hooksPath", ".githooks")
@@ -486,6 +597,34 @@ class ReportAndCli(unittest.TestCase):
         proc = self.run_cli(repo, "--claude-guard", input=payload)
         self.assertEqual(proc.returncode, 2)
         self.assertIn("read-only", proc.stderr)
+
+
+class MainInProcess(unittest.TestCase):
+    """main() called directly, with stdin, stderr, cwd, and the identifier file all patched."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_repo(self.root, "personal")
+        previous = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, previous)
+
+    def test_claude_guard_blocks_when_the_guard_itself_fails(self):
+        payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(self.repo / "gui" / "x.mjs"), "content": "x"}}).encode("utf-8")
+
+        def explode(repo):
+            raise RuntimeError("git exploded")
+
+        stderr = io.StringIO()
+        with mock.patch.object(split_check, "merge_in_progress", explode), \
+                mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8")), \
+                mock.patch("sys.stderr", stderr), \
+                mock.patch.dict(os.environ, {"SPLIT_IDENTIFIERS_FILE": str(self.root / "absent.txt")}):
+            code = split_check.main(["--claude-guard"])
+        self.assertEqual(code, 2)
+        self.assertIn("internal error", stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -31,7 +31,10 @@ GUI_PREFIX = "gui/"
 PATTERN_FILE_NAME = "split-identifiers.txt"
 SCAN_EXCLUDES = ("gui/node_modules/", "gui/release/", "gui/public/dist/", "gui/public/vendor/")
 ALLOWED_TEXT = "iLevyTate/ai-job-search"
-ALLOWED_RE = re.compile(re.escape(ALLOWED_TEXT), re.IGNORECASE)
+# The public repo's own name is never a hit, but only as a whole word: an optional
+# ".git" may follow it, while "-personal" or any other word character means a
+# different (private) repository and must stay visible to the patterns.
+ALLOWED_RE = re.compile(re.escape(ALLOWED_TEXT) + r"(?:\.git)?(?![\w-])", re.IGNORECASE)
 BINARY_PROBE_BYTES = 8000
 
 PUBLIC_CHECKOUT_HINT = "the public checkout (ai-job-search-public)"
@@ -120,7 +123,7 @@ def git_bytes(repo: Path, *args: str, input: bytes | None = None) -> bytes:
 
 def staged_paths(repo: Path):
     """Every path touched by the staged change: added, modified, deleted, and both sides of a rename or copy."""
-    fields = [f for f in git_bytes(repo, "diff", "--cached", "--name-status", "-M", "-z").split(b"\x00") if f]
+    fields = [f for f in git_bytes(repo, "-c", "core.quotepath=off", "diff", "--cached", "--name-status", "-M", "-z").split(b"\x00") if f]
     paths = []
     index = 0
     while index < len(fields):
@@ -141,7 +144,7 @@ def staged_added_lines(repo: Path):
     shows up as a fresh addition and every line of it is scanned; git appends
     a tab to header paths that contain spaces, which is stripped.
     """
-    out = git(repo, "diff", "--cached", "--diff-filter=AM", "--no-renames", "-U0", "--no-color", "--no-ext-diff")
+    out = git(repo, "-c", "core.quotepath=off", "diff", "--cached", "--diff-filter=AM", "--no-renames", "-U0", "--no-color", "--no-ext-diff")
     path = None
     line_no = 0
     skip = False
@@ -221,8 +224,9 @@ def tree_hits(repo: Path, ref, patterns):
     else:
         listing = git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", ref)
     paths = [raw for raw in listing.split(b"\x00") if raw and not excluded(raw.decode("utf-8", "replace"))]
+    names = [raw.decode("utf-8", "replace") for raw in paths]
+    hits = scan_lines(zip(names, names), patterns)
     blobs = _worktree_blobs(repo, paths) if ref is None else _ref_blobs(repo, ref, paths)
-    hits = []
     for name, data in blobs:
         hits.extend(scan_lines(_text_lines(name, data), patterns))
     return hits
@@ -273,7 +277,8 @@ def hook_pre_commit(repo: Path, role: str, patterns) -> Outcome:
         return Outcome(0)
     if patterns is None:
         return Outcome(0, NO_PATTERNS_MESSAGE.format(path=pattern_path()))
-    hits = scan_lines(staged_added_lines(repo), patterns)
+    located = [(p, p) for p in staged_paths(repo)] + list(staged_added_lines(repo))
+    hits = scan_lines(located, patterns)
     if hits:
         return Outcome(1, "split guard: personal identifiers in the staged change; this is the public repo.\n" + _format_hits(hits))
     return Outcome(0)
@@ -290,13 +295,15 @@ def hook_pre_push(repo: Path, role: str, patterns, remote_name: str, ref_lines) 
         return Outcome(1, "split guard: the public checkout must not push to the personal remote.")
     if patterns is None:
         return Outcome(0, NO_PATTERNS_MESSAGE.format(path=pattern_path()))
+    seen = set()
     for line in ref_lines:
         parts = line.split()
         if len(parts) != 4:
             continue
         local_sha = parts[1]
-        if set(local_sha) == {"0"}:
+        if set(local_sha) == {"0"} or local_sha in seen:
             continue
+        seen.add(local_sha)
         hits = tree_hits(repo, local_sha, patterns)
         if hits:
             return Outcome(1, f"split guard: personal identifiers in the tree of {parts[0]} ({local_sha[:10]}); refusing to push to '{remote_name}'.\n" + _format_hits(hits))
@@ -405,9 +412,44 @@ def report(repo: Path, role: str) -> Outcome:
     return Outcome(0, "\n".join(lines))
 
 
+def _read_stdin() -> str:
+    """Stdin as UTF-8 regardless of the console locale (Windows would otherwise decode with cp1252)."""
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin.read()
+    return buffer.read().decode("utf-8", errors="replace")
+
+
+def guard_target(payload, fallback: Path):
+    """(repo, role) for the checkout a Claude Code write lands in.
+
+    The target file decides, not the cwd: a session running in one checkout can
+    still write into the other. Falls back to the cwd repo when the path is not
+    inside any checkout or the lookup fails.
+    """
+    file_path = None
+    if isinstance(payload, dict) and isinstance(payload.get("tool_input"), dict):
+        file_path = payload["tool_input"].get("file_path")
+    repo = fallback
+    if file_path:
+        target = Path(str(file_path)).resolve()
+        for candidate in (target, *target.parents):
+            if candidate.is_dir():
+                try:
+                    repo = repo_root(candidate)
+                except RuntimeError:
+                    repo = fallback
+                break
+    return repo, detect_role(repo)
+
+
 def main(argv=None) -> int:
     import argparse
     import json
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
 
     parser = argparse.ArgumentParser(description="Personal/public split guardrails.")
     parser.add_argument("--hook", choices=["pre-commit", "pre-push"])
@@ -420,6 +462,11 @@ def main(argv=None) -> int:
         repo = repo_root()
     except RuntimeError as err:
         print(f"split guard: not inside a git checkout ({err})", file=sys.stderr)
+        # Claude Code runs PreToolUse hooks with cwd set to the project directory,
+        # so a cwd outside any git checkout means the session is not in either
+        # split checkout at all; blocking would break unrelated projects that
+        # merely share this hook configuration. Git hooks always run inside a
+        # checkout, so for them this branch is a real error.
         return 0 if args.claude_guard else 1
     role = detect_role(repo)
 
@@ -437,14 +484,19 @@ def main(argv=None) -> int:
         outcome = hook_pre_commit(repo, role, patterns)
     elif args.hook == "pre-push":
         remote_name = args.hook_args[0] if args.hook_args else ""
-        ref_lines = [line for line in sys.stdin.read().splitlines() if line.strip()]
+        ref_lines = [line for line in _read_stdin().splitlines() if line.strip()]
         outcome = hook_pre_push(repo, role, patterns, remote_name, ref_lines)
     elif args.claude_guard:
+        # Fail closed: any unexpected error while judging a write blocks it.
         try:
-            payload = json.loads(sys.stdin.read() or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        outcome = claude_guard(repo, role, patterns, payload)
+            try:
+                payload = json.loads(_read_stdin() or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            target, target_role = guard_target(payload, repo)
+            outcome = claude_guard(target, target_role, patterns, payload)
+        except Exception as err:  # noqa: BLE001
+            outcome = Outcome(2, f"split guard: internal error, blocking the write: {err!r}")
     else:
         outcome = report(repo, role)
         print(outcome.message)
