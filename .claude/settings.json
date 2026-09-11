@@ -19,5 +19,16 @@
       "Bash(python3 tools/verify_pdf.py:*)",
       "Bash(pdftotext:*)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "sh .githooks/split-guard --banner" } ] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [ { "type": "command", "command": "sh .githooks/split-guard --claude-guard" } ]
+      }
+    ]
   }
 }

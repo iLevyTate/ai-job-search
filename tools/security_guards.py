@@ -15,7 +15,7 @@ Checks:
    which would auto-approve commands on every fork. The same file's `hooks`
    key is held to an allowlist too: a hook runs automatically when its event
    fires, with no prompt, so it is strictly more dangerous than a pre-approved
-   permission.
+   permission. The only hooks allowed are the two split-guard commands.
 2. .gitignore — the personal-data ignore rules must all still be present,
    and no un-allowlisted negation (!pattern) may re-include them. Catches
    weakening that would make future users silently commit their tracker,
@@ -128,7 +128,6 @@ ALLOWED_IGNORE_NEGATIONS = {
 }
 
 # Hook commands the template legitimately ships, as "<Event>:<command>" strings.
-# Empty by design - the template ships no hooks at all.
 #
 # A hook is strictly more dangerous than a permissions.allow entry. A permission
 # pre-approves something Claude may choose to do; a hook runs unconditionally when
@@ -137,7 +136,13 @@ ALLOWED_IGNORE_NEGATIONS = {
 # August 2026 wave, planting a SessionStart hook in .claude/settings.json that
 # executed on session start:
 # https://research.jfrog.com/post/shai-hulud-is-back-august/
-ALLOWED_HOOKS: set[str] = set()
+# The two split-guard hooks (tools/split_check.py via the .githooks shim):
+# a role banner at session start, and a PreToolUse guard that refuses Desk
+# edits in a personal checkout or personal identifiers in the public one.
+ALLOWED_HOOKS: set[str] = {
+    "SessionStart:sh .githooks/split-guard --banner",
+    "PreToolUse:sh .githooks/split-guard --claude-guard",
+}
 
 FORBIDDEN_SCRIPTS = {"preinstall", "install", "postinstall", "prepare", "prepack"}
 

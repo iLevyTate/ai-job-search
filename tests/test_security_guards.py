@@ -208,17 +208,10 @@ class HookGuardTests(GuardRepoFixture):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_allowlisted_hook_passes(self):
-        command = "SessionStart:echo reviewed"
-        guard = self.root / "tools" / "security_guards.py"
-        guard.write_text(
-            guard.read_text(encoding="utf-8").replace(
-                "ALLOWED_HOOKS: set[str] = set()",
-                f"ALLOWED_HOOKS: set[str] = {{{command!r}}}",
-            ),
-            encoding="utf-8",
-        )
+        command = "sh .githooks/split-guard --banner"
+        self.assertIn(f"SessionStart:{command}", security_guards.ALLOWED_HOOKS)
         self.write_settings_with_hooks(
-            {"SessionStart": [{"hooks": [{"type": "command", "command": "echo reviewed"}]}]}
+            {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}
         )
         result = run_guards(self.root)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -421,6 +414,21 @@ class RealRepoTests(unittest.TestCase):
         # The live check CI runs: the actual repo tree must satisfy its own guards.
         result = run_guards(REPO_ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class SplitGuardHooksAreAllowed(unittest.TestCase):
+    def test_the_two_split_guard_hooks_and_nothing_else(self):
+        self.assertEqual(
+            security_guards.ALLOWED_HOOKS,
+            {
+                "SessionStart:sh .githooks/split-guard --banner",
+                "PreToolUse:sh .githooks/split-guard --claude-guard",
+            },
+        )
+
+    def test_shipped_settings_pass_the_guard(self):
+        result = run_guards(REPO_ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout)
 
 
 if __name__ == "__main__":
