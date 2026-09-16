@@ -70,7 +70,7 @@ export function renderJobs(container, { jobs = [], filter = "open", query = "", 
   const counts = countBuckets(jobs);
   const toolbar = document.createElement("div");
   toolbar.className = "list-toolbar";
-  toolbar.innerHTML = `<div class="filters" role="tablist" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
+  toolbar.innerHTML = `<div class="filters" role="group" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
     <label class="search"><span class="sr-only">Search jobs</span><input type="search" data-job-search placeholder="Search title, company, place" value="${escapeHtml(query)}"></label>`;
   container.append(toolbar);
 
@@ -142,7 +142,12 @@ export function renderApplications(container, { applications = [], status = "rea
   }
   const list = document.createElement("div");
   list.className = "app-list";
-  const sorted = [...applications].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+  const sorted = [...applications].sort((left, right) => {
+    const leftDate = left.date ? String(left.date) : "";
+    const rightDate = right.date ? String(right.date) : "";
+    if (!leftDate || !rightDate) return leftDate ? -1 : rightDate ? 1 : 0;
+    return rightDate.localeCompare(leftDate);
+  });
   for (const app of sorted) {
     const row = document.createElement("article");
     row.className = `app-row${app.open ? " open" : ""}`;
