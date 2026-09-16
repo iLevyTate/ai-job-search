@@ -1375,6 +1375,12 @@ body.gated .stage {
   gap: 0.4rem;
 }
 
+.artifact-group {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+}
+
 .artifact-item {
   display: flex;
   justify-content: space-between;

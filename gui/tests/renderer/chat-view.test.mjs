@@ -324,3 +324,11 @@ test("sidebar and palette render primary actions from metadata", () => {
   assert.deepEqual([...steps.querySelectorAll("[data-action]")].map((node) => node.dataset.action), ["setup", "scrape", "apply", "autofill"]);
   assert.equal(palette.querySelector("[data-command='apply'] strong").textContent, "Apply");
 });
+
+test("a palette query that matches nothing says so instead of going blank", () => {
+  const doc = document();
+  const palette = doc.createElement("div");
+  renderPaletteList(palette, filterCommands(commands, "zzzz"));
+  assert.equal(palette.querySelector("[data-command]"), null);
+  assert.equal(palette.querySelector(".list-empty").textContent, "No steps match that.");
+});

@@ -187,9 +187,13 @@ function scrollLog() {
   jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
 }
 
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+}
+
 function jumpToLatest() {
   stickToBottom = true;
-  logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+  logEl.scrollTo({ top: logEl.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   jumpBtn.hidden = true;
 }
 
@@ -203,10 +207,12 @@ function paintMode() {
   modeEl.dataset.mode = state.permissionMode;
 }
 
+let announceTimer = null;
 function announce(text) {
   if (!announceEl) return;
   announceEl.textContent = "";
-  window.setTimeout(() => { announceEl.textContent = text; }, 50);
+  window.clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => { announceEl.textContent = text; }, 50);
 }
 
 function paintChat() {
@@ -1074,17 +1080,15 @@ resetBtn.addEventListener("click", async () => {
     statusEl.textContent = "Starting a new conversation…";
     return;
   }
-  if (!runtimeSend({ type: "conversation.reset" })) {
-    try {
-      const res = await post("/reset");
-      if (!res.ok) {
-        notice("Could not start a new conversation. Try again in a moment.");
-        return;
-      }
-    } catch {
-      notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+  try {
+    const res = await post("/reset");
+    if (!res.ok) {
+      notice("Could not start a new conversation. Try again in a moment.");
       return;
     }
+  } catch {
+    notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+    return;
   }
   const wasBusy = busy;
   clearConversation();
@@ -1378,8 +1382,12 @@ function applyPracticeJob() {
 jobsEl.addEventListener("click", async (event) => {
   const filter = event.target.closest("[data-job-filter]");
   if (filter) {
-    jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+    const chosen = filter.dataset.jobFilter;
+    jobsState = { ...jobsState, filter: chosen };
     paintJobs();
+    // The repaint replaces the button that was just pressed, which left a
+    // keyboard user back on <body> with no way to reach the next filter.
+    jobsEl.querySelector(`[data-job-filter="${CSS.escape(chosen)}"]`)?.focus();
     return;
   }
   if (event.target.closest("[data-sample-job]")) {
@@ -1553,23 +1561,33 @@ docInput?.addEventListener("change", () => {
 });
 
 let dragDepth = 0;
+// hidden alone left aria-hidden="true" on the panel even while it was on
+// screen, so a screen reader never heard the drop target announced.
+function setDropzone(open) {
+  dropzone.hidden = !open;
+  dropzone.setAttribute("aria-hidden", String(!open));
+}
+
 document.addEventListener("dragenter", (event) => {
   if (!event.dataTransfer?.types?.includes("Files")) return;
   dragDepth += 1;
-  dropzone.hidden = false;
+  setDropzone(true);
 });
 document.addEventListener("dragleave", () => {
   dragDepth = Math.max(0, dragDepth - 1);
-  if (!dragDepth) dropzone.hidden = true;
+  if (!dragDepth) setDropzone(false);
 });
 document.addEventListener("dragover", (event) => {
   if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
 });
 document.addEventListener("drop", (event) => {
   dragDepth = 0;
-  dropzone.hidden = true;
-  if (!event.dataTransfer?.files?.length) return;
+  setDropzone(false);
+  // A dropped link used to navigate the whole window, because preventDefault
+  // ran only on the file path. Text dropped into the composer still works.
+  if (event.target?.closest?.("input, textarea")) return;
   event.preventDefault();
+  if (!event.dataTransfer?.files?.length) return;
   uploadDocuments(event.dataTransfer.files);
 });
 
@@ -1607,6 +1625,9 @@ filesEl.addEventListener("click", (event) => {
   }
 });
 filesEl.addEventListener("keydown", (event) => {
+  // Only the file list moves the selection; inside the preview the arrows
+  // belong to whatever is being read.
+  if (!event.target?.closest?.(".artifact-list")) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
@@ -1650,6 +1671,7 @@ let lastHealth = null;
 let claudeAutoStarted = false;
 
 function setGate(open, title, copy) {
+  const wasOpen = document.body.classList.contains("gated");
   document.body.classList.toggle("gated", open);
   gate.hidden = !open;
   gate.inert = !open;
@@ -1664,7 +1686,10 @@ function setGate(open, title, copy) {
   if (open) {
     setMenu(false);
     gate.querySelector(".gate-card")?.focus();
-  } else {
+  } else if (wasOpen) {
+    // Only take focus back when the gate was really in the way. Every health
+    // refresh calls setGate(false), and that used to yank the caret out of the
+    // jobs search box or an open sheet mid-word.
     promptEl.focus();
   }
 }
@@ -1948,7 +1973,10 @@ updateBtn?.addEventListener("click", async () => {
 checkClaude();
 
 tickClock();
-window.setInterval(tickClock, 30000);
+window.setTimeout(() => {
+  tickClock();
+  window.setInterval(tickClock, 60_000);
+}, 60_000 - (Date.now() % 60_000));
 refreshUpdate();
 window.setInterval(refreshUpdate, 60_000);
 sizePrompt();

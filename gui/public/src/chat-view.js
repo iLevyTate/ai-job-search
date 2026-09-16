@@ -565,6 +565,13 @@ export function renderChat(container, state, options = {}) {
 
 export function renderPaletteList(container, commands) {
   container.replaceChildren();
+  if (!commands.length) {
+    const empty = container.ownerDocument.createElement("p");
+    empty.className = "list-empty";
+    empty.textContent = "No steps match that.";
+    container.append(empty);
+    return;
+  }
   for (const command of commands) {
     const button = container.ownerDocument.createElement("button");
     button.type = "button";

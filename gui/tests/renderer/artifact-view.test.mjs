@@ -83,3 +83,16 @@ test("Open and Reveal require confirmation and arrow keys move selection", () =>
   assert.equal(selected.dataset.artifactId, "a2");
   assert.equal(selected.tabIndex, 0);
 });
+
+test("the file list groups each reply so the listbox holds only options and groups", () => {
+  const doc = document();
+  const root = doc.createElement("section");
+  renderArtifactView(root, createArtifactViewState({ artifacts, selectedId: "a1" }));
+  const list = root.querySelector(".artifact-list");
+  assert.equal(list.getAttribute("role"), "listbox");
+  for (const child of list.children) {
+    assert.equal(child.getAttribute("role"), "group", "a listbox child must be a group, not a loose heading");
+  }
+  assert.deepEqual([...list.children].map((group) => group.getAttribute("aria-label")), ["Reply 1", "Reply 2"]);
+  assert.equal(list.querySelectorAll("[data-artifact-id]").length, 3);
+});

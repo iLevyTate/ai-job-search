@@ -9435,10 +9435,14 @@ ${incoming}`;
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", "Artifacts");
     groupArtifactsByTurn(state2.artifacts).forEach((group, index) => {
+      const section = document2.createElement("div");
+      section.className = "artifact-group";
+      section.setAttribute("role", "group");
+      section.setAttribute("aria-label", `Reply ${index + 1}`);
       const heading = document2.createElement("p");
       heading.className = "kicker";
       heading.textContent = `Reply ${index + 1}`;
-      list.append(heading);
+      section.append(heading);
       for (const artifact of group.items) {
         const button = document2.createElement("button");
         button.type = "button";
@@ -9448,8 +9452,9 @@ ${incoming}`;
         button.setAttribute("aria-selected", String(artifact.id === state2.selectedId));
         button.tabIndex = artifact.id === state2.selectedId ? 0 : -1;
         button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
-        list.append(button);
+        section.append(button);
       }
+      list.append(section);
     });
     const preview = document2.createElement("div");
     preview.className = "artifact-preview";
@@ -9638,7 +9643,7 @@ ${incoming}`;
     const counts = countBuckets(jobs);
     const toolbar = document2.createElement("div");
     toolbar.className = "list-toolbar";
-    toolbar.innerHTML = `<div class="filters" role="tablist" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
+    toolbar.innerHTML = `<div class="filters" role="group" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
     <label class="search"><span class="sr-only">Search jobs</span><input type="search" data-job-search placeholder="Search title, company, place" value="${escapeHtml2(query)}"></label>`;
     container.append(toolbar);
     const shown = filterJobs(jobs, filter, query);
@@ -9701,7 +9706,12 @@ ${incoming}`;
     }
     const list = document2.createElement("div");
     list.className = "app-list";
-    const sorted = [...applications].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+    const sorted = [...applications].sort((left, right) => {
+      const leftDate = left.date ? String(left.date) : "";
+      const rightDate = right.date ? String(right.date) : "";
+      if (!leftDate || !rightDate) return leftDate ? -1 : rightDate ? 1 : 0;
+      return rightDate.localeCompare(leftDate);
+    });
     for (const app of sorted) {
       const row = document2.createElement("article");
       row.className = `app-row${app.open ? " open" : ""}`;
@@ -10304,6 +10314,13 @@ ${multiline}` : rendered;
   }
   function renderPaletteList(container, commands2) {
     container.replaceChildren();
+    if (!commands2.length) {
+      const empty = container.ownerDocument.createElement("p");
+      empty.className = "list-empty";
+      empty.textContent = "No steps match that.";
+      container.append(empty);
+      return;
+    }
     for (const command of commands2) {
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
@@ -10470,9 +10487,12 @@ ${multiline}` : rendered;
     if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
   }
+  function prefersReducedMotion() {
+    return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  }
   function jumpToLatest() {
     stickToBottom = true;
-    logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+    logEl.scrollTo({ top: logEl.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
     jumpBtn.hidden = true;
   }
   function paintMode() {
@@ -10482,10 +10502,12 @@ ${multiline}` : rendered;
     modeEl.title = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
     modeEl.dataset.mode = state.permissionMode;
   }
+  var announceTimer = null;
   function announce(text) {
     if (!announceEl) return;
     announceEl.textContent = "";
-    window.setTimeout(() => {
+    window.clearTimeout(announceTimer);
+    announceTimer = window.setTimeout(() => {
       announceEl.textContent = text;
     }, 50);
   }
@@ -11246,17 +11268,15 @@ ${multiline}` : rendered;
       statusEl.textContent = "Starting a new conversation\u2026";
       return;
     }
-    if (!runtimeSend({ type: "conversation.reset" })) {
-      try {
-        const res = await post("/reset");
-        if (!res.ok) {
-          notice("Could not start a new conversation. Try again in a moment.");
-          return;
-        }
-      } catch {
-        notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+    try {
+      const res = await post("/reset");
+      if (!res.ok) {
+        notice("Could not start a new conversation. Try again in a moment.");
         return;
       }
+    } catch {
+      notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+      return;
     }
     const wasBusy = busy;
     clearConversation();
@@ -11531,8 +11551,10 @@ ${jobsState.samplePosting}`);
   jobsEl.addEventListener("click", async (event) => {
     const filter = event.target.closest("[data-job-filter]");
     if (filter) {
-      jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+      const chosen = filter.dataset.jobFilter;
+      jobsState = { ...jobsState, filter: chosen };
       paintJobs();
+      jobsEl.querySelector(`[data-job-filter="${CSS.escape(chosen)}"]`)?.focus();
       return;
     }
     if (event.target.closest("[data-sample-job]")) {
@@ -11693,23 +11715,28 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     docInput.value = "";
   });
   var dragDepth = 0;
+  function setDropzone(open) {
+    dropzone.hidden = !open;
+    dropzone.setAttribute("aria-hidden", String(!open));
+  }
   document.addEventListener("dragenter", (event) => {
     if (!event.dataTransfer?.types?.includes("Files")) return;
     dragDepth += 1;
-    dropzone.hidden = false;
+    setDropzone(true);
   });
   document.addEventListener("dragleave", () => {
     dragDepth = Math.max(0, dragDepth - 1);
-    if (!dragDepth) dropzone.hidden = true;
+    if (!dragDepth) setDropzone(false);
   });
   document.addEventListener("dragover", (event) => {
     if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
   });
   document.addEventListener("drop", (event) => {
     dragDepth = 0;
-    dropzone.hidden = true;
-    if (!event.dataTransfer?.files?.length) return;
+    setDropzone(false);
+    if (event.target?.closest?.("input, textarea")) return;
     event.preventDefault();
+    if (!event.dataTransfer?.files?.length) return;
     uploadDocuments(event.dataTransfer.files);
   });
   modeToggle?.addEventListener("click", () => modeSheet.showModal());
@@ -11744,6 +11771,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     }
   });
   filesEl.addEventListener("keydown", (event) => {
+    if (!event.target?.closest?.(".artifact-list")) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
@@ -11779,6 +11807,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
   var lastHealth = null;
   var claudeAutoStarted = false;
   function setGate(open, title, copy) {
+    const wasOpen = document.body.classList.contains("gated");
     document.body.classList.toggle("gated", open);
     gate.hidden = !open;
     gate.inert = !open;
@@ -11793,7 +11822,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (open) {
       setMenu(false);
       gate.querySelector(".gate-card")?.focus();
-    } else {
+    } else if (wasOpen) {
       promptEl.focus();
     }
   }
@@ -12046,7 +12075,10 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
   });
   checkClaude();
   tickClock();
-  window.setInterval(tickClock, 3e4);
+  window.setTimeout(() => {
+    tickClock();
+    window.setInterval(tickClock, 6e4);
+  }, 6e4 - Date.now() % 6e4);
   refreshUpdate();
   window.setInterval(refreshUpdate, 6e4);
   sizePrompt();
