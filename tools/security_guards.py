@@ -56,6 +56,8 @@ ALLOWED_PERMISSIONS = {
     "Bash(bunx playwright:*)",
     "Bash(python salary_lookup.py:*)",
     "Bash(python3 salary_lookup.py:*)",
+    "Bash(python tools/rank_state.py:*)",
+    "Bash(python3 tools/rank_state.py:*)",
     "Bash(python tools/verify_pdf.py:*)",
     "Bash(python3 tools/verify_pdf.py:*)",
     "Bash(pdftotext:*)",
