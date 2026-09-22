@@ -13,6 +13,8 @@ per-file diff commands.
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-09-21
+
 ### Changed
 - `/scrape` no longer searches LinkedIn unless you opt in. `linkedin-search`
   ships with `enabled: false` because LinkedIn's User Agreement prohibits

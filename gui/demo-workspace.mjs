@@ -203,7 +203,7 @@ function escapeRegExp(text) {
 export function redactText(text, terms = redactionTerms()) {
   let out = String(text ?? "");
   out = out.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, DEMO_PERSON.email);
-  out = out.replace(/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/g, DEMO_PERSON.phone);
+  out = out.replace(/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b/g, DEMO_PERSON.phone);
   const sorted = [...terms].sort((left, right) => right.length - left.length);
   for (const term of sorted) {
     if (term.length < 3) continue;
