@@ -46,9 +46,11 @@ macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then 
 
 The app does not replace `/setup`. Autofill never clicks Submit.
 
-## 32-second tour
+## Tour
 
-Watch [assets/desk-tour.mp4](assets/desk-tour.mp4). It is a screen recording of the live Desk: Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit.
+![Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill](assets/desk-tour.gif)
+
+Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit. [Full video](assets/desk-tour.mp4).
 
 To walk the live page without your own hunt files:
 
