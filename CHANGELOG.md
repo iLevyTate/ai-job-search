@@ -13,7 +13,45 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Changed
+- `/scrape` no longer searches LinkedIn unless you opt in. `linkedin-search`
+  ships with `enabled: false` because LinkedIn's User Agreement prohibits
+  scraping, and the default `search-queries.md` no longer sends
+  `site:linkedin.com` queries. Set `enabled: true` in that skill if you accept
+  the risk yourself; a release leaves it off. `/add-portal` creates the same
+  kind of board **off**, and does not flip it on for you.
+- Job Search Desk sign-in now runs entirely inside Claude Code. **Sign in to
+  Claude Code** opens a terminal window running `claude auth login`; the person
+  finishes there with a Claude plan or an Anthropic Console API key, whichever
+  Claude Code offers. Desk no longer starts a hidden login, reads the sign-in
+  link out of its output, or relays a pasted code into it; it only polls
+  `claude auth status` and continues once Claude Code reports signed in. This
+  follows Anthropic's Claude Code legal and compliance page: sign-in completes
+  through Anthropic's own flow and a third-party desk does not intermediate
+  credentials. Sign-in also waits for a click instead of opening on its own.
+- Demo mode (`--demo`) also blanks the account's organization name and the
+  Claude Code path in `/auth/status`; both carried the real email or user name.
+  Chat in demo replays one fixed turn and does not start Claude Code, including
+  the Agent SDK runtime. The sample CV is plain text.
+
 ### Fixed
+- Terminal windows Desk opens on Windows (**Open in Terminal**, and now
+  sign-in) could not find `node`, `claude`, or even `where`. The PATH Desk
+  built repeated the saved Windows PATH on top of the process PATH and passed
+  cmd.exe's 8191-character limit, past which `%PATH%` expands to nothing. Each
+  folder is now kept once.
+
+### Added
+- Job Search Desk installs Claude in Chrome the easy way: first run and the
+  sign-in card show **Add Claude in Chrome**, which opens the official Chrome
+  Web Store. Tools check lists it. Once the extension is on this computer,
+  Desk turns Chrome mode on by itself. A missing extension still stays off
+  so a turn cannot wait on it. `JOB_SEARCH_CLAUDE_CHROME=0` forces it off.
+
+### Fixed
+- Job Search Desk no longer shows a crash dialog for `(-3) loading
+  .../starting.html`. That abort happens when the splash page is replaced by
+  the real desk window. A real start failure still shows the error box.
 - Job Search Desk, after a line-by-line audit of the 1.3.0 app:
   - Updates: the release workflow now publishes electron-updater's
     `latest*.yml` next to the installers, so the installed app can actually

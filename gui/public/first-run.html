@@ -40,6 +40,10 @@
       </button>
     </div>
     <p id="claude-prep" class="hint">Getting Claude Code ready…</p>
+    <p id="chrome-prep" class="hint">Checking Claude in Chrome…</p>
+    <div id="chrome-actions" class="empty-actions" hidden>
+      <button type="button" id="add-chrome">Add Claude in Chrome</button>
+    </div>
     <p id="first-run-status" class="status first-run-status">Pick a folder to continue.</p>
     <p class="seal">Local only · your files stay on this computer</p>
   </main>
@@ -183,12 +187,70 @@
       }
     }
 
+    function paintChrome(info) {
+      const prep = document.getElementById("chrome-prep");
+      const actions = document.getElementById("chrome-actions");
+      if (!prep || !actions) return;
+      if (info?.forcedOff) {
+        prep.textContent = "Claude in Chrome is turned off for this desk (JOB_SEARCH_CLAUDE_CHROME=0).";
+        actions.hidden = true;
+        return;
+      }
+      if (info?.installed) {
+        prep.textContent = "Claude in Chrome is installed. Desk will use it for job sites and sign-in pages.";
+        actions.hidden = true;
+        return;
+      }
+      prep.textContent = "Add Claude in Chrome so Claude can open job boards in your browser. Chrome only installs it from the official store; Desk cannot pack it into the installer.";
+      actions.hidden = false;
+    }
+
+    async function prepareChrome() {
+      const desk = api();
+      const prep = document.getElementById("chrome-prep");
+      if (!prep) return;
+      if (!desk?.claudeChromeStatus) {
+        prep.textContent = "Add Claude in Chrome from Tools check after you pick a folder.";
+        return;
+      }
+      try {
+        paintChrome(await desk.claudeChromeStatus());
+      } catch {
+        prep.textContent = "Claude in Chrome can be added after you pick a folder.";
+      }
+    }
+
+    document.getElementById("add-chrome")?.addEventListener("click", async () => {
+      const desk = api();
+      const button = document.getElementById("add-chrome");
+      const prep = document.getElementById("chrome-prep");
+      if (!desk?.installClaudeChrome) return;
+      button.disabled = true;
+      prep.textContent = "Chrome is opening the official Claude page. Click Add to Chrome, then come back here.";
+      try {
+        paintChrome(await desk.installClaudeChrome());
+      } catch {
+        prep.textContent = "Could not open Chrome. Open the Chrome Web Store and search for Claude.";
+      } finally {
+        button.disabled = false;
+      }
+      const poll = window.setInterval(async () => {
+        try {
+          const info = await desk.claudeChromeStatus();
+          paintChrome(info);
+          if (info?.installed) window.clearInterval(poll);
+        } catch {
+          window.clearInterval(poll);
+        }
+      }, 2000);
+    });
+
     async function prepareClaude() {
       const desk = api();
       const prep = document.getElementById("claude-prep");
       if (!desk?.ensureClaude || !prep) return;
       const label = (info) => {
-        if (info?.status === "ready") return "Claude Code is ready. Pick where your job search lives and Desk will sign you in if needed.";
+        if (info?.status === "ready") return "Claude Code is ready. Pick where your job search lives. If Claude Code is signed out, Desk will ask you to sign in through it.";
         if (info?.status === "installing") return "Installing Claude Code in the background. This can take a minute or two…";
         if (info?.status === "failed") return "Claude Code did not install yet. Pick a folder anyway; Desk will try again there.";
         return "Getting Claude Code ready…";
@@ -217,6 +279,7 @@
 
     showFound();
     prepareClaude();
+    prepareChrome();
   </script>
 </body>
 </html>

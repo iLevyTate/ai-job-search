@@ -71,7 +71,7 @@ test("Safe mode never enables bypass permissions", async () => {
 test("Chrome stays off for the SDK session unless JOB_SEARCH_CLAUDE_CHROME=1", async () => {
   const saved = process.env.JOB_SEARCH_CLAUDE_CHROME;
   try {
-    delete process.env.JOB_SEARCH_CLAUDE_CHROME;
+    process.env.JOB_SEARCH_CLAUDE_CHROME = "0";
     const off = {};
     await createAgentSdkAdapter({ cwd: ".", claudeExecutable: "claude", permissionMode: "safe", queryImpl: fakeQuery(off) }).start();
     assert.deepEqual(off.options.extraArgs, { "no-chrome": null });

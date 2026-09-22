@@ -9,6 +9,9 @@
   "main": "electron-main.mjs",
   "scripts": {
     "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "dev:demo": "node server.mjs --demo",
+    "record": "node scripts/record-tour.mjs",
     "cli": "node server.mjs --cli",
     "app": "electron .",
     "test": "npm run test:unit && npm run test:renderer",

@@ -1,6 +1,7 @@
 /**
- * Locate Claude Code, read subscription login state, and run the official
- * install / claude.ai login flows. Used by the localhost desk and the app.
+ * Locate Claude Code, read its sign-in state, and run the official installer.
+ * Sign-in itself is never driven from here: it runs in Claude Code's own
+ * window (see openClaudeLogin in workspace.mjs). Used by the desk and the app.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +9,9 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { CLAUDE_INSTALL_PS1, CLAUDE_INSTALL_SH, DESK_SESSION_NAME } from "./defaults.mjs";
+import { chromeEnabled } from "./claude-chrome.mjs";
+
+export { chromeEnabled };
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === "win32";
@@ -70,11 +74,29 @@ function windowsPersistedPath() {
   return persistedWindowsPath !== undefined ? persistedWindowsPath : "";
 }
 
+/**
+ * cmd.exe drops a variable longer than 8191 characters, so %PATH% comes back
+ * empty and even `where` stops resolving. The persisted PATH repeats most of
+ * the process PATH; keep the first occurrence of each folder.
+ */
+export function dedupePathEntries(joined) {
+  const seen = new Set();
+  const kept = [];
+  for (const entry of joined.split(delimiter)) {
+    if (!entry) continue;
+    const key = IS_WIN ? entry.toLowerCase().replace(/[\\/]+$/, "") : entry.replace(/\/+$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(entry);
+  }
+  return kept.join(delimiter);
+}
+
 export function withClaudePath(env = process.env) {
   const extras = extraBinDirs(env);
   const persisted = env === process.env ? windowsPersistedPath() : "";
   const parts = [...extras, persisted, env.PATH || ""].filter(Boolean);
-  return { ...env, PATH: parts.join(delimiter) };
+  return { ...env, PATH: dedupePathEntries(parts.join(delimiter)) };
 }
 
 function candidateNames(name) {
@@ -181,24 +203,6 @@ export function parseAuthStatus(raw) {
   };
 }
 
-export function extractHttpsUrls(text) {
-  if (!text) return [];
-  const found = [];
-  for (const match of text.matchAll(/https:\/\/[^\s)\]>'"]+/g)) {
-    const url = match[0].replace(/[.,;]+$/, "");
-    if (!found.includes(url)) found.push(url);
-  }
-  return found;
-}
-
-export function loginNeedsCode(text) {
-  return /paste code here/i.test(text || "");
-}
-
-export function loginSucceeded(text) {
-  return /login successful/i.test(text || "");
-}
-
 export function isJobSearchWorkspace(root) {
   return Boolean(
     root && existsSync(join(root, "gui", "server.mjs")) && existsSync(join(root, "AGENTS.md")),
@@ -249,10 +253,6 @@ function nodeRunner(env = process.env) {
   if (found !== "node" && existsSync(found)) return { file: found, asNode: false };
   // Packaged Electron machines may have no system Node; Electron can be one.
   return { file: process.execPath, asNode: Boolean(process.versions.electron) };
-}
-
-export function chromeEnabled(env = process.env) {
-  return env.JOB_SEARCH_CLAUDE_CHROME === "1";
 }
 
 export function turnStatusText({ chrome = chromeEnabled(), resuming = false } = {}) {
@@ -431,17 +431,4 @@ export function claudeSupportsDeskRuntime(version) {
   if (version.major !== 2) return version.major > 2;
   if (version.minor !== 1) return version.minor > 1;
   return version.patch >= 219;
-}
-
-export function spawnSubscriptionLogin({ cwd, email } = {}) {
-  const args = ["auth", "login", "--claudeai"];
-  if (email) args.push("--email", email);
-  const child = spawnClaude(args, { cwd, detached: process.platform !== "win32" });
-  // If the spawn fails, stdin errors asynchronously; without a listener that
-  // EPIPE is an uncaught exception in the desk process.
-  child.stdin?.on("error", () => {});
-  // Nothing is written to stdin here: the CLI reads its "Paste code here"
-  // prompt from it, and an eager newline was answered with "Invalid code"
-  // before the person had done anything.
-  return child;
 }

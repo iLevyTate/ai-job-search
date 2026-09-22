@@ -88,7 +88,8 @@ export function createAgentSdkAdapter({
           settingSources: ["user", "project", "local"],
           permissionMode: sdkPermissionMode(permissionMode),
           allowDangerouslySkipPermissions: allowDangerouslySkipPermissions(permissionMode),
-          // gui/README: Claude in Chrome is off unless JOB_SEARCH_CLAUDE_CHROME=1.
+          // Chrome mode is on when the official extension is installed, or
+          // when JOB_SEARCH_CLAUDE_CHROME=1. Missing extension stays off.
           extraArgs: chromeEnabled() ? undefined : { "no-chrome": null },
           canUseTool,
           stderr: onStderr,

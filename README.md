@@ -36,14 +36,28 @@ Release CI does **not** build Intel Mac. Apple Silicon only on macOS.
 
 1. Run the installer. Windows adds Start Menu and Desktop shortcuts and launches the app. If Windows SmartScreen says it protected your PC, click **More info**, then **Run anyway**. That warning is a missing signature, not a virus scan. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of this public repo (Git is optional).
-3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's installer. If you are signed out, it opens the same **claude.ai** login you use in Chrome.
-4. After you are signed in, run **Setup** once so the folder has your profile.
+3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's installer. If you are signed out, **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there with your Claude plan or an Anthropic Console API key. Desk never sees the code or token.
+4. If Claude in Chrome is missing, click **Add Claude in Chrome** on first run or the sign-in card. Chrome opens the official store. Add the extension; Desk uses it after that. The installer cannot pack a Chrome extension.
+5. After you are signed in, run **Setup** once so the folder has your profile.
 
 A second click of the shortcut focuses the window that is already running. It does not start a second desk.
 
 macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then **Open**.
 
 The app does not replace `/setup`. Autofill never clicks Submit.
+
+## 32-second tour
+
+Watch [assets/desk-tour.mp4](assets/desk-tour.mp4). It is a screen recording of the live Desk: Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit.
+
+To walk the live page without your own hunt files:
+
+```bash
+cd gui
+npm run dev:demo
+```
+
+`npm run record` captures that same demo page.
 
 From a clone, the same desk starts with:
 
@@ -221,10 +235,15 @@ Reconfigure search without a full reset:
 /setup --section search
 ```
 
-Register your own CV or cover letter toolchain with `/add-template`. Add another US board with `/add-portal`. Enabled by default here:
+Register your own CV or cover letter toolchain with `/add-template`. Add another US board with `/add-portal`. If that board's terms prohibit automated access, the new skill is created **off**; you turn it on yourself.
 
-- **`linkedin-search`**: LinkedIn public `jobs-guest` listings. Personal use only; keep volume low.
+Enabled by default:
+
 - **`freehire-search`**: [freehire.me](https://freehire.me) public API. Self-hostable via [strelov1/freehire](https://github.com/strelov1/freehire).
+
+Installed, off until you turn it on:
+
+- **`linkedin-search`**: LinkedIn's User Agreement prohibits scraping, so `/scrape` skips it. Set `enabled: true` in `.agents/skills/linkedin-search/SKILL.md` if you accept that risk yourself. A release leaves it off.
 
 Portal skills you copy from elsewhere should be read in full before you run them. They execute on your machine against your career data.
 

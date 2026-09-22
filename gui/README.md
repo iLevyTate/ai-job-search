@@ -16,8 +16,8 @@ Then:
 
 1. Run the installer. On Windows it asks whether to replace the previous Job Search Desk or keep a copy, then adds Start Menu and Desktop shortcuts and launches the app. If Windows SmartScreen says it protected your PC, click **More info**, then **Run anyway**. That warning is a missing signature, not a virus scan. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of the public repo (downloads it; Git is optional).
-3. The desk starts Claude Code as soon as it opens. If Claude Code is missing, it runs Anthropic's official installer. If you are signed out, it opens the **claude.ai** login: the same Claude Pro / Max / Team / Enterprise account you use in Chrome.
-4. Optional: install [Claude in Chrome](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn) if you want the browser extension connected later.
+3. The desk starts Claude Code as soon as it opens. If Claude Code is missing, it runs Anthropic's official installer. If you are signed out, click **Sign in to Claude Code**: a terminal window opens running Claude Code's own sign-in (`claude auth login`). Finish it there with your Claude plan or an Anthropic Console API key. Desk never handles the link, the code, or the token; it only asks Claude Code whether you are signed in and carries on when the answer is yes.
+4. If Claude in Chrome is missing, first run and the sign-in card show **Add Claude in Chrome**. That opens the official Chrome Web Store page. Add the extension; Desk turns it on once Chrome has it. Chrome does not let Desk pack the extension into the installer.
 
 A second click of the shortcut focuses the window that is already running. It does not start a second desk.
 
@@ -41,6 +41,15 @@ node gui/server.mjs --cli
 
 Or `bun gui/server.mjs`. Wrappers: `./gui/start.sh` (macOS / Linux) or `.\gui\start.ps1` (Windows). Add `--cli` to those too. From `gui/`: `npm start` or `npm run cli`.
 
+Screen share or record without your hunt files:
+
+```bash
+cd gui
+npm run dev:demo
+```
+
+That starts Desk on a fictional folder (Alex Rivera, Harbor Health, Northstar). The header says **Demo workspace**. Your saved job-search folder is not opened and the shared workspace pointer is not changed. `npm run record` records the same demo page.
+
 Desk and Claude Code share one workspace pointer (`%APPDATA%\ai-job-search\workspace.json` on Windows, `~/Library/Application Support/ai-job-search/workspace.json` on macOS, `~/.config/ai-job-search/workspace.json` on Linux). Scrapes, CVs, applications, and tracker files stay in that repo. Launch either entry point and they keep using the same folder.
 
 If `claude` lives somewhere unusual:
@@ -51,7 +60,7 @@ CLAUDE_BIN=/path/to/claude node gui/server.mjs
 
 The desk listens on `http://127.0.0.1:8765/` (or the next free port up to 8774; `JOB_SEARCH_GUI_PORT` overrides). The installable app uses the same page inside its own window. The browser desk runs the same Claude runtime as the app once `npm ci` has run in `gui/`; without it, the desk falls back to a plain print-mode chat. Native Chat is the default surface. Terminal resumes the same Claude session after a transactional handoff. Files previews generated PDFs and text. Ctrl+K opens the command palette. In browser mode the conversation is kept in `.claude/desk/transcript.json` (ignored by git) so a restart brings it back.
 
-Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`. Without that opt-in, Claude is launched with `--no-chrome` so a missing extension cannot block a turn.
+Claude in Chrome is on when the official extension is already installed. If it is missing, Claude is launched with `--no-chrome` so a turn cannot stall waiting for it. Set `JOB_SEARCH_CLAUDE_CHROME=0` to force it off, or `=1` to force it on.
 
 ## What is on the page
 
@@ -60,14 +69,18 @@ Claude in Chrome is optional and off unless you set `JOB_SEARCH_CLAUDE_CHROME=1`
 - **Applications** reads the tracker: status, deadline, the CV and cover letter (preview inline or open in their usual app), and buttons to record what happened or prepare for an interview.
 - **Files** previews what Claude wrote in the current conversation.
 - **Add your CV or documents** copies files into the documents folder (or drop them anywhere on the page); run Setup afterwards so Claude reads them.
-- **Tools check** shows which programs the steps need on this computer (TeX for PDFs, Bun for searches, Python, the Autofill browser) and how to install each.
+- **Tools check** shows which programs the steps need on this computer (TeX for PDFs, Bun for searches, Python, the Autofill browser, Claude in Chrome) and how to install each.
 - The header says whether Claude **works on its own** or **asks before acting**; in the installed app, **Change** switches between the two.
 - The empty chat shows a checklist (profile, CV, first search, first application) that reflects the folder's real state.
 - When a long step finishes while the window is in the background, the tab title gets a dot and, if you allowed it, a desktop notification.
 
+## 32-second tour
+
+Watch [../assets/desk-tour.mp4](../assets/desk-tour.mp4). It is a screen recording of the live Desk: Setup, Jobs, Apply, and Autofill.
+
 ## How to use it
 
-1. Sign in only if the desk reports you are signed out. Claude Code opens one claude.ai tab for that; if no tab appears, use the **Open the sign-in page** link on the same card. Install Claude Code only if it is missing.
+1. Sign in only if the desk reports you are signed out. **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there. If no window opens, run `claude auth login` in any terminal and Desk picks it up. Install Claude Code only if it is missing.
 2. Click a step in the left column. **Setup** asks for name, location, and the roles you want (every field is optional; skip them and Claude asks). **Find Jobs**, **Rank**, **Interview**, and **Outcome** run as soon as you click them. **Apply** asks for one thing: the job link, or the whole posting pasted in if the site blocks links. **Autofill** asks for the application form link. An empty Jobs tab offers a marked-fake practice posting so you can try Apply before you scrape. **More steps…** (or Ctrl+K) lists everything else, such as Import and Upskill. The installed app shows **Restart** when a new Desk build is ready (the portable exe links to Releases instead).
 3. While Claude works the chat says what it is doing: *Thinking*, *Reading job_search_tracker.csv*, *Writing*. Stop cancels the turn. Scroll up whenever you like; a **Latest** button brings you back. When Claude has a question, a **Needs you** card lists the choices; pick one or type your own answer. When the header says **Asks before acting** (Safe mode), the same kind of card asks before a tool runs.
 4. **Scrape**, then talk: "which of these are real Staff AI roles?" **Rank** when the table is too long.

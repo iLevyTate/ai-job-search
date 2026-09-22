@@ -56,4 +56,4 @@ one; port by hand.
 
 - This repository is a US-market fork of MadsLorentzen/ai-job-search: US boards and English defaults; Danish portal CLIs may remain in-tree but disabled.
 - `CLAUDE.md` and the `01-*.md` skill files in this repo are placeholders until a user runs `/setup` locally.
-- The optional Chrome desk lives in `gui/` and starts with `node gui/server.mjs` on macOS, Windows, and Linux (localhost only; Claude Code with skip-permissions). The installable Job Search Desk from GitHub Releases is the same desk: one-click start, official Claude Code install if missing, `claude auth login --claudeai` for the Chrome / claude.ai subscription.
+- The optional Chrome desk lives in `gui/` and starts with `node gui/server.mjs` on macOS, Windows, and Linux (localhost only; Claude Code with skip-permissions). The installable Job Search Desk from GitHub Releases is the same desk: one-click start, official Claude Code install if missing, and sign-in that runs in Claude Code's own terminal window (`claude auth login`); the desk only polls `claude auth status` and never handles the sign-in link, code, or token.

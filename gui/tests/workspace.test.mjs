@@ -10,6 +10,7 @@ import {
   findExistingWorkspaces,
   gitSearchDirs,
   hasBinary,
+  openClaudeLogin,
   openFolderHint,
   readSharedWorkspace,
   rememberWorkspace,
@@ -159,12 +160,28 @@ test("Linux build finds a clone under src", () => {
   assert.equal(found[0].root, root);
 });
 
-test("windowsCliLaunch never pre-quotes the command", () => {
+test("windowsCliLaunch never pre-quotes a bare command", () => {
   // Node quotes spawn args itself; embedded quotes become \" which cmd.exe cannot parse.
   const cmd = "C:\\Users\\Jane Smith\\AppData\\Roaming\\npm\\claude.cmd";
   assert.equal(windowsCliLaunch(cmd, true), cmd);
   assert.ok(!windowsCliLaunch(cmd, true).includes('"'));
   assert.match(windowsCliLaunch(cmd, false), /^echo /);
+});
+
+test("windowsCliLaunch quotes the path only when arguments follow it", () => {
+  // With arguments the line is passed verbatim, so a spaced path needs quotes
+  // and the arguments must stay outside them (verified against cmd.exe /k).
+  const cmd = "C:\\Users\\Jane Smith\\.local\\bin\\claude.exe";
+  assert.equal(windowsCliLaunch(cmd, true, ["auth", "login"]), `"${cmd}" auth login`);
+  assert.match(windowsCliLaunch(cmd, false, ["auth", "login"]), /^echo /);
+});
+
+test("openClaudeLogin refuses when Claude Code is not installed", () => {
+  // Sign-in belongs to Claude Code's own window; with no binary there is
+  // nothing to open, and the desk must say so instead of spawning a shell.
+  const env = { ...process.env, CLAUDE_BIN: join(tmpdir(), "desk-no-claude-here", "claude") };
+  const result = openClaudeLogin(mkdtempSync(join(tmpdir(), "desk-ws-")), env);
+  assert.match(result.error, /not installed/);
 });
 
 test("hasBinary detects PATH commands before spawning them", () => {

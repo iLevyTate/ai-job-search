@@ -17,22 +17,20 @@ import {
   closePrintInput,
   commandLooksInstalled,
   exitErrorText,
-  extractHttpsUrls,
   getClaudeHealth,
   loadDeskSession,
-  loginNeedsCode,
-  loginSucceeded,
   MISSING_CLAUDE_TEXT,
   resolveCommand,
   saveDeskSession,
   shouldRetryWithoutResume,
   spawnClaude,
   spawnOfficialInstall,
-  spawnSubscriptionLogin,
   turnStatusText,
 } from "./claude.mjs";
 import { CHROME_EXTENSION_URL, CLAUDE_AI_URL, CLAUDE_PRICING_URL, DESK_SESSION_NAME } from "./defaults.mjs";
-import { existingWorkspaceHint, rememberWorkspace, resolveWorkspace, startCli } from "./workspace.mjs";
+import { chromeExtensionStatus, installClaudeChrome, openInChrome } from "./claude-chrome.mjs";
+import { DEMO_LABEL, demoTurnFor, isDemoFlag, prepareDemoWorkspace } from "./demo-workspace.mjs";
+import { existingWorkspaceHint, openClaudeLogin, rememberWorkspace, resolveWorkspace, startCli } from "./workspace.mjs";
 import { ARTIFACT_HTML_CSP, createArtifactService } from "./artifacts.mjs";
 import { createAutofillBridge } from "./autofill-bridge.mjs";
 import { attachWebSocketTransport } from "./websocket-transport.mjs";
@@ -73,6 +71,7 @@ const MIME = {
 
 const clients = new Set();
 let workspace = join(HERE, "..");
+let demoMode = false;
 let deskArtifacts = null;
 let deskRuntime = null;
 let deskAutofill = null;
@@ -80,9 +79,11 @@ let busy = false;
 let sessionId = null;
 let child = null;
 let helper = null;
-// What the running install/login helper has shown so far, so a page that
-// reloads mid sign-in can pick the link and code box up again.
-let helperState = null;
+// Sign-in happens in Claude Code's own window. The desk only polls
+// `claude auth status` until it reports signed in; this is that poll.
+let loginWatch = null;
+const LOGIN_POLL_MS = 2500;
+const LOGIN_WATCH_LIMIT_MS = 10 * 60 * 1000;
 // Why the installed app's session runtime is not running, if it failed to start.
 let runtimeError = "";
 let streamedText = false;
@@ -234,12 +235,17 @@ function sendTurnError(text, detail = "") {
   pushTranscript({ role: "error", text, detail });
 }
 
+function publicWorkspace() {
+  return demoMode ? DEMO_LABEL : workspace;
+}
+
 function snapshot(withTranscript = false) {
   const base = {
     sessionId,
     busy,
     chromeGroup: chromeEnabled() ? DESK_SESSION_NAME : null,
-    workspace,
+    workspace: publicWorkspace(),
+    demo: demoMode,
     runtime: Boolean(deskRuntime),
     runtimeError,
   };
@@ -435,40 +441,17 @@ function forceKill(target) {
 }
 
 function stopHelper() {
+  stopLoginWatch();
   if (!helper) return;
   stopProcess(helper, !IS_WIN);
   helper = null;
-  helperState = null;
 }
 
 function attachHelperOutput(proc, kind) {
-  const announced = new Set();
   const onChunk = (chunk) => {
     const text = chunk.toString("utf8");
     if (!text.trim()) return;
     send("auth-log", { kind, text: text.trim() });
-    if (helperState?.proc === proc) helperState.log = `${helperState.log}${text}`.slice(-4000);
-    // Only the login prints a sign-in link; installer output can carry URLs
-    // of its own (docs, error pages) that must not be offered as one.
-    if (kind === "login") {
-      for (const url of extractHttpsUrls(text)) {
-        if (announced.has(url)) continue;
-        announced.add(url);
-        if (helperState?.proc === proc) helperState.urls.push(url);
-        send("auth-url", { kind, url });
-      }
-    }
-    if (kind === "login" && loginNeedsCode(text)) {
-      if (helperState?.proc === proc) helperState.needsCode = true;
-      send("auth-code", { needed: true });
-    }
-    if (kind === "login" && loginSucceeded(text)) {
-      try {
-        proc.stdin?.write("\n");
-      } catch {
-        // Login may already have closed stdin.
-      }
-    }
   };
   proc.stdout?.on("data", onChunk);
   proc.stderr?.on("data", onChunk);
@@ -481,32 +464,153 @@ function runHelper(kind, factory) {
   }
   const proc = factory();
   helper = proc;
-  helperState = { kind, proc, urls: [], needsCode: false, log: "" };
   // A write to a stdin the helper already closed must not crash the desk.
   proc.stdin?.on("error", () => {});
-  send("auth-log", { kind, text: kind === "install" ? "Installing Claude Code…" : "Opening Claude login…" });
+  send("auth-log", { kind, text: "Installing Claude Code…" });
   attachHelperOutput(proc, kind);
   proc.on("error", (err) => {
     // A cancelled-then-restarted helper's late events must not clobber the
     // live one: only the process that still owns `helper` may clear it.
     if (helper !== proc) return;
     helper = null;
-    helperState = null;
     send("auth-log", { kind, text: err.message });
     send("auth-done", { kind, ok: false, error: err.message });
   });
   proc.on("close", async (code) => {
     if (helper !== proc) return;
     helper = null;
-    helperState = null;
     const health = await getClaudeHealth(workspace);
-    const ok = kind === "install" ? health.installed : health.loggedIn;
-    send("auth-done", { kind, ok, code: code ?? 0, health });
+    send("auth-done", { kind, ok: health.installed, code: code ?? 0, health });
   });
   return true;
 }
 
+function stopLoginWatch() {
+  if (!loginWatch) return;
+  clearInterval(loginWatch.timer);
+  loginWatch = null;
+}
+
+/**
+ * The desk never sees the sign-in itself: no link, no code, no token. It
+ * asks Claude Code whether the person is signed in and stops once it says yes.
+ */
+function startLoginWatch() {
+  if (loginWatch) return false;
+  const startedAt = Date.now();
+  const watch = { timer: null, checking: false };
+  watch.timer = setInterval(async () => {
+    if (watch.checking || loginWatch !== watch) return;
+    watch.checking = true;
+    try {
+      const health = await getClaudeHealth(workspace);
+      if (loginWatch !== watch) return;
+      if (health.loggedIn) {
+        stopLoginWatch();
+        send("auth-done", { kind: "login", ok: true, health });
+        return;
+      }
+      if (Date.now() - startedAt > LOGIN_WATCH_LIMIT_MS) {
+        stopLoginWatch();
+        send("auth-done", {
+          kind: "login",
+          ok: false,
+          health,
+          error: "Claude Code still reports signed out. Finish the sign-in in its window, then click Sign in to Claude Code again.",
+        });
+      }
+    } finally {
+      watch.checking = false;
+    }
+  }, LOGIN_POLL_MS);
+  loginWatch = watch;
+  return true;
+}
+
+let demoTimers = [];
+
+function clearDemoReplay() {
+  for (const timer of demoTimers) clearTimeout(timer);
+  demoTimers = [];
+}
+
+function demoPaceMs() {
+  return process.env.JOB_SEARCH_DEMO_PACE === "film" ? 46 : 8;
+}
+
+function later(ms, fn) {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  demoTimers.push(timer);
+}
+
+// Demo chat is a recording of one turn. It never spawns Claude Code.
+function replayDemoTurn(prompt) {
+  if (busy) {
+    send("turn-error", { text: "Claude is still working on the last message. Wait for it to finish, or press Stop." });
+    return false;
+  }
+  clearDemoReplay();
+  busy = true;
+  streamedText = true;
+  stopRequested = false;
+  turnText = "";
+  reportedError = false;
+  repliedThisTurn = false;
+  const gen = ++turnGen;
+  const live = () => gen === turnGen;
+  send("status", { text: "Claude is working in your job-search folder" });
+  send("user", { text: prompt });
+  pushTranscript({ role: "user", text: prompt });
+
+  const turn = demoTurnFor(prompt);
+  const steps = [];
+  let at = 280;
+  steps.push([at, () => {
+    if (!live()) return;
+    send("thinking", {});
+  }]);
+  turn.tools.forEach((tool, index) => {
+    const id = `demo-tool-${index}`;
+    at += 420;
+    steps.push([at, () => {
+      if (!live()) return;
+      send("tool", { id, name: tool.name, phase: "start", input: { file_path: tool.file } });
+      pushTranscript({ role: "tool", id, name: tool.name, input: { file_path: tool.file } });
+    }]);
+    at += 480;
+    steps.push([at, () => {
+      if (!live()) return;
+      send("tool", { id, name: tool.name, phase: "done" });
+    }]);
+  });
+  const pace = demoPaceMs();
+  for (const chunk of turn.reply.match(/\S+\s*/g) || [turn.reply]) {
+    at += pace;
+    steps.push([at, () => {
+      if (!live()) return;
+      turnText += chunk;
+      send("delta", { text: chunk });
+    }]);
+  }
+  at += 240;
+  steps.push([at, () => finishDemoTurn(gen)]);
+  for (const [wait, fn] of steps) later(wait, fn);
+  return true;
+}
+
+function finishDemoTurn(gen) {
+  if (gen !== turnGen) return;
+  if (turnText.trim()) {
+    pushTranscript({ role: "assistant", text: turnText });
+    turnText = "";
+  }
+  busy = false;
+  send("idle", snapshot());
+}
+
 function runClaude(prompt, { retried = false } = {}) {
+  if (demoMode) return replayDemoTurn(prompt);
   if (busy) {
     // Transient: a message typed while the old turn is still closing must
     // not persist an error into the conversation.
@@ -915,7 +1019,7 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/workspace") {
-      json(res, 200, { root: workspace });
+      json(res, 200, { root: publicWorkspace(), demo: demoMode });
       return;
     }
 
@@ -1069,12 +1173,32 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/workspace/cli") {
+      if (demoMode) {
+        json(res, 200, { ok: false, error: "Demo mode does not open a terminal against your real folder." });
+        return;
+      }
       json(res, 200, startCli(workspace));
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/auth/status") {
-      json(res, 200, await getClaudeHealth(workspace));
+      const health = await getClaudeHealth(workspace);
+      if (demoMode) {
+        // The org name carries the account email and the binary path carries
+        // the Windows user name; neither belongs on a demo screen. Chat in
+        // demo never starts Claude, so the composer must not wait on a login.
+        json(res, 200, {
+          ...health,
+          installed: true,
+          loggedIn: true,
+          email: "",
+          orgName: "",
+          claude: "claude",
+          error: "",
+        });
+        return;
+      }
+      json(res, 200, health);
       return;
     }
 
@@ -1083,46 +1207,43 @@ async function handleRequest(req, res) {
         chromeExtensionUrl: CHROME_EXTENSION_URL,
         claudeAiUrl: CLAUDE_AI_URL,
         pricingUrl: CLAUDE_PRICING_URL,
+        chromeExtension: chromeExtensionStatus(),
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/chrome-extension/status") {
+      json(res, 200, chromeExtensionStatus());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/chrome-extension/install") {
+      json(res, 200, { ok: true, ...installClaudeChrome() });
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/auth/install") {
       const started = runHelper("install", () => spawnOfficialInstall());
-      json(res, started ? 202 : 409, started ? { ok: true } : { ok: false, running: true, kind: helperState?.kind || "install" });
+      json(res, started ? 202 : 409, started ? { ok: true } : { ok: false, running: true, kind: "install" });
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/auth/login") {
-      const body = await readJson(req);
-      if (!body) {
-        json(res, 400, { ok: false, error: "invalid JSON body" });
+      if (helper) {
+        json(res, 409, { ok: false, running: true, kind: "install" });
         return;
       }
-      const email = typeof body.email === "string" ? body.email.trim() : "";
-      const started = runHelper("login", () => spawnSubscriptionLogin({ cwd: workspace, email }));
-      if (!started) {
+      if (loginWatch) {
         // A reloaded page joins the sign-in already in progress.
-        json(res, 409, { ok: false, running: true, kind: helperState?.kind || "login", urls: helperState?.urls || [], needsCode: Boolean(helperState?.needsCode) });
+        json(res, 202, { ok: true, running: true, opened: false });
         return;
       }
-      json(res, 202, { ok: true });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/auth/code") {
-      const body = await readJson(req);
-      if (!body) {
-        json(res, 400, { ok: false, error: "invalid JSON body" });
-        return;
-      }
-      const code = typeof body.code === "string" ? body.code.trim() : "";
-      if (!helper || !helper.stdin?.writable || !code) {
-        json(res, 400, { ok: false, error: "No login waiting for a code." });
-        return;
-      }
-      helper.stdin.write(`${code}\n`);
-      json(res, 200, { ok: true });
+      const opened = openClaudeLogin(workspace);
+      // Even when no terminal could be opened, keep watching: the person can
+      // run `claude auth login` in any terminal and the desk still notices.
+      startLoginWatch();
+      send("auth-log", { kind: "login", text: opened.error ? `${opened.error} Open a terminal yourself and run: claude auth login` : "Opened Claude Code's sign-in in a new window." });
+      json(res, 202, { ok: true, opened: !opened.error, error: opened.error || "" });
       return;
     }
 
@@ -1176,6 +1297,10 @@ async function handleRequest(req, res) {
       }
       if (!child) {
         // Nothing to stop: make sure the page is not stuck showing busy.
+        // A demo replay has no child; drop its timers before idle.
+        clearDemoReplay();
+        turnGen += 1;
+        turnText = "";
         busy = false;
         send("idle", snapshot());
       } else {
@@ -1186,6 +1311,8 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/reset") {
+      clearDemoReplay();
+      if (demoMode) turnGen += 1;
       if (deskRuntime && !child) {
         // Same fallback as /stop: clear the runtime conversation, otherwise
         // the reconnecting page replays the "cleared" conversation.
@@ -1237,34 +1364,7 @@ async function handleRequest(req, res) {
 }
 
 function openBrowser(href) {
-  const detach = { detached: true, stdio: "ignore" };
-  if (IS_WIN) {
-    const chrome = spawn("cmd", ["/c", "start", "", "chrome", href], detach);
-    chrome.on("exit", (code) => {
-      if (code) spawn("cmd", ["/c", "start", "", href], detach).unref();
-    });
-    chrome.unref();
-    return;
-  }
-  if (IS_MAC) {
-    const chrome = spawn("open", ["-a", "Google Chrome", href], detach);
-    chrome.on("exit", (code) => {
-      if (code) spawn("open", [href], detach).unref();
-    });
-    chrome.unref();
-    return;
-  }
-  const linuxChrome = spawn("google-chrome", [href], detach);
-  linuxChrome.on("error", () => {
-    const chromium = spawn("chromium-browser", [href], detach);
-    chromium.on("error", () => {
-      const fallback = spawn("xdg-open", [href], detach);
-      fallback.on("error", () => console.error(`No browser opener found. Open ${href} yourself.`));
-      fallback.unref();
-    });
-    chromium.unref();
-  });
-  linuxChrome.unref();
+  openInChrome(href);
 }
 
 // One set of process handlers for the life of the process; a folder switch
@@ -1325,14 +1425,20 @@ function listen(server, host, port) {
 }
 
 export async function startDesk(options = {}) {
-  workspace = resolveWorkspace({
-    explicit: options.root || "",
-    here: join(HERE, ".."),
-  });
-  if (!workspace) {
-    throw new Error(existingWorkspaceHint());
+  demoMode = Boolean(options.demo || isDemoFlag(process.env, process.argv));
+  if (demoMode) {
+    process.env.JOB_SEARCH_DEMO = "1";
+    workspace = prepareDemoWorkspace({ root: options.demoRoot || process.env.JOB_SEARCH_DEMO_ROOT || "" });
+  } else {
+    workspace = resolveWorkspace({
+      explicit: options.root || "",
+      here: join(HERE, ".."),
+    });
+    if (!workspace) {
+      throw new Error(existingWorkspaceHint());
+    }
+    if (options.remember !== false) rememberWorkspace(workspace);
   }
-  rememberWorkspace(workspace);
   // A previous desk in this process (a folder switch) may still own a Claude
   // turn or a sign-in helper. Stop them and mark the turn superseded: its
   // close handler then releases busy without writing into the new folder,
@@ -1375,6 +1481,7 @@ export async function startDesk(options = {}) {
 
   const stop = (exitProcess = false) => {
     const target = child;
+    clearDemoReplay();
     stopClaude("Desk closed");
     stopHelper();
     // Keep whatever Claude had said so far; the restart note follows it.
@@ -1382,6 +1489,8 @@ export async function startDesk(options = {}) {
     flushTranscript();
     runtime?.stop?.();
     transport?.close?.();
+    // Drop open event streams so a closed desk does not wait on a browser tab.
+    server.closeAllConnections?.();
     server.close(() => {
       if (exitProcess && !target) process.exit(0);
     });
@@ -1413,12 +1522,20 @@ export async function startDesk(options = {}) {
   }
   const href = `http://${HOST}:${bound}/`;
   console.log(`Job search desk: ${href}`);
-  console.log(`Workspace: ${workspace}`);
-  console.log("Same folder as node gui/server.mjs --cli. Scrapes, CVs, and applications stay here.");
+  if (demoMode) {
+    console.log(`Workspace: ${DEMO_LABEL}`);
+    console.log("Demo mode. Jobs, CVs, and the profile on this page are fictional.");
+    console.log("Your saved job-search folder is not in use and was not changed.");
+  } else {
+    console.log(`Workspace: ${workspace}`);
+    console.log("Same folder as node gui/server.mjs --cli. Scrapes, CVs, and applications stay here.");
+  }
   console.log(
-    runtime
-      ? "Claude Code runs locally. The page header shows whether it asks before acting."
-      : "Claude Code runs locally with --dangerously-skip-permissions.",
+    demoMode
+      ? "Demo mode does not start Claude Code. Chat replays a fixed turn."
+      : runtime
+        ? "Claude Code runs locally. The page header shows whether it asks before acting."
+        : "Claude Code runs locally with --dangerously-skip-permissions.",
   );
   console.log("Localhost only. Close this window to stop.");
   if (open) openBrowser(href);
@@ -1426,6 +1543,8 @@ export async function startDesk(options = {}) {
     href,
     server,
     workspace,
+    displayWorkspace: publicWorkspace(),
+    demo: demoMode,
     stop,
     port: bound,
     runtime,
@@ -1439,37 +1558,61 @@ export async function startDesk(options = {}) {
 const launchedDirectly =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (launchedDirectly) {
-  const root = resolveWorkspace({ here: join(HERE, "..") });
-  if (!root) {
-    console.error(existingWorkspaceHint());
-    process.exit(1);
-  }
-  rememberWorkspace(root);
-  if (process.argv.includes("--cli")) {
-    const started = startCli(root, { inherit: true });
-    if (started.error) {
-      console.error(started.error);
+  if (isDemoFlag()) {
+    if (process.argv.includes("--cli")) {
+      console.error("Demo mode is the page. Use npm run dev:demo, not --cli.");
       process.exit(1);
     }
-    started.child.on("exit", (code) => process.exit(code ?? 0));
-  } else {
-    startBrowserDesk(root).catch((err) => {
+    startBrowserDesk({ demo: true }).catch((err) => {
       console.error(err);
       process.exit(1);
     });
+  } else {
+    const root = resolveWorkspace({ here: join(HERE, "..") });
+    if (!root) {
+      console.error(existingWorkspaceHint());
+      process.exit(1);
+    }
+    rememberWorkspace(root);
+    if (process.argv.includes("--cli")) {
+      const started = startCli(root, { inherit: true });
+      if (started.error) {
+        console.error(started.error);
+        process.exit(1);
+      }
+      started.child.on("exit", (code) => process.exit(code ?? 0));
+    } else {
+      startBrowserDesk({ root }).catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+    }
   }
 }
 
 // `node gui/server.mjs` gets the same Agent SDK runtime as the installed app
 // (Files tab, Needs-you cards, permission modes, persisted conversation).
 // Print mode stays the fallback when the SDK is not installed under gui/.
-async function startBrowserDesk(root) {
+export async function startBrowserDesk(options = {}) {
+  const root = typeof options === "string" ? options : options.root;
+  const demo = typeof options === "string" ? false : Boolean(options.demo);
   let runtimeFactory;
-  try {
-    const session = await import("./desk-session.mjs");
-    runtimeFactory = session.createDeskRuntimeFactory();
-  } catch (error) {
-    console.error(`Desk runtime unavailable (run npm ci in gui/); using print mode: ${error?.message || error}`);
+  // Demo chat is a fixed replay. Starting the Agent SDK here would spend a
+  // real Claude turn and ask for permission on camera.
+  if (!demo) {
+    try {
+      const session = await import("./desk-session.mjs");
+      runtimeFactory = session.createDeskRuntimeFactory();
+    } catch (error) {
+      console.error(`Desk runtime unavailable (run npm ci in gui/); using print mode: ${error?.message || error}`);
+    }
   }
-  return startDesk({ root, allowRuntimeFailure: true, runtimeFactory });
+  return startDesk({
+    root,
+    demo,
+    demoRoot: options.demoRoot,
+    ...(options.port != null ? { port: options.port } : {}),
+    allowRuntimeFailure: true,
+    runtimeFactory,
+  });
 }

@@ -9,6 +9,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { resolveCommand } from "./claude.mjs";
+import { chromeExtensionInstalled } from "./claude-chrome.mjs";
+import { CHROME_EXTENSION_URL } from "./defaults.mjs";
 
 const IS_WIN = process.platform === "win32";
 
@@ -392,6 +394,16 @@ export function checkTools({ workspace, env = process.env, resolver = resolveCom
     url: "https://playwright.dev/docs/browsers",
     install: "In a terminal, from your job-search folder: cd .agents/skills/ats-autofill/cli && bun install && bunx playwright install chromium",
   });
+  results.push({
+    id: "claude-chrome",
+    name: "Claude in Chrome",
+    purpose: "Lets Claude open job boards and sign-in pages in your real Chrome. Desk cannot pack this into the installer; Chrome only installs it from the official store.",
+    requiredFor: "optional",
+    installed: chromeExtensionInstalled(env),
+    path: "",
+    url: CHROME_EXTENSION_URL,
+    install: installHint("claude-chrome", platform),
+  });
   const missingRequired = results.filter((tool) => !tool.installed && tool.requiredFor !== "optional");
   return { tools: results, missingRequired: missingRequired.map((tool) => tool.id), platform };
 }
@@ -413,6 +425,8 @@ function installHint(id, platform) {
       return mac ? "In a terminal: xcode-select --install" : win ? "Install Git for Windows from git-scm.com." : "In a terminal: sudo apt install git";
     case "pdftotext":
       return mac ? "In a terminal: brew install poppler" : win ? "Optional: install poppler for Windows, or skip it." : "In a terminal: sudo apt install poppler-utils";
+    case "claude-chrome":
+      return "Click Add Claude in Chrome on first run or in Tools check. Chrome opens the official store. Add the extension, then Check again. Desk turns it on once it is there.";
     default:
       return "";
   }

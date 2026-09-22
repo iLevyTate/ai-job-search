@@ -1,10 +1,12 @@
 ---
 name: scrape
 description: >
-  Finds new US job postings matching your profile via installed portal-search
-  CLIs (LinkedIn, freehire.me, and any skills added with /add-portal) plus
-  WebSearch on Indeed, Dice, Built In, Wellfound, ClearanceJobs, USAJobs, and
-  employer ATS boards. Deduplicates across runs. Triggers on: job scrape, find
+  Finds new US job postings matching your profile via enabled portal-search
+  CLIs (freehire.me, and any skills added with /add-portal) plus WebSearch on
+  Indeed, Dice, Built In, Wellfound, ClearanceJobs, USAJobs, and employer ATS
+  boards. LinkedIn's CLI ships disabled (its terms prohibit automated access);
+  it runs only if you set enabled: true yourself.
+  Deduplicates across runs. Triggers on: job scrape, find
   jobs, search jobs, new jobs, job search, scrape jobs, /scrape
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bun --version), Bash(bun run .agents/skills/*/cli/src/cli.ts *), WebFetch, WebSearch, Agent, AskUserQuestion
 desk:
@@ -37,8 +39,8 @@ desk:
 ## How It Works
 
 This skill searches **US job boards** using the **enabled portal-search CLIs** in
-`.agents/skills/` (LinkedIn and freehire.me by default; Danish demos stay
-disabled) plus WebSearch for Indeed, Dice, Built In, Wellfound, ClearanceJobs,
+`.agents/skills/` (freehire.me by default; LinkedIn stays off unless you set
+`enabled: true` in its skill, and the Danish demos stay disabled) plus WebSearch for Indeed, Dice, Built In, Wellfound, ClearanceJobs,
 USAJobs, and employer ATS boards. It deduplicates against previously seen jobs
 and the application tracker, and presents new matches with a quick fit assessment.
 
@@ -117,10 +119,10 @@ and URL. For jobs worth a deeper look, fetch full detail with that portal's `det
 command (see its SKILL.md; do not guess flags) to extract **key requirements**,
 **application deadline**, and a brief description snippet.
 
-**Closed-at-source detection:** `linkedin-search detail` also returns `isActive`.
-`false` means the posting page itself renders LinkedIn's "No longer accepting
-applications" banner — the job died between being indexed and being fetched (expired
-LinkedIn URLs redirect to *similar live jobs*, so a search hit can be a ghost). Mark
+**Closed-at-source detection:** a portal `detail` result may include `isActive`
+(the disabled `linkedin-search` CLI is the one that does). `false` means the
+posting page itself says it is no longer accepting applications — the job died
+between being indexed and being fetched. Mark
 such a job, never silently drop it: write its entry to `seen_jobs.json` in Step 4 with
 `"status": "expired"` and leave it out of the Step 5 presentation — an absent entry
 looks identical to a job never seen, and the recorded status is what makes a later
