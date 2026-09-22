@@ -264,6 +264,15 @@ If either compile fails, fix the error and re-compile until clean.
 
 ### 5b. Inspect layout
 
+**Measure the page count before the visual read.** The checklist below says exactly 2 pages for the CV and exactly 1 for the cover letter. Step 5d's extraction call passes no `--pages`, so those limits are enforced by nothing unless these commands run. With a custom template active, substitute its declared **Page limit** from the `ACTIVE-TEMPLATE` block.
+
+```bash
+python tools/verify_pdf.py cv/main_<company>_<role>.pdf --pages 2
+python tools/verify_pdf.py cover_letters/cover_<company>_<role>.pdf --pages 1
+```
+
+Each command exits 1 when the page count is anything else. Fix the source and recompile before the visual read.
+
 Read both PDFs via the Read tool and verify:
 
 **CV (`cv/main_<company>_<role>.pdf`):**
