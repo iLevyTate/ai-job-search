@@ -25,9 +25,13 @@ test("isDemoFlag reads the env and the argv switch", () => {
 
 test("defaultDemoRoot stays out of the hunt folder", () => {
   const home = mkdtempSync(join(tmpdir(), "desk-demo-home-"));
-  const env = { APPDATA: join(home, "AppData", "Roaming") };
-  assert.equal(defaultDemoRoot(env), join(sharedStateDir(home, "win32", env), "demo-workspace"));
-  assert.ok(!defaultDemoRoot(env).includes("GitHub"));
+  const env = {
+    APPDATA: join(home, "AppData", "Roaming"),
+    XDG_CONFIG_HOME: join(home, ".config"),
+  };
+  const root = defaultDemoRoot(env);
+  assert.equal(root, join(sharedStateDir(undefined, undefined, env), "demo-workspace"));
+  assert.ok(!root.includes("GitHub"));
 });
 
 test("materializeDemoWorkspace is a valid workspace with only fictional hunt data", () => {
@@ -75,10 +79,10 @@ test("redactText strips home paths, emails, and phones", () => {
 
 test("redactText applies split-identifier lines", () => {
   const home = mkdtempSync(join(tmpdir(), "desk-id-home-"));
-  const appdata = join(home, "AppData", "Roaming");
-  mkdirSync(join(appdata, "ai-job-search"), { recursive: true });
-  writeFileSync(join(appdata, "ai-job-search", "split-identifiers.txt"), "SecretCorp\n");
-  const env = { APPDATA: appdata, USERNAME: "x" };
+  const env = { APPDATA: join(home, "AppData", "Roaming"), USERNAME: "x" };
+  const dir = sharedStateDir(home, process.platform, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "split-identifiers.txt"), "SecretCorp\n");
   const out = redactText("Applied to SecretCorp last week.", redactionTerms({ home, env }));
   assert.doesNotMatch(out, /SecretCorp/);
 });

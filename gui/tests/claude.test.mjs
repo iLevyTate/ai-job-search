@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import {
@@ -77,7 +77,9 @@ test("commandLooksInstalled rejects a bare command name", () => {
   assert.equal(commandLooksInstalled(""), false);
 });
 
-test("withClaudePath keeps each folder once so cmd.exe never sees a PATH over 8191 chars", () => {
+test("withClaudePath keeps each folder once so cmd.exe never sees a PATH over 8191 chars", {
+  skip: process.platform !== "win32" ? "cmd.exe PATH cap is Windows-only" : false,
+}, () => {
   // The persisted Windows PATH repeats most of the process PATH. Past 8191
   // characters cmd.exe expands %PATH% to nothing and a sign-in window cannot
   // find node or even `where`.
@@ -89,11 +91,20 @@ test("withClaudePath keeps each folder once so cmd.exe never sees a PATH over 81
   assert.ok(entries.indexOf("C:\\tools\\folder-number-0\\bin") < entries.indexOf("C:\\tools\\folder-number-59\\bin"));
 });
 
-test("dedupePathEntries ignores case and trailing slashes on Windows-style paths", () => {
-  const out = dedupePathEntries(["C:\\A\\bin", "c:\\a\\BIN\\", "C:\\B"].join(delimiter));
-  const parts = out.split(delimiter);
-  assert.equal(parts.length, process.platform === "win32" ? 2 : 3);
+test("dedupePathEntries ignores case and trailing slashes on Windows-style paths", {
+  skip: process.platform !== "win32" ? "Windows path keys are case-insensitive" : false,
+}, () => {
+  const out = dedupePathEntries(["C:\\A\\bin", "c:\\a\\BIN\\", "C:\\B"].join(";"));
+  const parts = out.split(";");
+  assert.equal(parts.length, 2);
   assert.equal(parts[0], "C:\\A\\bin");
+});
+
+test("dedupePathEntries keeps each Unix folder once", {
+  skip: process.platform === "win32" ? "Unix PATH uses colon" : false,
+}, () => {
+  const out = dedupePathEntries(["/usr/bin", "/usr/bin/", "/opt/bin"].join(":"));
+  assert.deepEqual(out.split(":"), ["/usr/bin", "/opt/bin"]);
 });
 
 test("withClaudePath prepends extra bin dirs", () => {
