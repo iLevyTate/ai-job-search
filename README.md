@@ -14,6 +14,12 @@
   <a href="https://github.com/iLevyTate/ai-job-search/releases/latest"><img src="https://img.shields.io/github/v/release/iLevyTate/ai-job-search?label=Job%20Search%20Desk" alt="Latest Job Search Desk release"></a>
 </p>
 
+<p align="center">
+  <a href="assets/desk-tour.mp4"><img src="assets/desk-tour.gif" alt="Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill"></a>
+</p>
+
+Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit. [Full video](assets/desk-tour.mp4).
+
 This repository is the public **US** product: English defaults, US job boards, and an installable **[Job Search Desk](https://github.com/iLevyTate/ai-job-search/releases/latest)** for Windows, macOS Apple Silicon, and Linux. Open the app or clone the repo, run `/setup` once, then scrape, rank, tailor a CV and cover letter, and prep interviews. Claude Code is the runtime. Your profile and applications stay in a folder on your computer.
 
 It is not the original Danish-market template. Methodology started there; this repo is a separate build with its own Desk app, release train, and North American defaults.
@@ -46,11 +52,7 @@ macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then 
 
 The app does not replace `/setup`. Autofill never clicks Submit.
 
-## Tour
-
-![Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill](assets/desk-tour.gif)
-
-Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit. [Full video](assets/desk-tour.mp4).
+## Run the demo page
 
 To walk the live page without your own hunt files:
 
