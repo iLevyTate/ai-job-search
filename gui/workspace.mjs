@@ -406,24 +406,42 @@ export function hasBinary(bin, env = process.env) {
   }
 }
 
+const NOT_INSTALLED_NOTE = "Claude Code is not installed yet. Open Job Search Desk and it will install it for you.";
+
 /**
- * The /k payload must be the bare path: Node quotes spawn args itself, and a
- * pre-quoted path comes out as \" escapes that cmd.exe cannot parse.
+ * cmd.exe /k reads the rest of its command line as one command. With no
+ * arguments the payload must be the bare path: Node quotes spawn args itself,
+ * and a pre-quoted path comes out as \" escapes that cmd.exe cannot parse.
+ * With arguments the path has to be quoted (it may contain spaces), so the
+ * caller spawns with windowsVerbatimArguments and this string goes through
+ * untouched.
  */
-export function windowsCliLaunch(command, ready) {
-  return ready ? command : "echo Claude Code is not installed yet. Open Job Search Desk and it will install it for you.";
+export function windowsCliLaunch(command, ready, args = []) {
+  if (!ready) return `echo ${NOT_INSTALLED_NOTE}`;
+  if (!args.length) return command;
+  return [`"${command}"`, ...args].join(" ");
 }
 
-function openCliTerminal(root, command, env) {
+/**
+ * Open a real terminal window running Claude Code. The Desk never reads or
+ * writes that window: whatever Claude Code prints or asks for stays between
+ * the person and Anthropic's own program.
+ */
+export function openClaudeTerminal(root, command, env, { args = [], title = "Job Search CLI" } = {}) {
   const ready = commandLooksInstalled(command);
   if (process.platform === "win32") {
-    const launch = windowsCliLaunch(command, ready);
-    const child = spawn("cmd.exe", ["/c", "start", "Job Search CLI", "cmd.exe", "/k", launch], {
+    const launch = windowsCliLaunch(command, ready, args);
+    const verbatim = args.length > 0;
+    const spawnArgs = verbatim
+      ? ["/c", "start", `"${title}"`, "cmd.exe", "/k", launch]
+      : ["/c", "start", title, "cmd.exe", "/k", launch];
+    const child = spawn("cmd.exe", spawnArgs, {
       cwd: root,
       env,
       detached: true,
       stdio: "ignore",
       windowsHide: false,
+      windowsVerbatimArguments: verbatim,
     });
     child.on("error", () => {});
     child.unref();
@@ -431,8 +449,8 @@ function openCliTerminal(root, command, env) {
   }
   if (process.platform === "darwin") {
     const script = ready
-      ? `cd ${JSON.stringify(root)} && exec ${JSON.stringify(command)}`
-      : `cd ${JSON.stringify(root)} && echo Claude Code is not installed yet. Open Job Search Desk and it will install it for you.`;
+      ? `cd ${JSON.stringify(root)} && exec ${[command, ...args].map((part) => JSON.stringify(part)).join(" ")}`
+      : `cd ${JSON.stringify(root)} && echo ${NOT_INSTALLED_NOTE}`;
     const child = spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`], {
       detached: true,
       stdio: "ignore",
@@ -441,21 +459,34 @@ function openCliTerminal(root, command, env) {
     child.unref();
     return { ok: true, root };
   }
-  const argv = ready ? [command] : ["bash"];
+  const argv = ready ? [command, ...args] : ["bash"];
   const terminals = [
     ["x-terminal-emulator", ["-e", ...argv]],
     ["gnome-terminal", ["--working-directory", root, "--", ...argv]],
     ["konsole", ["--workdir", root, "-e", ...argv]],
     ["xterm", ["-e", ...argv]],
   ];
-  for (const [bin, args] of terminals) {
+  for (const [bin, terminalArgs] of terminals) {
     if (!hasBinary(bin, env)) continue;
-    const child = spawn(bin, args, { cwd: root, env, detached: true, stdio: "ignore" });
+    const child = spawn(bin, terminalArgs, { cwd: root, env, detached: true, stdio: "ignore" });
     child.on("error", () => {});
     child.unref();
     return { ok: true, root };
   }
   return { error: "Could not open a terminal window on this computer. You can keep working here; nothing is lost." };
+}
+
+/**
+ * Sign-in runs inside Claude Code's own program, in its own window. The Desk
+ * only opens that window and later asks `claude auth status` how it went.
+ */
+export function openClaudeLogin(root, env = process.env) {
+  const runEnv = withClaudePath(env);
+  const command = resolveCommand("claude", runEnv);
+  if (!commandLooksInstalled(command)) {
+    return { error: "Claude Code is not installed yet.", root };
+  }
+  return openClaudeTerminal(root, command, runEnv, { args: ["auth", "login"], title: "Claude Code sign-in" });
 }
 
 export function startCli(root, { inherit = false, env = process.env } = {}) {
@@ -482,5 +513,5 @@ export function startCli(root, { inherit = false, env = process.env } = {}) {
     });
     return { ok: true, root, child };
   }
-  return openCliTerminal(root, command, runEnv);
+  return openClaudeTerminal(root, command, runEnv);
 }

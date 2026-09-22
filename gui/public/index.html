@@ -23,25 +23,20 @@
     <div class="gate-card" role="dialog" aria-labelledby="gate-title" tabindex="-1">
       <p class="mark" aria-hidden="true">D</p>
       <p class="brand">Desk</p>
-      <p class="brand-sub">Connect Claude</p>
-      <h2 id="gate-title">Starting Claude Code</h2>
-      <p id="gate-copy">The desk starts Claude Code as soon as it opens. Sign in with your Claude subscription, the same account you use on claude.ai. It installs Claude Code if needed, then opens one claude.ai sign-in tab.</p>
-      <p class="hint">Claude Code needs a paid Claude plan (Pro, Max, Team, or Enterprise). A free claude.ai account cannot sign in here.</p>
+      <p class="brand-sub">Claude Code</p>
+      <h2 id="gate-title">Sign in to Claude Code</h2>
+      <p id="gate-copy">Desk works through Claude Code, Anthropic's own program, signed in to your own Claude account. Desk installs Claude Code if it is missing. The sign-in itself happens in a Claude Code window, not here.</p>
+      <p class="hint">Claude Code's sign-in takes a Claude plan (Pro, Max, Team, or Enterprise) or an Anthropic Console API key. Desk never sees your password, sign-in code, or token; it only asks Claude Code whether you are signed in.</p>
       <ol class="gate-steps" aria-label="What happens next">
         <li>Install Claude Code if it is missing</li>
-        <li>Sign in on claude.ai in the tab that opens. If it shows you a code, paste it below.</li>
-        <li>Come back here; the conversation opens by itself</li>
+        <li>Click Sign in. A terminal window opens with Claude Code's sign-in; follow its steps there</li>
+        <li>When it says you are signed in, come back here. The conversation opens by itself</li>
       </ol>
-      <p id="gate-link-wrap" class="gate-link-wrap" hidden>Tab did not appear? <a id="gate-link" href="#" target="_blank" rel="noreferrer">Open the sign-in page</a></p>
       <pre id="gate-log" class="gate-log" hidden></pre>
-      <label id="gate-code-wrap" hidden>
-        <span>Paste the login code from the browser</span>
-        <input id="gate-code" type="text" autocomplete="one-time-code" spellcheck="false">
-      </label>
       <div class="empty-actions">
-        <button type="button" id="gate-action">Start desk</button>
+        <button type="button" id="gate-action">Sign in to Claude Code</button>
         <button type="button" id="gate-cancel" class="ghost" hidden>Cancel</button>
-        <a id="gate-chrome" class="ghost-link" href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn" target="_blank" rel="noreferrer">Optional: Claude's Chrome extension</a>
+        <button type="button" id="gate-chrome" class="ghost">Add Claude in Chrome</button>
       </div>
     </div>
   </div>
@@ -131,6 +126,7 @@
           <h1>Conversation</h1>
           <p id="session-label" class="session">New conversation</p>
           <p id="workspace-label" class="workspace-path">Your job-search folder</p>
+          <p id="demo-banner" class="demo-banner" hidden>Demo mode. Names, jobs, and files on this page are fictional.</p>
           <p class="mode-row"><span id="mode-label" class="mode-label" data-mode="autonomous" title="Claude may create and change files in your job-search folder without asking first.">Works on its own</span> <button type="button" id="mode-toggle" class="link" hidden>Change</button></p>
         </div>
       </div>

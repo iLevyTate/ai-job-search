@@ -12,13 +12,11 @@ import {
   closePrintInput,
   clearDeskSession,
   commandLooksInstalled,
+  dedupePathEntries,
   exitErrorText,
   extraBinDirs,
-  extractHttpsUrls,
   isJobSearchWorkspace,
   loadDeskSession,
-  loginNeedsCode,
-  loginSucceeded,
   needsInstall,
   needsLogin,
   parseAuthStatus,
@@ -65,17 +63,6 @@ test("needsLogin only when Claude reports signed out", () => {
   assert.equal(shouldAutoStartClaude({ installed: true, loggedIn: true }), false);
 });
 
-test("extractHttpsUrls keeps login links and drops trailing punctuation", () => {
-  const urls = extractHttpsUrls("Open https://claude.ai/oauth/authorize?x=1.\nAlso https://claude.ai/oauth/authorize?x=1");
-  assert.deepEqual(urls, ["https://claude.ai/oauth/authorize?x=1"]);
-});
-
-test("login helpers recognize the official prompts", () => {
-  assert.equal(loginNeedsCode("Paste code here if prompted"), true);
-  assert.equal(loginSucceeded("Login successful"), true);
-  assert.equal(loginNeedsCode("Waiting"), false);
-});
-
 test("isJobSearchWorkspace requires the desk and AGENTS.md", () => {
   const root = mkdtempSync(join(tmpdir(), "desk-ws-"));
   assert.equal(isJobSearchWorkspace(root), false);
@@ -88,6 +75,36 @@ test("isJobSearchWorkspace requires the desk and AGENTS.md", () => {
 test("commandLooksInstalled rejects a bare command name", () => {
   assert.equal(commandLooksInstalled("claude"), false);
   assert.equal(commandLooksInstalled(""), false);
+});
+
+test("withClaudePath keeps each folder once so cmd.exe never sees a PATH over 8191 chars", {
+  skip: process.platform !== "win32" ? "cmd.exe PATH cap is Windows-only" : false,
+}, () => {
+  // The persisted Windows PATH repeats most of the process PATH. Past 8191
+  // characters cmd.exe expands %PATH% to nothing and a sign-in window cannot
+  // find node or even `where`.
+  const repeated = Array.from({ length: 60 }, (_, i) => `C:\\tools\\folder-number-${i}\\bin`).join(";");
+  const env = withClaudePath({ PATH: `${repeated};${repeated};${repeated}`, USERPROFILE: "C:\\Users\\test" });
+  const entries = env.PATH.split(";").filter(Boolean);
+  assert.equal(entries.length, new Set(entries.map((e) => e.toLowerCase())).size);
+  assert.ok(env.PATH.length < 8191, `PATH is ${env.PATH.length} chars`);
+  assert.ok(entries.indexOf("C:\\tools\\folder-number-0\\bin") < entries.indexOf("C:\\tools\\folder-number-59\\bin"));
+});
+
+test("dedupePathEntries ignores case and trailing slashes on Windows-style paths", {
+  skip: process.platform !== "win32" ? "Windows path keys are case-insensitive" : false,
+}, () => {
+  const out = dedupePathEntries(["C:\\A\\bin", "c:\\a\\BIN\\", "C:\\B"].join(";"));
+  const parts = out.split(";");
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0], "C:\\A\\bin");
+});
+
+test("dedupePathEntries keeps each Unix folder once", {
+  skip: process.platform === "win32" ? "Unix PATH uses colon" : false,
+}, () => {
+  const out = dedupePathEntries(["/usr/bin", "/usr/bin/", "/opt/bin"].join(":"));
+  assert.deepEqual(out.split(":"), ["/usr/bin", "/opt/bin"]);
 });
 
 test("withClaudePath prepends extra bin dirs", () => {
@@ -153,10 +170,11 @@ test("interactive Claude args resume the session and add bypass only in Autonomo
 });
 
 test("buildClaudeArgs disables Chrome by default so print mode cannot wait for the extension", () => {
-  const safe = buildClaudeArgs("/scrape");
+  const isolated = { HOME: "/tmp/desk-no-chrome", USERPROFILE: "/tmp/desk-no-chrome", LOCALAPPDATA: "/tmp/desk-no-chrome" };
+  const safe = buildClaudeArgs("/scrape", { chrome: false });
   assert.equal(safe[0], "--no-chrome");
-  assert.equal(chromeEnabled({}), false);
-  assert.equal(chromeEnabled({ JOB_SEARCH_CLAUDE_CHROME: "1" }), true);
+  assert.equal(chromeEnabled(isolated), false);
+  assert.equal(chromeEnabled({ ...isolated, JOB_SEARCH_CLAUDE_CHROME: "1" }), true);
 
   const first = buildClaudeArgs("/scrape", { chrome: true });
   assert.equal(first[0], "--chrome");
@@ -166,7 +184,7 @@ test("buildClaudeArgs disables Chrome by default so print mode cannot wait for t
 
   const again = buildClaudeArgs("/apply", { sessionId: "abc-123", chrome: true });
   assert.deepEqual(again.slice(-2), ["--resume", "abc-123"]);
-  assert.equal(chromeEnabled({ JOB_SEARCH_CLAUDE_CHROME: "0" }), false);
+  assert.equal(chromeEnabled({ ...isolated, JOB_SEARCH_CLAUDE_CHROME: "0" }), false);
 });
 
 test("turnStatusText does not claim Chrome is opening when integration is disabled", () => {

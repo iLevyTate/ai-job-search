@@ -4,7 +4,7 @@
 
 ## Installed portal CLIs (primary for `/scrape`)
 
-`/scrape` discovers every portal skill under `.agents/skills/*/SKILL.md` and runs its CLI first. Shipped country-agnostic CLIs include `linkedin-search` and `freehire-search`; Danish demos and any skill you add with `/add-portal` are included the same way. You do **not** need a matching `site:` line below for those CLIs to run.
+`/scrape` discovers every portal skill under `.agents/skills/*/SKILL.md` and runs its CLI first, skipping any skill whose frontmatter sets `enabled: false`. The shipped enabled CLI is `freehire-search`. `linkedin-search` and the Danish demos ship disabled. LinkedIn's terms prohibit automated access, so leave it off unless you set `enabled: true` yourself. Skills you add with `/add-portal` are included the same way. You do **not** need a matching `site:` line below for those CLIs to run. Do not add `site:linkedin.com` queries while the CLI is off; turning the CLI on is the opt-in.
 
 The `site:` query templates in this file are the **WebSearch fallback** — for portals without a CLI, company career pages, or when a CLI fails.
 
@@ -13,7 +13,6 @@ The `site:` query templates in this file are the **WebSearch fallback** — for 
 ## Search Sites
 
 Primary (this fork's US boards - add another with `/add-portal`):
-- **linkedin.com/jobs** - LinkedIn job listings (filter: United States / [YOUR_CITY]); also covered by `linkedin-search` CLI
 - **indeed.com** - Indeed (WebSearch fallback; the site blocks automated fetch)
 - **dice.com** - Dice tech listings (WebSearch fallback)
 - **builtin.com** - Built In (tech metros and remote)
@@ -39,7 +38,7 @@ These match your strongest and most desired career direction.
 site:indeed.com "[YOUR_PRIMARY_JOB_TITLE_1]" [YOUR_CITY] remote
 site:dice.com "[YOUR_PRIMARY_JOB_TITLE_2]" [YOUR_CITY]
 site:builtin.com "[YOUR_KEY_SKILL]" remote
-site:linkedin.com/jobs "[YOUR_PRIMARY_JOB_TITLE_1]" "United States"
+site:boards.greenhouse.io "[YOUR_PRIMARY_JOB_TITLE_1]" remote
 ```
 
 ### Priority 2: [YOUR_DOMAIN_EXPERTISE]
@@ -49,7 +48,7 @@ These match your domain expertise.
 ```
 site:indeed.com [YOUR_DOMAIN_KEYWORD_1] [YOUR_CITY] OR remote
 site:dice.com [YOUR_DOMAIN_KEYWORD_2] "United States"
-site:linkedin.com/jobs [YOUR_DOMAIN_KEYWORD_1] [YOUR_CITY] "United States"
+site:jobs.lever.co [YOUR_DOMAIN_KEYWORD_1] remote
 ```
 
 ### Priority 3: [YOUR_ADJACENT_ROLE_TYPE]
@@ -67,7 +66,7 @@ Wider net for general technical roles.
 
 ```
 site:indeed.com [YOUR_KEY_SKILL] developer [YOUR_CITY] remote
-site:linkedin.com/jobs "[YOUR_KEY_SKILL] developer" [YOUR_CITY] "United States"
+site:jobs.ashbyhq.com "[YOUR_KEY_SKILL]" remote
 site:builtin.com "technical consultant" [YOUR_DOMAIN] [YOUR_CITY]
 ```
 

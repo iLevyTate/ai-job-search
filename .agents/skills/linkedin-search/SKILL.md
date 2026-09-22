@@ -2,16 +2,12 @@
 name: linkedin-search
 version: 1.0.0
 description: >
-  Use this skill whenever the user wants to search for jobs in any location or
-  market, find job listings, or look up a specific job posting — in any country,
-  city, or remotely. Invoke for open positions, vacancies, and hiring across any
-  sector or role (software, data, design, marketing, finance, legal, operations,
-  etc.). The location is always supplied explicitly by the user. Trigger phrases:
-  find a job, job search, search for jobs, job openings, vacancies, hiring,
-  positions open, remote jobs, "are there any X jobs in <place>", look up this
-  job posting.
+  Off unless the user has set enabled: true in this file. LinkedIn's User
+  Agreement prohibits scraping, so /scrape skips this portal by default. Invoke
+  only after the user turns it on and accepts that automated access is against
+  LinkedIn's terms and is their own risk. Do not enable it for them.
 context: fork
-enabled: true  # set to false to keep this portal installed but have /scrape skip it
+enabled: false  # Off by default. Set true only if you accept LinkedIn's terms risk yourself.
 allowed-tools: Bash(bun run .agents/skills/linkedin-search/cli/src/cli.ts *)
 ---
 
@@ -26,11 +22,14 @@ forker in any market out of the box.
 > LinkedIn's `jobs-guest` endpoints are global and the HTML parsing is country-independent;
 > only the `--location` you pass changes per market.
 
-## ⚠️ Personal use only
+## ⚠️ Off by default. Your risk if you turn it on
 
-This uses LinkedIn's public job pages; automated access is against LinkedIn's Terms of
-Service, so **keep volume low and don't use it commercially or for bulk data collection.**
-Run it on your own responsibility.
+LinkedIn's User Agreement prohibits scraping and other automated access.
+`/scrape` skips this portal while `enabled` above is `false`.
+
+To turn it on, set `enabled: true` in this file yourself. That choice is yours:
+the Desk will not flip it for you, and a release build leaves it off. Keep the
+volume low. Do not use it commercially or to collect listings in bulk.
 
 ## When to use this skill
 

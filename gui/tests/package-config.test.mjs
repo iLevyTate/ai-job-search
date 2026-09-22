@@ -13,6 +13,9 @@ test("runtime dependencies are production dependencies without lifecycle scripts
   assert.ok(pkg.dependencies["@xterm/addon-fit"]);
   assert.ok(pkg.dependencies["electron-updater"]);
   assert.equal(pkg.scripts.postinstall, undefined);
+  assert.equal(pkg.scripts.dev, "node server.mjs");
+  assert.equal(pkg.scripts["dev:demo"], "node server.mjs --demo");
+  assert.equal(pkg.scripts.record, "node scripts/record-tour.mjs");
   assert.match(pkg.scripts["test:unit"], /node --test/);
   assert.match(pkg.scripts["test:renderer"], /tests\/renderer/);
   assert.match(pkg.scripts["build:renderer"], /esbuild public\/src\/desk\.js/);

@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("deskApp", {
   cloneWorkspace: () => ipcRenderer.invoke("clone-workspace"),
   openCli: (root) => ipcRenderer.invoke("open-cli", root),
   ensureClaude: () => ipcRenderer.invoke("ensure-claude"),
+  claudeChromeStatus: () => ipcRenderer.invoke("claude-chrome-status"),
+  installClaudeChrome: () => ipcRenderer.invoke("install-claude-chrome"),
   terminal: {
     start: (payload) => ipcRenderer.invoke("terminal-start", payload),
     write: (payload) => ipcRenderer.invoke("terminal-write", payload),

@@ -84,6 +84,28 @@ test("a GET with no Origin (curl, CLI) still works", async () => {
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.ok("chromeExtensionUrl" in body);
+  assert.equal(typeof body.chromeExtension?.installed, "boolean");
+});
+
+test("POST /auth/code is gone: the desk never relays a sign-in code", async () => {
+  // Anthropic's compliance page forbids intermediating Claude.ai credentials.
+  // Sign-in completes inside Claude Code's own window; this route must not
+  // come back.
+  const res = await fetch(`${base}/auth/code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: base },
+    body: JSON.stringify({ code: "abc" }),
+  });
+  assert.equal(res.status, 404);
+});
+
+test("GET /chrome-extension/status reports whether Claude in Chrome is present", async () => {
+  const res = await fetch(`${base}/chrome-extension/status`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(typeof body.installed, "boolean");
+  assert.equal(typeof body.enabled, "boolean");
+  assert.match(body.url, /chromewebstore\.google\.com/);
 });
 
 test("an upload over 25 MB answers 413 with a sentence instead of resetting the connection", async () => {

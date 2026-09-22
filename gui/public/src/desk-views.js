@@ -106,6 +106,7 @@ export function renderJobs(container, { jobs = [], filter = "open", query = "", 
 
 const STATUS_LABELS = {
   applied: "Applied",
+  drafted: "Drafted",
   in_progress: "In progress",
   interview: "Interviewing",
   interviewing: "Interviewing",

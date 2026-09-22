@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isJobSearchWorkspace } from "./claude.mjs";
+import { chromeExtensionStatus, installClaudeChrome } from "./claude-chrome.mjs";
+import { ignoreNavigationAbort, isNavigationAbort } from "./load-error.mjs";
 import { createClaudeBootstrap } from "./claude-bootstrap.mjs";
 import { createDeskRuntimeFactory } from "./desk-session.mjs";
 import { startDesk } from "./server.mjs";
@@ -80,7 +82,7 @@ function boundedDim(value, fallback, min, max) {
 
 async function openDesk(root) {
   if (desk && desk.workspace === root) {
-    if (mainWindow) await mainWindow.loadURL(desk.href);
+    if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
     return;
   }
   // Start the new desk before touching the old one or the pointer: if the new
@@ -96,7 +98,7 @@ async function openDesk(root) {
   writeWorkspace(root);
   process.env.JOB_SEARCH_ROOT = root;
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
-  if (mainWindow) await mainWindow.loadURL(desk.href);
+  if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
 }
 
 function preloadPath() {
@@ -125,7 +127,7 @@ function createWindow() {
   // Show something at once: a second click on the shortcut during a slow
   // start otherwise finds nothing on screen and looks like a failed launch.
   mainWindow.once("ready-to-show", () => mainWindow.show());
-  mainWindow.loadFile(join(HERE, "public", "starting.html")).catch(() => {});
+  ignoreNavigationAbort(() => mainWindow.loadFile(join(HERE, "public", "starting.html")));
   // claude.ai logins and the Chrome Web Store need the user's real browser,
   // with its cookies and extension support, never a bare Electron window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -358,6 +360,8 @@ ipcMain.handle("terminal-dispose", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("ensure-claude", async () => claudeBootstrap.ensure());
+ipcMain.handle("claude-chrome-status", async () => chromeExtensionStatus());
+ipcMain.handle("install-claude-chrome", async () => ({ ok: true, ...installClaudeChrome() }));
 
 ipcMain.handle("clone-workspace", async () => {
   const destParent = await dialog.showOpenDialog(mainWindow, {
@@ -414,14 +418,18 @@ if (!hasLock) {
       try {
         await openDesk(root);
       } catch (err) {
-        dialog.showErrorBox(
-          "Job Search Desk",
-          err.message || "The desk could not start. Close any other desk window and try again.",
-        );
-        await mainWindow.loadFile(join(HERE, "public", "first-run.html"));
+        if (isNavigationAbort(err) && desk?.href) {
+          await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
+        } else {
+          dialog.showErrorBox(
+            "Job Search Desk",
+            err.message || "The desk could not start. Close any other desk window and try again.",
+          );
+          await ignoreNavigationAbort(() => mainWindow.loadFile(join(HERE, "public", "first-run.html")));
+        }
       }
     } else {
-      await mainWindow.loadFile(join(HERE, "public", "first-run.html"));
+      await ignoreNavigationAbort(() => mainWindow.loadFile(join(HERE, "public", "first-run.html")));
     }
   });
 }

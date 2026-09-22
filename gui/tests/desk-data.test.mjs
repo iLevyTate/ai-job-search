@@ -120,4 +120,7 @@ test("the tools check names what is missing and how to get it", () => {
   assert.ok(info.missingRequired.includes("lualatex"));
   assert.ok(!info.missingRequired.includes("git"), "optional tools never block");
   assert.equal(byId.chromium.installed, false);
+  assert.ok(byId["claude-chrome"]);
+  assert.equal(byId["claude-chrome"].requiredFor, "optional");
+  assert.ok(!info.missingRequired.includes("claude-chrome"));
 });

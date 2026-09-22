@@ -33,6 +33,7 @@ const announceEl = document.getElementById("announce");
 const statusEl = document.getElementById("status");
 const sessionEl = document.getElementById("session-label");
 const workspaceEl = document.getElementById("workspace-label");
+const demoBannerEl = document.getElementById("demo-banner");
 const modeEl = document.getElementById("mode-label");
 const promptEl = document.getElementById("prompt");
 const sendBtn = document.getElementById("send");
@@ -231,14 +232,23 @@ function setBusy(next) {
   statusEl.textContent = next ? "Claude is working. Stop cancels this turn." : "Ready";
 }
 
-function setWorkspaceLabel(root) {
+function setWorkspaceLabel(root, demo = false) {
   if (!workspaceEl || !root) return;
   workspaceEl.textContent = root;
-  workspaceEl.title = "Your job-search folder. Everything Claude finds or writes is saved here.";
+  workspaceEl.title = demo
+    ? "Fictional hunt folder for this demo. Your real job-search files are not on this page."
+    : "Your job-search folder. Everything Claude finds or writes is saved here.";
+}
+
+function setDemoMode(on) {
+  document.body.classList.toggle("demo", on);
+  if (demoBannerEl) demoBannerEl.hidden = !on;
+  document.title = on ? "Job Search Desk (demo)" : "Job Search Desk";
 }
 
 function setSessionLabel(data = {}) {
-  setWorkspaceLabel(data.workspace);
+  setDemoMode(Boolean(data.demo));
+  setWorkspaceLabel(data.workspace, Boolean(data.demo));
   if (data.chromeGroup) {
     sessionEl.textContent = data.sessionId
       ? `${data.chromeGroup} · Chrome group`
@@ -1562,12 +1572,12 @@ const gateCopy = document.getElementById("gate-copy");
 const gateLog = document.getElementById("gate-log");
 const gateAction = document.getElementById("gate-action");
 const gateCancel = document.getElementById("gate-cancel");
-const gateCodeWrap = document.getElementById("gate-code-wrap");
-const gateCode = document.getElementById("gate-code");
 const gateChrome = document.getElementById("gate-chrome");
-const gateLink = document.getElementById("gate-link");
-const gateLinkWrap = document.getElementById("gate-link-wrap");
 const accountLabel = document.getElementById("account-label");
+
+const SIGN_IN_LABEL = "Sign in to Claude Code";
+const INSTALL_COPY = "Desk works through Claude Code, Anthropic's own program, signed in to your own Claude account. Desk installs Claude Code with Anthropic's installer first. The sign-in itself then happens in a Claude Code window, not here.";
+const LOGIN_COPY = "Click Sign in and a terminal window opens running Claude Code's own sign-in. Follow its steps there; it offers a Claude plan or an Anthropic Console API key and opens your browser when it needs to. When it says you are signed in, come back to this window. Desk notices on its own.";
 
 let authWaiter = null;
 let lastHealth = null;
@@ -1610,6 +1620,7 @@ function needsLogin(health) {
 function describeAccount(health) {
   if (health?.loggedIn) {
     const plan = health.subscriptionType ? ` · ${health.subscriptionType}` : "";
+    if (document.body.classList.contains("demo")) return `Signed in${plan}`;
     return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
   }
   if (health?.error) return "Claude status unknown";
@@ -1634,29 +1645,29 @@ function applyHealth(health) {
   accountLabel.textContent = describeAccount(health);
   accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
   gateCancel.hidden = true;
-  gateCodeWrap.hidden = true;
-  gateLinkWrap.hidden = true;
   if (health.loggedIn) {
     setGate(false);
     return true;
   }
   if (needsInstall(health)) {
-    setGate(true, "Starting Claude Code", "The desk installs Claude Code if it is missing, then opens a claude.ai sign-in page. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
-    gateAction.textContent = claudeAutoStarted ? "Working…" : "Install and sign in";
+    setGate(true, "Set up Claude Code", INSTALL_COPY);
+    gateAction.textContent = claudeAutoStarted ? "Working…" : "Install Claude Code";
     return false;
   }
   if (needsLogin(health)) {
-    setGate(true, "Starting Claude Code", "A claude.ai sign-in page will open in your browser. Sign in with the same email you use for your Claude subscription (Pro, Max, Team, or Enterprise). Nothing else to set up.");
-    gateAction.textContent = claudeAutoStarted ? "Working…" : "Sign in with Claude";
+    setGate(true, SIGN_IN_LABEL, LOGIN_COPY);
+    gateAction.textContent = claudeAutoStarted ? "Waiting for Claude Code…" : SIGN_IN_LABEL;
     return false;
   }
   setGate(false);
   return true;
 }
 
+// The official install may start on its own; a sign-in window opening
+// unasked would not, so that step waits for the click.
 function autoStartClaude(health) {
   if (claudeAutoStarted) return;
-  if (!needsInstall(health) && !needsLogin(health)) return;
+  if (!needsInstall(health)) return;
   claudeAutoStarted = true;
   bootstrapClaude();
 }
@@ -1691,34 +1702,33 @@ async function bootstrapClaude() {
       }
     }
     if (needsLogin(health)) {
-      appendGateLog("Opening the claude.ai sign-in. Finish it in the browser, then return here.");
+      gateAction.textContent = "Waiting for Claude Code…";
       const res = await post("/auth/login");
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        if (!body.running) throw new Error("The sign-in could not start. Try again.");
-        // A reloaded page joins the sign-in already in progress.
-        appendGateLog("A sign-in is already in progress in your browser.");
-        if (body.urls?.[0]) showSignInLink(body.urls[0]);
-        if (body.needsCode) {
-          gateCodeWrap.hidden = false;
-        }
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.running ? "Claude Code is still installing. Wait for it to finish." : "The sign-in could not start. Try again.");
+      if (body.running) {
+        appendGateLog("Claude Code's sign-in window is already open. Finish it there.");
+      } else if (body.opened) {
+        appendGateLog("A Claude Code window opened. Finish the sign-in there; this page updates on its own.");
+      } else {
+        appendGateLog(`${body.error || "No terminal window could be opened."} Open a terminal yourself and run: claude auth login`);
       }
       const done = await waitForAuth("login");
       if (done.kind === "cancel") {
         gateTitle.textContent = "Sign-in cancelled";
-        gateCopy.textContent = "No problem. Click Sign in with Claude when you are ready.";
-        gateAction.textContent = "Sign in with Claude";
+        gateCopy.textContent = `No problem. Click ${SIGN_IN_LABEL} when you are ready.`;
+        gateAction.textContent = SIGN_IN_LABEL;
         claudeAutoStarted = false;
         return;
       }
-      if (!done.ok) throw new Error(done.error || "The sign-in did not finish. Try again, and use the link above if no tab opened.");
+      if (!done.ok) throw new Error(done.error || "Claude Code still reports signed out. Finish the sign-in in its window, then try again.");
       health = done.health || (await readHealth());
     }
     if (health.loggedIn || (!needsLogin(health) && !needsInstall(health))) {
       applyHealth(health);
       return;
     }
-    throw new Error("Claude Code is installed but still signed out. Click Sign in with Claude to try again.");
+    throw new Error(`Claude Code is installed but still signed out. Click ${SIGN_IN_LABEL} to try again.`);
   } catch (err) {
     appendGateLog(err.message);
     gateTitle.textContent = "Could not connect";
@@ -1731,25 +1741,7 @@ async function bootstrapClaude() {
   }
 }
 
-function showSignInLink(url) {
-  if (!/^https:\/\//.test(url)) return;
-  gateLink.href = url;
-  gateLinkWrap.hidden = false;
-}
-
 source.addEventListener("auth-log", (event) => appendGateLog(JSON.parse(event.data).text));
-source.addEventListener("auth-url", (event) => {
-  // Claude Code opens the browser itself and prints the same URL as a
-  // fallback. Opening it again here is what produced two sign-in tabs.
-  const data = JSON.parse(event.data);
-  if (data.kind !== "login") return;
-  showSignInLink(data.url);
-  gateCopy.textContent = "A claude.ai sign-in tab opened in your browser. Finish signing in there, then come back to this window. If claude.ai shows you a code, paste it below.";
-});
-source.addEventListener("auth-code", () => {
-  gateCodeWrap.hidden = false;
-  gateCode.focus();
-});
 source.addEventListener("auth-done", (event) => {
   const data = JSON.parse(event.data);
   if (authWaiter && (authWaiter.kind === data.kind || data.kind === "cancel")) {
@@ -1768,34 +1760,53 @@ gateAction.addEventListener("click", () => {
   bootstrapClaude();
 });
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
-gateCode.addEventListener("keydown", (event) => {
-  if (event.isComposing || event.keyCode === 229) return;
-  if (event.key !== "Enter") return;
-  const code = gateCode.value.trim();
-  if (!code) return;
-  gateCode.disabled = true;
-  post("/auth/code", { code })
-    .then(async (res) => {
-      if (res.ok) {
-        gateCode.value = "";
-        return;
-      }
-      const body = await res.json().catch(() => null);
-      notice(body?.error || "That code was not accepted. Paste it again.");
-    })
-    .catch(() => notice("Could not reach the local desk."))
-    .finally(() => {
-      gateCode.disabled = false;
-      gateCode.focus();
-    });
+
+function paintGateChrome(info) {
+  if (!gateChrome) return;
+  if (info?.installed || info?.forcedOff) {
+    gateChrome.hidden = true;
+    return;
+  }
+  gateChrome.hidden = false;
+  gateChrome.textContent = "Add Claude in Chrome";
+}
+
+async function refreshGateChrome() {
+  try {
+    const res = await fetch("/chrome-extension/status");
+    if (!res.ok) return;
+    paintGateChrome(await res.json());
+  } catch {
+    // The store button stays visible if status cannot be read.
+  }
+}
+
+gateChrome?.addEventListener("click", async () => {
+  gateChrome.disabled = true;
+  try {
+    const res = await fetch("/chrome-extension/install", { method: "POST" });
+    const info = res.ok ? await res.json() : null;
+    paintGateChrome(info);
+    if (!info?.installed) gateChrome.textContent = "Waiting for Add to Chrome…";
+  } catch {
+    gateChrome.textContent = "Add Claude in Chrome";
+  } finally {
+    gateChrome.disabled = false;
+  }
+  const poll = window.setInterval(async () => {
+    try {
+      const res = await fetch("/chrome-extension/status");
+      if (!res.ok) return;
+      const info = await res.json();
+      paintGateChrome(info);
+      if (info?.installed) window.clearInterval(poll);
+    } catch {
+      window.clearInterval(poll);
+    }
+  }, 2000);
 });
 
-fetch("/auth/meta")
-  .then((res) => res.json())
-  .then((meta) => {
-    if (meta.chromeExtensionUrl) gateChrome.href = meta.chromeExtensionUrl;
-  })
-  .catch(() => {});
+refreshGateChrome();
 
 function checkClaude() {
   return readHealth()
