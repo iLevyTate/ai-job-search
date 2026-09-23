@@ -25,8 +25,8 @@ node --experimental-strip-types src/cli.ts doctor
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--profile, -p` | `<repo root>/application_profile.json` | Profile path |
-| `--resume, -r` | profile value | Resume PDF to attach |
-| `--cover, -c` | profile value | Cover letter PDF to attach |
+| `--resume, -r` | profile value | Resume PDF. A flag path is relative to the current directory. A path stored in the profile is relative to the repo root. |
+| `--cover, -c` | profile value | Cover letter PDF. Same path rule as `--resume`. |
 | `--screenshot, -o` | `job_scraper/autofill_<ts>.png` | Screenshot destination |
 | `--headed` | off | Show the browser and pause at the review gate. Recommended. |
 | `--dry-run` | off | Report without filling |

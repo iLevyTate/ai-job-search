@@ -101,6 +101,12 @@ describe("freehire CLI flag validation", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toMatch(/USAGE/);
     });
+
+    test("--help prints help and exits 0", async () => {
+      const result = await runCLI(["--help"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/USAGE/);
+    });
   });
 });
 

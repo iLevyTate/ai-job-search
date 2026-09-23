@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "fs"
 import { resolve as resolvePath, join, dirname } from "path"
 import { fileURLToPath } from "url"
+import { resolveDocumentPath } from "./documents.ts"
 import { detectAts, fillApplication, type FillReport } from "./fill.ts"
 import { createReviewGateFromEnv } from "./review-gate.ts"
 import type { Profile } from "./matcher.ts"
@@ -205,7 +206,7 @@ async function main(): Promise<number> {
 
   if (!cmd || flags.help || flags.h) {
     process.stdout.write(HELP)
-    return cmd ? 0 : 1
+    return flags.help || flags.h ? 0 : 1
   }
 
   const root = repoRoot()
@@ -239,14 +240,28 @@ async function main(): Promise<number> {
     return 1
   }
 
-  if (typeof flags.resume === "string") profile.documents.resume = resolvePath(flags.resume)
-  if (typeof flags.cover === "string") profile.documents.coverLetter = resolvePath(flags.cover)
+  // --resume and --cover are typed in the shell, so they resolve against the
+  // current directory. Paths stored in the profile are relative to the repo
+  // root. Resolving those against the current directory breaks the documented
+  // invocation, which runs this file from the CLI directory.
+  const resume = resolveDocumentPath(
+    profile.documents.resume,
+    typeof flags.resume === "string" ? flags.resume : undefined,
+    root,
+  )
+  const cover = resolveDocumentPath(
+    profile.documents.coverLetter,
+    typeof flags.cover === "string" ? flags.cover : undefined,
+    root,
+  )
+  if (resume !== undefined) profile.documents.resume = resume
+  if (cover !== undefined) profile.documents.coverLetter = cover
 
   for (const [label, p] of [
     ["resume", profile.documents.resume],
     ["cover letter", profile.documents.coverLetter],
   ] as const) {
-    if (p && !existsSync(resolvePath(p))) {
+    if (p && !existsSync(p)) {
       writeError(`${label} not found at ${p}`, "MISSING_DOCUMENT")
       return 1
     }

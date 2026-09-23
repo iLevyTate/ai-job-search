@@ -7,9 +7,9 @@
 // freehire.me — a personal project maintained best-effort (no formal SLA). Point
 // FREEHIRE_API_URL at a self-hosted freehire backend to swap the source.
 
-import { runSearch, DESCRIPTION_FORMATS, type DescriptionFormat, type SearchOpts } from "./commands/search.js"
-import { runDetail, type DetailOpts } from "./commands/detail.js"
-import { baseUrl } from "./helpers.js"
+import { runSearch, DESCRIPTION_FORMATS, type DescriptionFormat, type SearchOpts } from "./commands/search.ts"
+import { runDetail, type DetailOpts } from "./commands/detail.ts"
+import { baseUrl } from "./helpers.ts"
 
 interface Flags {
   _: string[]
@@ -145,7 +145,7 @@ async function main(): Promise<number> {
 
   if (!cmd || flags.help || flags.h) {
     process.stdout.write(HELP)
-    return cmd ? 0 : 1
+    return flags.help || flags.h ? 0 : 1
   }
 
   // Reject unknown flags instead of silently discarding them: a discarded

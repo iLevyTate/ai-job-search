@@ -17,10 +17,16 @@ type StdinLike = {
 type Writer = { write(chunk: string): unknown }
 
 export class StdinReviewGate implements ReviewGate {
-  constructor(
-    private readonly stdin: StdinLike = process.stdin,
-    private readonly stderr: Writer = process.stderr,
-  ) {}
+  // Explicit fields rather than TypeScript parameter properties. Parameter
+  // properties emit runtime assignments, which Node's strip-only type stripping
+  // rejects. Keep this shape.
+  private readonly stdin: StdinLike
+  private readonly stderr: Writer
+
+  constructor(stdin: StdinLike = process.stdin, stderr: Writer = process.stderr) {
+    this.stdin = stdin
+    this.stderr = stderr
+  }
 
   waitForDecision(request: ReviewRequest): Promise<ReviewDecision> {
     this.stderr.write(
@@ -60,7 +66,11 @@ export interface DeskReviewGateOptions {
 }
 
 export class DeskReviewGate implements ReviewGate {
-  constructor(private readonly options: DeskReviewGateOptions) {}
+  private readonly options: DeskReviewGateOptions
+
+  constructor(options: DeskReviewGateOptions) {
+    this.options = options
+  }
 
   async waitForDecision(request: ReviewRequest): Promise<ReviewDecision> {
     const fetchImpl = this.options.fetchImpl ?? fetch
