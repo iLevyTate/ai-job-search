@@ -20,6 +20,7 @@ per-file diff commands.
 ### Fixed
 - Python tools reconfigure stdout and stderr to UTF-8, so a non-Latin company or title no longer crashes `/rank`, salary lookup, or PDF verification on Windows.
 - `/apply` Step 5b runs `verify_pdf.py --pages` (2 for the CV, 1 for the cover letter). Step 5d extracts text and does not check page count.
+- `/reset` clears `documents/projects/` with the other personal document folders.
 
 ## [1.3.4] - 2026-09-21
 
