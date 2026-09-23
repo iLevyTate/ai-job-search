@@ -13,11 +13,16 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Added
+- Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
+- Tools check explains what each program means for the search.
+
 ### Security
 - CI and Desk release runs execute the security guards, the Python tool tests (including rank candidate limits), and the placeholder-integrity checks on this public template. A personalized fork still skips the placeholder checks after `/setup`.
 - `documents/projects/**` is ignored, matching upstream, so project summaries stay out of the repository.
 
 ### Fixed
+- The Files tab keeps generated CVs and letters after a turn finishes, including when the reply ends abruptly and after Desk restarts.
 - Python tools reconfigure stdout and stderr to UTF-8, so a non-Latin company or title no longer crashes `/rank`, salary lookup, or PDF verification on Windows.
 - `/apply` Step 5b runs `verify_pdf.py --pages` (2 for the CV, 1 for the cover letter). Step 5d extracts text and does not check page count.
 - `/reset` clears `documents/projects/` with the other personal document folders.

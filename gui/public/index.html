@@ -102,6 +102,13 @@
           <em>What happened</em>
         </span>
       </button>
+      <button type="button" data-action="gmail-sync">
+        <span class="n">08</span>
+        <span>
+          <strong>Check email</strong>
+          <em id="gmail-hint">Replies from employers</em>
+        </span>
+      </button>
     </nav>
     <button type="button" id="more-steps" class="ghost more-steps">More steps… <span class="kbd">Ctrl+K</span></button>
     <div class="dock-tools">
@@ -123,7 +130,7 @@
         </button>
         <div>
           <p class="kicker">Your job search</p>
-          <h1>Conversation</h1>
+          <h1 id="surface-title">Conversation</h1>
           <p id="session-label" class="session">New conversation</p>
           <p id="workspace-label" class="workspace-path">Your job-search folder</p>
           <p id="demo-banner" class="demo-banner" hidden>Demo mode. Names, jobs, and files on this page are fictional.</p>
@@ -188,7 +195,7 @@
     <form method="dialog">
       <p class="kicker">This computer</p>
       <h2 id="tools-title">Tools check</h2>
-      <p>Each step needs a few programs on this computer. Green means ready. For a red one, follow the line under it, then click Check again.</p>
+      <p>Each program below is something a step may need on this computer. The line that starts with “What this means” says why it is there. Green means ready. For a red one, follow the install line, then click Check again.</p>
       <div id="tools-list"></div>
       <div class="sheet-actions">
         <button type="button" id="tools-refresh">Check again</button>

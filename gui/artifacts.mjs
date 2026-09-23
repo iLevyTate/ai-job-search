@@ -165,7 +165,10 @@ export function createArtifactService({
         continue;
       }
       const type = previewTypeFor(rel);
-      let hash;
+      // A file Claude is still writing (a PDF locked by the compiler) must
+      // stay in the snapshot. Dropping it here means the turn never reports
+      // it, and the next turn sees a stable file and reports nothing either.
+      let hash = `unread:${stat.size}:${stat.mtimeMs}`;
       let previousText = null;
       try {
         hash = await hashFile(fs, absolute, stat.size);
@@ -173,7 +176,7 @@ export function createArtifactService({
           previousText = await fs.readFile(absolute, "utf8");
         }
       } catch {
-        continue;
+        // Keep the unread sentinel so a new file is still a creation.
       }
       out.push({
         relativePath: rel,
@@ -264,6 +267,31 @@ export function createArtifactService({
       const record = await recordFromPath(relativePath, { kind: extras.kind || "created", turnId: extras.turnId || null });
       if (!record) fail("ignored path");
       return record;
+    },
+    async restore(saved) {
+      if (!saved?.id || typeof saved.relativePath !== "string") return null;
+      if (records.has(saved.id)) return records.get(saved.id);
+      let resolved;
+      try {
+        resolved = await resolveExisting(saved.relativePath);
+      } catch {
+        return null;
+      }
+      if (shouldIgnoreArtifact(resolved.relativePath)) return null;
+      const stat = await fs.stat(resolved.absolutePath).catch(() => null);
+      if (!stat?.isFile()) return null;
+      const type = previewTypeFor(resolved.relativePath);
+      return remember({
+        id: saved.id,
+        turnId: saved.turnId || null,
+        kind: saved.kind || "created",
+        relativePath: resolved.relativePath,
+        absolutePath: resolved.absolutePath,
+        size: stat.size,
+        mime: saved.mime || type?.mime || "application/octet-stream",
+        previewKind: type?.kind || "unknown",
+        previousText: null,
+      });
     },
     list() {
       return [...records.values()].map(publicRecord);

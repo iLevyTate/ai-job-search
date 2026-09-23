@@ -16,6 +16,24 @@ function write(root, rel, body = "x") {
   return path;
 }
 
+test("restore puts a saved file back on the list and skips one that is gone", async () => {
+  const root = workspace();
+  write(root, "cv/main.tex", "kept");
+  const service = createArtifactService({ workspace: root });
+  const restored = await service.restore({
+    id: "art-kept",
+    turnId: "turn-old",
+    relativePath: "cv/main.tex",
+    kind: "created",
+    mime: "text/x-tex",
+    size: 4,
+  });
+  assert.equal(restored.id, "art-kept");
+  assert.equal(service.list()[0].relativePath, "cv/main.tex");
+  assert.equal(await service.restore({ id: "art-missing", relativePath: "cv/gone.tex" }), null);
+  assert.equal(service.list().length, 1);
+});
+
 test("settleTurn records created and modified files", async () => {
   const root = workspace();
   write(root, "cv/old.tex", "old");

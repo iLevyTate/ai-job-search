@@ -30,6 +30,12 @@ export async function createDeskSession({
   const permissionPolicy = createPermissionPolicy({ workspace });
   await permissionPolicy.load();
   const artifacts = artifactService || createArtifactService({ workspace, openImpl: systemOpener });
+  // The Files tab reads this service. Records from the last session live on
+  // the conversation; without them a restart lists nothing and a later fetch
+  // wipes files the replay had just shown.
+  for (const item of store.get(conversationId)?.artifacts || []) {
+    await artifacts.restore(item);
+  }
   const runtime = createSessionRuntime({
     workspace,
     conversationId,

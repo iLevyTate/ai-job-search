@@ -64,6 +64,7 @@ test("applications show status, files, and next actions", () => {
   assert.ok(rows[0].querySelector('[data-file="cv/main_acme.pdf"]'));
   assert.ok(rows[0].querySelector('[data-reveal]'));
   assert.ok(rows[0].querySelector('[data-app-action="outcome"]'));
+  assert.ok(rows[0].querySelector('[data-app-action="email"]'));
   assert.ok(rows[1].textContent.includes("No response"));
   assert.ok(root.querySelector(".file-preview iframe"));
   assert.equal(statusLabel("offer declined"), "Declined");
@@ -104,7 +105,7 @@ test("the tools dialog lists each tool with how to get it", () => {
   const doc = document();
   const root = doc.createElement("div");
   renderTools(root, { tools: [
-    { id: "bun", name: "Bun", purpose: "Runs searches.", requiredFor: "Find jobs", installed: false, install: "curl -fsSL https://bun.sh/install | bash", url: "https://bun.sh" },
+    { id: "bun", name: "Bun", purpose: "Runs searches.", means: "This runs the job-board search.", requiredFor: "Find jobs", installed: false, install: "curl -fsSL https://bun.sh/install | bash", url: "https://bun.sh" },
     { id: "python", name: "Python 3", purpose: "Checks PDFs.", requiredFor: "Apply", installed: true },
   ] });
   const items = root.querySelectorAll("li");
@@ -112,4 +113,7 @@ test("the tools dialog lists each tool with how to get it", () => {
   assert.ok(items[0].textContent.includes("bun.sh/install"));
   assert.ok(items[0].querySelector("a[target=_blank]"));
   assert.equal(items[1].className, "ok");
+  assert.match(items[0].querySelector(".what-this-means").textContent, /What this means/);
+  assert.match(items[0].querySelector(".what-this-means").textContent, /job-board search/);
+  assert.match(items[1].querySelector(".what-this-means").textContent, /Checks PDFs/);
 });

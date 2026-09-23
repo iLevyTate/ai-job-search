@@ -9716,7 +9716,7 @@ ${incoming}`;
       row.innerHTML = `<div class="job-head"><h3>${escapeHtml2(app.company || "Unknown company")} \xB7 ${escapeHtml2(app.role || "role")}</h3><span class="pill${app.open ? " pill-open" : ""}">${escapeHtml2(statusLabel(app.status))}</span></div>
       <p class="job-meta">${[app.date ? escapeHtml2(`applied ${app.date}`) : "", escapeHtml2(app.channel || ""), app.fit ? escapeHtml2(`fit ${app.fit}`) : "", app.deadline ? `<strong>deadline ${escapeHtml2(app.deadline)}</strong>` : ""].filter(Boolean).join(" \xB7 ")}</p>
       ${app.notes ? `<p class="app-notes">${escapeHtml2(app.notes)}</p>` : ""}
-      <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button></div>`;
+      <div class="row-actions">${files}<button type="button" data-app-action="outcome">Record what happened</button><button type="button" class="ghost" data-app-action="interview">Prepare for interview</button><button type="button" class="ghost" data-app-action="email">Check email</button></div>`;
       list.append(row);
     }
     container.append(list);
@@ -9748,7 +9748,8 @@ ${incoming}`;
     for (const tool of info.tools) {
       const item = container.ownerDocument.createElement("li");
       item.className = tool.installed ? "ok" : tool.requiredFor === "optional" ? "optional" : "missing";
-      item.innerHTML = `<span class="tick" aria-hidden="true">${tool.installed ? "\u2713" : "\u2717"}</span><div><strong>${escapeHtml2(tool.name)}</strong> <span class="pill">${tool.installed ? "installed" : tool.requiredFor === "optional" ? "optional, not installed" : `needed for ${escapeHtml2(tool.requiredFor)}`}</span><em>${escapeHtml2(tool.purpose)}</em>${tool.installed ? "" : `<p class="install">${escapeHtml2(tool.install || "")}${tool.url ? ` <a href="${escapeHtml2(tool.url)}" target="_blank" rel="noopener noreferrer">Download</a>` : ""}</p>`}</div>`;
+      const explanation = tool.means || tool.purpose || "";
+      item.innerHTML = `<span class="tick" aria-hidden="true">${tool.installed ? "\u2713" : "\u2717"}</span><div><strong>${escapeHtml2(tool.name)}</strong> <span class="pill">${tool.installed ? "installed" : tool.requiredFor === "optional" ? "optional, not installed" : `needed for ${escapeHtml2(tool.requiredFor)}`}</span>${explanation ? `<p class="what-this-means"><span>What this means.</span> ${escapeHtml2(explanation)}</p>` : ""}${tool.installed ? "" : `<p class="install">${escapeHtml2(tool.install || "")}${tool.url ? ` <a href="${escapeHtml2(tool.url)}" target="_blank" rel="noopener noreferrer">Download</a>` : ""}</p>`}</div>`;
       list.append(item);
     }
     container.append(list);
@@ -10541,19 +10542,32 @@ ${multiline}` : rendered;
       paintFiles();
     }
   }
-  async function loadArtifacts() {
-    artifactState = createArtifactViewState({ ...artifactState, status: "loading" });
-    paintFiles();
+  var artifactLoadId = 0;
+  async function loadArtifacts({ quiet = false } = {}) {
+    const loadId = ++artifactLoadId;
+    if (!quiet && !artifactState.artifacts.length) {
+      artifactState = createArtifactViewState({ ...artifactState, status: "loading" });
+      paintFiles();
+    }
     try {
       const res = await fetch("/artifacts");
+      if (loadId !== artifactLoadId) return;
       if (!res.ok) throw new Error("Could not load artifacts.");
       const body = await res.json();
+      const artifacts = body.artifacts || [];
+      const keepSelection = artifacts.some((item) => item.id === artifactState.selectedId);
       artifactState = createArtifactViewState({
-        artifacts: body.artifacts || [],
-        selectedId: artifactState.selectedId
+        artifacts,
+        selectedId: keepSelection ? artifactState.selectedId : void 0,
+        preview: keepSelection ? artifactState.preview : null,
+        compare: keepSelection ? artifactState.compare : null,
+        confirm: keepSelection ? artifactState.confirm : null
       });
     } catch (error) {
-      artifactState = createArtifactViewState({ status: "error", error: error.message });
+      if (loadId !== artifactLoadId) return;
+      if (!artifactState.artifacts.length) {
+        artifactState = createArtifactViewState({ status: "error", error: error.message });
+      }
     }
     paintFiles();
   }
@@ -11053,12 +11067,29 @@ ${multiline}` : rendered;
   var toolsInfo = null;
   var jobsState = { jobs: [], filter: "open", query: "", status: "loading", error: "", sample: null, samplePosting: "" };
   var applicationsState = { applications: [], status: "loading", error: "", preview: null };
+  var SURFACE_TITLES = {
+    chat: "Conversation",
+    jobs: "Jobs",
+    applications: "Applications",
+    terminal: "Terminal",
+    files: "Files"
+  };
+  function paintGmailHint() {
+    const hint = document.querySelector('.steps [data-action="gmail-sync"] em');
+    if (!hint) return;
+    if (!hint.dataset.base) hint.dataset.base = hint.textContent;
+    const gmail = progressInfo?.gmail;
+    if (gmail?.lastSync) hint.textContent = `Last checked ${String(gmail.lastSync).slice(0, 10)}`;
+    else if (gmail?.started) hint.textContent = "Already set up. Check for new replies";
+    else hint.textContent = hint.dataset.base;
+  }
   async function loadProgress() {
     try {
       const res = await fetch("/progress");
       if (res.ok) progressInfo = await res.json();
     } catch {
     }
+    paintGmailHint();
     if (!state.cards.size) paintChat();
   }
   async function loadTools({ refresh = false } = {}) {
@@ -11112,6 +11143,7 @@ ${multiline}` : rendered;
   }
   function refreshDeskData() {
     loadProgress();
+    loadArtifacts({ quiet: true });
     if (selectedTab === "jobs") loadJobs();
     if (selectedTab === "applications") loadApplications();
   }
@@ -11432,6 +11464,8 @@ ${multiline}` : rendered;
     selectedId: "chat",
     onSelect(id) {
       selectedTab = id;
+      const title = document.getElementById("surface-title");
+      if (title) title.textContent = SURFACE_TITLES[id] || "Conversation";
       if (id === "files") loadArtifacts();
       if (id === "jobs") loadJobs();
       if (id === "applications") loadApplications();
@@ -11530,6 +11564,10 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     const target = [row?.dataset.company, row?.dataset.role].filter(Boolean).join(" ");
     if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
     if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
+    if (action.dataset.appAction === "email") {
+      const company = row?.dataset.company || "";
+      runStep("gmail-sync", company ? `/gmail-sync ${company}` : "/gmail-sync");
+    }
   });
   async function openWorkspaceFile(path, extra = {}) {
     try {
@@ -11672,6 +11710,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
   fetch("/commands").then((res) => res.json()).then((data) => {
     commands = data.commands || [];
     if (commands.length) renderSidebar(stepsEl, commands);
+    paintGmailHint();
   }).catch(() => {
   });
   connectRuntime();
