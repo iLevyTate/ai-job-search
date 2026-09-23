@@ -12,6 +12,7 @@ documents/
 ├── linkedin/                    # LinkedIn profile export (PDF)
 ├── diplomas/                    # Degree certificates and transcripts
 ├── references/                  # Reference letters
+├── projects/                    # Independent project summaries, case studies, or portfolio docs
 ├── postings/                    # Raw job posting text, pasted manually for pages Claude can't fetch
 │   └── <Company> - <Job Title>.txt  # Filename = company + job title, content = full posting text
 ├── applications/                # Past job applications

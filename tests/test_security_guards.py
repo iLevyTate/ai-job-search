@@ -415,6 +415,19 @@ class RealRepoTests(unittest.TestCase):
         result = run_guards(REPO_ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_ci_and_release_cannot_skip_the_security_suites(self):
+        ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        release = (REPO_ROOT / ".github" / "workflows" / "desk-release.yml").read_text(encoding="utf-8")
+        template_gate = (
+            'contains(fromJSON(\'["MadsLorentzen/ai-job-search", "iLevyTate/ai-job-search"]\'), github.repository)'
+        )
+        self.assertIn(template_gate, ci)
+        self.assertNotIn("No gui/tests directory; skipping", ci)
+        self.assertIn("gui/tests is missing; desk security and unit tests must run", ci)
+        self.assertIn("python tools/security_guards.py", release)
+        self.assertIn("python -m unittest discover -s tests -t . -v", release)
+        self.assertIn("needs: [test, security-guards, framework-tests]", release)
+
 
 class SplitGuardHooksAreAllowed(unittest.TestCase):
     def test_the_two_split_guard_hooks_and_nothing_else(self):

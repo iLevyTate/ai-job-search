@@ -19,7 +19,18 @@ import os
 import unittest
 from pathlib import Path
 
-UPSTREAM = "MadsLorentzen/ai-job-search"
+# Pristine templates. A personalized fork is expected to replace these
+# sentinels via /setup, so CI skips the module there. The default keeps the
+# tests active for local runs.
+TEMPLATE_REPOSITORIES = frozenset({
+    "MadsLorentzen/ai-job-search",
+    "iLevyTate/ai-job-search",
+})
+
+
+def _runs_on_template() -> bool:
+    repository = os.environ.get("GITHUB_REPOSITORY", "MadsLorentzen/ai-job-search")
+    return repository in TEMPLATE_REPOSITORIES
 
 REPO = Path(__file__).resolve().parent.parent
 CI = REPO / ".github" / "workflows" / "ci.yml"
@@ -44,9 +55,9 @@ def personalize_cv(text: str) -> str:
     )
 
 
-@unittest.skipIf(
-    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) != UPSTREAM,
-    "placeholder-integrity guards the pristine upstream template; forks personalize these files via /setup",
+@unittest.skipUnless(
+    _runs_on_template(),
+    "placeholder-integrity guards pristine templates; personalized forks replace these files via /setup",
 )
 class TestCvSentinelsAreDataLocated(unittest.TestCase):
     def setUp(self):
@@ -81,9 +92,9 @@ class TestCvSentinelsAreDataLocated(unittest.TestCase):
         )
 
 
-@unittest.skipIf(
-    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) != UPSTREAM,
-    "placeholder-integrity guards the pristine upstream template; forks personalize these files via /setup",
+@unittest.skipUnless(
+    _runs_on_template(),
+    "placeholder-integrity guards pristine templates; personalized forks replace these files via /setup",
 )
 class TestProfileSentinelIsDataLocated(unittest.TestCase):
     def test_ci_checks_a_data_placeholder_not_the_header_comment(self):

@@ -1,11 +1,13 @@
 # CI for the framework itself: LaTeX smoke compiles, skill/command lint,
-# CLI typechecks, and (upstream only) placeholder integrity.
+# CLI typechecks, and placeholder integrity.
 #
-# Fork-friendly by design: forks personalize CLAUDE.md, the skill files, and
-# cv/main_example.tex via /setup, so the placeholder-integrity job and the
-# exact page-count/content assertions run only on the upstream template repo.
-# Compile success, lint correctness, and an extractable PDF text layer are
-# asserted everywhere.
+# Fork-friendly by design: a personalized fork replaces CLAUDE.md, the skill
+# files, and cv/main_example.tex via /setup, so the placeholder-integrity job
+# and the exact page-count/content assertions run only on pristine templates
+# (upstream, and this public US fork). Compile success, lint correctness, and
+# an extractable PDF text layer are asserted everywhere. The framework-version
+# guard stays upstream-only: this fork's methodology files are allowed to
+# diverge from upstream's version stamps.
 #
 # Deliberately NOT here: live smoke tests of the job-portal CLIs. They hit
 # real portals (network-flaky, and the linkedin-search skill is personal-use
@@ -87,15 +89,18 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: gui/package-lock.json
-      - name: Run desk tests when present
+      - name: Require desk tests
+        working-directory: gui
         run: |
-          if [ -d tests ]; then
-            npm ci
-            npm run build:renderer
-            npm test
-          else
-            echo "No gui/tests directory; skipping"
+          if [ ! -d tests ]; then
+            echo "::error::gui/tests is missing; desk security and unit tests must run"
+            exit 1
           fi
+      - run: npm ci
+        working-directory: gui
+      - run: npm run build:renderer
+        working-directory: gui
+      - run: npm test
         working-directory: gui
 
   dependency-review:
@@ -192,8 +197,8 @@ jobs:
         run: |
           python3 tools/verify_pdf.py cv/main_example.pdf --min-chars 100
           python3 tools/verify_pdf.py cover_letters/cover_example.pdf --min-chars 100
-      - name: Assert stock PDF structure (upstream template only)
-        if: github.repository == 'MadsLorentzen/ai-job-search'
+      - name: Assert stock PDF structure (template repos only)
+        if: contains(fromJSON('["MadsLorentzen/ai-job-search", "iLevyTate/ai-job-search"]'), github.repository)
         run: |
           python3 tools/verify_pdf.py cv/main_example.pdf \
             --pages 2 \
@@ -249,8 +254,10 @@ jobs:
         working-directory: .agents/skills/${{ matrix.tool }}/cli
 
   placeholder-integrity:
-    name: Placeholder integrity (upstream template only)
-    if: github.repository == 'MadsLorentzen/ai-job-search'
+    name: Placeholder integrity (template repos)
+    # Personalized forks replace these sentinels via /setup. This public
+    # repo stays a template, so it runs the same check as upstream.
+    if: contains(fromJSON('["MadsLorentzen/ai-job-search", "iLevyTate/ai-job-search"]'), github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
