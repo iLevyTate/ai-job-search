@@ -21,10 +21,10 @@ test("discovers all 16 workflows without duplicates", async () => {
   }
 });
 
-test("orders the seven principal actions from metadata", async () => {
+test("orders the principal actions from metadata", async () => {
   const registry = await createCommandRegistry({ workspace: REPO });
   const primary = registry.list().filter((item) => item.primaryOrder).map((item) => item.id);
-  assert.deepEqual(primary, ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome"]);
+  assert.deepEqual(primary, ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "gmail-sync"]);
 });
 
 test("renders url, multiline, path, flags, and positional text exactly", async () => {

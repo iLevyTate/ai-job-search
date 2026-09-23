@@ -34,7 +34,7 @@ test("primary sidebar derives from metadata and Apply keeps pasted newlines", as
   const registry = await createCommandRegistry({ workspace: WORKSPACE });
   const commands = registry.list();
   const primary = primaryCommands(commands).map((item) => item.id);
-  assert.deepEqual(primary, ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome"]);
+  assert.deepEqual(primary, ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "gmail-sync"]);
 
   const apply = registry.get("apply");
   const rendered = renderCommandInvocation(apply, {

@@ -209,7 +209,26 @@ export function readProgress(workspace) {
     { id: "apply", title: "Apply to one", done: applications.length > 0, action: "apply", hint: applications.length ? `${applications.length} application${applications.length === 1 ? "" : "s"} tracked.` : "Claude writes a CV and cover letter for a job you pick." },
   ];
   const next = steps.find((step) => !step.done) || null;
-  return { steps, next: next?.id || null, counts: { documents: documents.count, jobs: jobs.length, applications: applications.length } };
+  return {
+    steps,
+    next: next?.id || null,
+    counts: { documents: documents.count, jobs: jobs.length, applications: applications.length },
+    gmail: readGmailStatus(workspace),
+  };
+}
+
+// gmail_sync/state.json is written only after the Gmail connector check passes,
+// so its presence means this folder has already run Check email.
+export function readGmailStatus(workspace) {
+  const file = join(workspace, "gmail_sync", "state.json");
+  if (!existsSync(file)) return { started: false, lastSync: null };
+  try {
+    const data = JSON.parse(readTextIfExists(file) || "{}");
+    const lastSync = typeof data.last_sync === "string" && data.last_sync ? data.last_sync : null;
+    return { started: true, lastSync };
+  } catch {
+    return { started: true, lastSync: null };
+  }
 }
 
 const DOCUMENT_KINDS = ["cv", "linkedin", "diplomas", "references", "postings"];
@@ -344,13 +363,13 @@ export function openWithSystem(absolutePath) {
 // Tools the steps need
 
 const TOOLS = [
-  { id: "claude", name: "Claude Code", purpose: "Runs every step.", requiredFor: "everything", commands: ["claude"] },
-  { id: "python", name: "Python 3", purpose: "Checks that a finished CV reads correctly to employer systems.", requiredFor: "Apply", commands: ["python3", "python"], url: "https://www.python.org/downloads/" },
-  { id: "bun", name: "Bun", purpose: "Runs the job-board searches and Autofill.", requiredFor: "Find jobs, Autofill", commands: ["bun"], url: "https://bun.sh" },
-  { id: "lualatex", name: "TeX (lualatex)", purpose: "Turns the CV into a PDF.", requiredFor: "Apply (PDF)", commands: ["lualatex"], url: "https://tug.org/texlive/" },
-  { id: "xelatex", name: "TeX (xelatex)", purpose: "Turns the cover letter into a PDF.", requiredFor: "Apply (PDF)", commands: ["xelatex"], url: "https://tug.org/texlive/" },
-  { id: "git", name: "Git", purpose: "Optional. Lets Desk download updates and keep a history of your folder.", requiredFor: "optional", commands: ["git"], url: "https://git-scm.com/downloads" },
-  { id: "pdftotext", name: "pdftotext", purpose: "Optional. A second way to read PDFs for the employer-system check.", requiredFor: "optional", commands: ["pdftotext"], url: "https://poppler.freedesktop.org/" },
+  { id: "claude", name: "Claude Code", purpose: "Runs every step.", means: "This is the assistant that does the work. Without it, none of the steps run.", requiredFor: "everything", commands: ["claude"] },
+  { id: "python", name: "Python 3", purpose: "Checks that a finished CV reads correctly to employer systems.", means: "After a CV is written, this checks that an employer's software can actually read the PDF.", requiredFor: "Apply", commands: ["python3", "python"], url: "https://www.python.org/downloads/" },
+  { id: "bun", name: "Bun", purpose: "Runs the job-board searches and Autofill.", means: "This runs the job-board search and the form filler. Find jobs and Autofill need it.", requiredFor: "Find jobs, Autofill", commands: ["bun"], url: "https://bun.sh" },
+  { id: "lualatex", name: "TeX (lualatex)", purpose: "Turns the CV into a PDF.", means: "This turns the CV into a PDF an employer can open. Apply uses it when you want a PDF, not only the source file.", requiredFor: "Apply (PDF)", commands: ["lualatex"], url: "https://tug.org/texlive/" },
+  { id: "xelatex", name: "TeX (xelatex)", purpose: "Turns the cover letter into a PDF.", means: "This turns the cover letter into a PDF. It is the same TeX install as the CV tool, used for the letter.", requiredFor: "Apply (PDF)", commands: ["xelatex"], url: "https://tug.org/texlive/" },
+  { id: "git", name: "Git", purpose: "Optional. Lets Desk download updates and keep a history of your folder.", means: "This only updates Desk and keeps a history of your folder. The search works without it.", requiredFor: "optional", commands: ["git"], url: "https://git-scm.com/downloads" },
+  { id: "pdftotext", name: "pdftotext", purpose: "Optional. A second way to read PDFs for the employer-system check.", means: "A second way to read the PDF during the employer-system check. You can skip it.", requiredFor: "optional", commands: ["pdftotext"], url: "https://poppler.freedesktop.org/" },
 ];
 
 function playwrightChromiumPresent(workspace, env = process.env) {
@@ -388,6 +407,7 @@ export function checkTools({ workspace, env = process.env, resolver = resolveCom
     id: "chromium",
     name: "Browser for Autofill",
     purpose: "The browser Autofill drives to fill in employer forms.",
+    means: "Autofill opens this browser, fills the form, and stops. You still press the employer's Submit button yourself.",
     requiredFor: "Autofill",
     installed: playwrightChromiumPresent(workspace, env),
     path: "",
@@ -398,6 +418,7 @@ export function checkTools({ workspace, env = process.env, resolver = resolveCom
     id: "claude-chrome",
     name: "Claude in Chrome",
     purpose: "Lets Claude open job boards and sign-in pages in your real Chrome. Desk cannot pack this into the installer; Chrome only installs it from the official store.",
+    means: "Lets Claude use your real Chrome on job boards that need you to be signed in. Optional. Desk never types your password.",
     requiredFor: "optional",
     installed: chromeExtensionInstalled(env),
     path: "",

@@ -2,15 +2,16 @@
 desk:
   id: gmail-sync
   invocation: /gmail-sync
-  title: Gmail Sync
-  description: Sync application status from Gmail.
+  title: Check email
+  description: Employer replies in Gmail. You approve any change.
+  primaryOrder: 8
   arguments:
     - kind: text
       name: query
       required: false
       positional: true
   requirements:
-    - Gmail MCP
+    - Gmail connected in Claude
 ---
 
 # /gmail-sync - Sync Application Status from Gmail

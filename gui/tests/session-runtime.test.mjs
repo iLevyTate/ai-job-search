@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createArtifactService } from "../artifacts.mjs";
 import { createConversationStore } from "../conversation-store.mjs";
 import { createSessionRuntime } from "../session-runtime.mjs";
 
@@ -664,4 +665,29 @@ test("multi-select answers reach the SDK joined with ', ' and an unanswered ques
     assert.match(denied.message, /did not answer/);
     await waitUntil(() => published.some((event) => event.type === "question.resolved" && event.payload.answered === false));
   }, { adapterFactory: wired.factory });
+});
+
+test("a finished turn publishes generated files after the completion, in sequence order", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "desk-runtime-files-"));
+  mkdirSync(join(workspace, "cv"));
+  const artifacts = createArtifactService({
+    workspace,
+    createId: () => "art-cv",
+  });
+  await withRuntime(async ({ runtime, fake, published }) => {
+    await runtime.submitMessage({ messageId: "m-file", text: "write the cv", expectedControllerGeneration: 1 });
+    writeFileSync(join(workspace, "cv", "main_acme.tex"), "cv");
+    fake.emit({ type: "result", subtype: "success", result: "Done." });
+    await waitUntil(() => published.some((event) => event.type === "artifact.discovered"));
+    const completedAt = published.findIndex((event) => event.type === "turn.completed");
+    const discoveredAt = published.findIndex((event) => event.type === "artifact.discovered");
+    assert.ok(completedAt >= 0 && discoveredAt > completedAt);
+    assert.equal(published[discoveredAt].payload.relativePath, "cv/main_acme.tex");
+    assert.equal(published[discoveredAt].turnId, "m-file");
+    const sequences = published.map((event) => event.sequence);
+    for (let index = 1; index < sequences.length; index += 1) {
+      assert.ok(sequences[index] > sequences[index - 1]);
+    }
+    assert.equal(artifacts.list()[0].relativePath, "cv/main_acme.tex");
+  }, { workspace, artifactService: artifacts });
 });

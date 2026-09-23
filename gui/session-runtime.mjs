@@ -102,42 +102,21 @@ export function createSessionRuntime({
     await ensureTurnFor(sdkMessage);
     if (currentEpoch !== epoch) return;
     const drafts = normalize(sdkMessage, eventContext());
+    const notify = [];
     for (const draft of drafts) {
       if (currentEpoch !== epoch) return;
       const persisted = await store.appendEvent(conversationId, draft);
+      notify.push(persisted);
       if (persisted.type === "turn.completed" && conversation()?.recoveryAttempts) {
         await store.transact(conversationId, (next) => {
           next.recoveryAttempts = 0;
         });
       }
       if ((persisted.type === "turn.completed" || persisted.type === "turn.failed") && artifactService) {
-        const found = await artifactService.settleTurn(persisted.turnId || conversation()?.partialTurn?.id);
-        if (found.length) {
-          await store.transact(conversationId, (next) => {
-            next.artifacts.push(...found.map((item) => ({
-              id: item.id,
-              turnId: item.turnId,
-              relativePath: item.relativePath,
-              kind: item.kind,
-              mime: item.mime,
-              size: item.size,
-            })));
-          });
-          for (const item of found) {
-            const artifactEvent = await store.appendEvent(conversationId, {
-              type: "artifact.discovered",
-              payload: {
-                artifactId: item.id,
-                entityId: item.id,
-                relativePath: item.relativePath,
-                kind: item.kind,
-                mime: item.mime,
-                turnId: item.turnId,
-              },
-            });
-            for (const listener of subscribers) listener(artifactEvent);
-          }
-        }
+        // appendEvent already cleared partialTurn, so the id has to come from
+        // the event that just finished, which is the id beginTurn snapshotted.
+        const turnId = persisted.turnId || conversation()?.partialTurn?.id;
+        notify.push(...await rememberDiscovered(await artifactService.settleTurn(turnId)));
       }
       if (persisted.type === "question.requested") {
         broker.beginQuestion?.({
@@ -145,8 +124,49 @@ export function createSessionRuntime({
           questions: persisted.payload.questions ?? [],
         });
       }
-      for (const listener of subscribers) listener(persisted);
     }
+    // Subscribers see events in sequence order. Notifying a later artifact
+    // before the earlier completion makes the socket drop the completion
+    // (and, if the order flipped, the files).
+    notify.sort((left, right) => left.sequence - right.sequence);
+    if (currentEpoch !== epoch) return;
+    for (const event of notify) {
+      for (const listener of subscribers) listener(event);
+    }
+  }
+
+  async function rememberDiscovered(found) {
+    if (!found?.length) return [];
+    await store.transact(conversationId, (next) => {
+      const known = new Set(next.artifacts.map((item) => item.id));
+      for (const item of found) {
+        if (known.has(item.id)) continue;
+        next.artifacts.push({
+          id: item.id,
+          turnId: item.turnId,
+          relativePath: item.relativePath,
+          kind: item.kind,
+          mime: item.mime,
+          size: item.size,
+        });
+      }
+    });
+    const events = [];
+    for (const item of found) {
+      events.push(await store.appendEvent(conversationId, {
+        type: "artifact.discovered",
+        turnId: item.turnId,
+        payload: {
+          artifactId: item.id,
+          entityId: item.id,
+          relativePath: item.relativePath,
+          kind: item.kind,
+          mime: item.mime,
+          turnId: item.turnId,
+        },
+      }));
+    }
+    return events;
   }
 
   async function pump(currentAdapter, currentEpoch) {
@@ -168,6 +188,7 @@ export function createSessionRuntime({
     // The stream is gone. Whatever turn was open can never finish on its own,
     // so end it visibly instead of leaving the page on "Working" forever.
     if (current?.partialTurn) {
+      const openTurnId = current.partialTurn.id;
       const reason = failure ? String(failure.message || failure) : "";
       const text = wasStop
         ? "Stopped."
@@ -175,12 +196,25 @@ export function createSessionRuntime({
           ? `Claude stopped unexpectedly (${reason}). Send your message again.`
           : "Claude stopped unexpectedly. Send your message again.";
       await publishEvent({ type: wasStop ? "turn.interrupted" : "turn.failed", payload: { text, reason: classification } }).catch(() => {});
+      // A stream that ends without a result still wrote files. Settle that
+      // snapshot or the Files tab stays empty after the turn is over.
+      if (artifactService && openTurnId) {
+        const discovered = await rememberDiscovered(await artifactService.settleTurn(openTurnId).catch(() => []));
+        for (const event of discovered) {
+          for (const listener of subscribers) listener(event);
+        }
+      }
     }
     // Follow-ups handed to the dead adapter never reach Claude.
     const lost = pendingTurns.splice(0, pendingTurns.length);
     for (const id of lost) {
       await publishEvent({ type: "turn.failed", turnId: id, payload: { text: "Claude stopped before reaching this message. Send it again." } }).catch(() => {});
-      artifactService?.settleTurn?.(id).catch?.(() => {});
+      if (artifactService) {
+        const discovered = await rememberDiscovered(await artifactService.settleTurn(id).catch(() => []));
+        for (const event of discovered) {
+          for (const listener of subscribers) listener(event);
+        }
+      }
     }
     const attempts = current?.recoveryAttempts ?? 0;
     const resumable = recoveryPolicy.shouldResume({

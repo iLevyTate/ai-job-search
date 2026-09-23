@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   checkTools,
+  readGmailStatus,
   csvRecords,
   parseCsv,
   readApplications,
@@ -123,4 +124,15 @@ test("the tools check names what is missing and how to get it", () => {
   assert.ok(byId["claude-chrome"]);
   assert.equal(byId["claude-chrome"].requiredFor, "optional");
   assert.ok(!info.missingRequired.includes("claude-chrome"));
+  assert.match(byId.lualatex.means, /PDF/);
+  assert.match(byId["claude-chrome"].means, /password/);
+});
+
+test("gmail status reads a prior sync and stays quiet before the first one", () => {
+  const root = workspace();
+  assert.deepEqual(readGmailStatus(root), { started: false, lastSync: null });
+  mkdirSync(join(root, "gmail_sync"));
+  writeFileSync(join(root, "gmail_sync", "state.json"), JSON.stringify({ last_sync: "2026-09-20T15:00:00.000Z", processed_message_ids: [] }));
+  assert.deepEqual(readGmailStatus(root), { started: true, lastSync: "2026-09-20T15:00:00.000Z" });
+  assert.equal(readProgress(root).gmail.started, true);
 });

@@ -1636,6 +1636,8 @@ button.link {
 .tools-list li.optional .tick { color: var(--fade); }
 .tools-list strong { font-family: var(--sans); font-weight: 500; }
 .tools-list em { display: block; color: var(--fade); font-style: normal; font-size: 0.84rem; }
+.tools-list .what-this-means { margin: 0.3rem 0 0; font-size: 0.9rem; line-height: 1.4; }
+.tools-list .what-this-means span { display: block; font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fade); margin-bottom: 0.12rem; }
 .tools-list .install { margin: 0.35rem 0 0; font-family: var(--mono); font-size: 0.74rem; color: var(--paper); overflow-wrap: anywhere; }
 .tools-list .install a { color: var(--brass); font-family: var(--sans); margin-left: 0.4rem; }
 

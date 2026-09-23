@@ -309,19 +309,35 @@ function ingest(event) {
   }
 }
 
-async function loadArtifacts() {
-  artifactState = createArtifactViewState({ ...artifactState, status: "loading" });
-  paintFiles();
+// A fetch started before the turn settled used to finish afterwards and
+// replace the files just discovered with the empty list it had requested.
+let artifactLoadId = 0;
+
+async function loadArtifacts({ quiet = false } = {}) {
+  const loadId = ++artifactLoadId;
+  if (!quiet && !artifactState.artifacts.length) {
+    artifactState = createArtifactViewState({ ...artifactState, status: "loading" });
+    paintFiles();
+  }
   try {
     const res = await fetch("/artifacts");
+    if (loadId !== artifactLoadId) return;
     if (!res.ok) throw new Error("Could not load artifacts.");
     const body = await res.json();
+    const artifacts = body.artifacts || [];
+    const keepSelection = artifacts.some((item) => item.id === artifactState.selectedId);
     artifactState = createArtifactViewState({
-      artifacts: body.artifacts || [],
-      selectedId: artifactState.selectedId,
+      artifacts,
+      selectedId: keepSelection ? artifactState.selectedId : undefined,
+      preview: keepSelection ? artifactState.preview : null,
+      compare: keepSelection ? artifactState.compare : null,
+      confirm: keepSelection ? artifactState.confirm : null,
     });
   } catch (error) {
-    artifactState = createArtifactViewState({ status: "error", error: error.message });
+    if (loadId !== artifactLoadId) return;
+    if (!artifactState.artifacts.length) {
+      artifactState = createArtifactViewState({ status: "error", error: error.message });
+    }
   }
   paintFiles();
 }
@@ -880,6 +896,24 @@ let toolsInfo = null;
 let jobsState = { jobs: [], filter: "open", query: "", status: "loading", error: "", sample: null, samplePosting: "" };
 let applicationsState = { applications: [], status: "loading", error: "", preview: null };
 
+const SURFACE_TITLES = {
+  chat: "Conversation",
+  jobs: "Jobs",
+  applications: "Applications",
+  terminal: "Terminal",
+  files: "Files",
+};
+
+function paintGmailHint() {
+  const hint = document.querySelector('.steps [data-action="gmail-sync"] em');
+  if (!hint) return;
+  if (!hint.dataset.base) hint.dataset.base = hint.textContent;
+  const gmail = progressInfo?.gmail;
+  if (gmail?.lastSync) hint.textContent = `Last checked ${String(gmail.lastSync).slice(0, 10)}`;
+  else if (gmail?.started) hint.textContent = "Already set up. Check for new replies";
+  else hint.textContent = hint.dataset.base;
+}
+
 async function loadProgress() {
   try {
     const res = await fetch("/progress");
@@ -887,6 +921,7 @@ async function loadProgress() {
   } catch {
     // The checklist is a nicety; the chat works without it.
   }
+  paintGmailHint();
   if (!state.cards.size) paintChat();
 }
 
@@ -945,8 +980,11 @@ async function loadApplications() {
 }
 
 // After every turn the files may have changed: refresh what the tabs show.
+// Files refresh even when another tab is in front, so opening Files after
+// the turn shows what was generated instead of a list fetched too early.
 function refreshDeskData() {
   loadProgress();
+  loadArtifacts({ quiet: true });
   if (selectedTab === "jobs") loadJobs();
   if (selectedTab === "applications") loadApplications();
 }
@@ -1299,6 +1337,8 @@ const tabs = mountTabs(document.getElementById("surface-tabs"), {
   selectedId: "chat",
   onSelect(id) {
     selectedTab = id;
+    const title = document.getElementById("surface-title");
+    if (title) title.textContent = SURFACE_TITLES[id] || "Conversation";
     if (id === "files") loadArtifacts();
     if (id === "jobs") loadJobs();
     if (id === "applications") loadApplications();
@@ -1400,6 +1440,10 @@ applicationsEl.addEventListener("click", async (event) => {
   const target = [row?.dataset.company, row?.dataset.role].filter(Boolean).join(" ");
   if (action.dataset.appAction === "outcome") runStep("outcome", `/outcome ${target}`.trim());
   if (action.dataset.appAction === "interview") runStep("interview", `/interview ${row?.dataset.company || ""}`.trim());
+  if (action.dataset.appAction === "email") {
+    const company = row?.dataset.company || "";
+    runStep("gmail-sync", company ? `/gmail-sync ${company}` : "/gmail-sync");
+  }
 });
 
 // A 404 or 415 resolves normally, so a bare .catch() left "Show folder" and
@@ -1559,6 +1603,7 @@ fetch("/commands")
   .then((data) => {
     commands = data.commands || [];
     if (commands.length) renderSidebar(stepsEl, commands);
+    paintGmailHint();
   })
   .catch(() => {});
 
