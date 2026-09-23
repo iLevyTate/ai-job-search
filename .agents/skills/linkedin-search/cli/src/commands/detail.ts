@@ -1,4 +1,4 @@
-import { DETAIL_URL, htmlFetch, parseJobDetail, writeError } from "../helpers.js"
+import { DETAIL_URL, htmlFetch, parseJobDetail, writeError } from "../helpers.ts"
 
 export interface DetailOpts {
   id: string

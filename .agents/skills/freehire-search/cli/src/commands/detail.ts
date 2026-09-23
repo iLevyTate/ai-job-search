@@ -1,4 +1,4 @@
-import { apiGet, normalizeSlug, toDetail, writeError, type FreehireJob, type JobDetailResult } from "../helpers.js"
+import { apiGet, normalizeSlug, toDetail, writeError, type FreehireJob, type JobDetailResult } from "../helpers.ts"
 
 export interface DetailOpts {
   id: string // a freehire public slug or a /jobs/<slug> URL

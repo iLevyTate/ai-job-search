@@ -137,6 +137,14 @@ describe("LinkedIn CLI flag validation", () => {
 });
 
 
+describe("help", () => {
+  test("--help prints usage and exits 0", async () => {
+    const result = await runCLI(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/USAGE/);
+  });
+});
+
 describe("unknown flag rejection", () => {
   // add-portal.md's contract: "a bogus flag or missing required arg exits 1
   // with a JSON error on stderr". A silently discarded flag is worse than an

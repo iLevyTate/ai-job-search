@@ -12,6 +12,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
+    "erasableSyntaxOnly": true,
     "outDir": "dist",
     "rootDir": "."
   },

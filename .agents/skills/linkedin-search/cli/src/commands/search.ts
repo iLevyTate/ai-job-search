@@ -7,7 +7,7 @@ import {
   workTypeFlag,
   writeError,
   type JobCard,
-} from "../helpers.js"
+} from "../helpers.ts"
 
 export interface SearchOpts {
   query?: string

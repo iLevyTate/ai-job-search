@@ -42,7 +42,7 @@ cp application_profile.example.json application_profile.json
 Verify the setup:
 
 ```bash
-cd .agents/skills/ats-autofill/cli && bun run src/cli.ts doctor
+cd .agents/skills/ats-autofill/cli && node --experimental-strip-types src/cli.ts doctor
 ```
 
 ## Usage

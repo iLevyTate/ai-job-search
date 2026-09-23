@@ -7,8 +7,8 @@
 // against LinkedIn's Terms of Service, so keep volume low and do not use it
 // commercially or for bulk data collection. Run it on your own responsibility.
 
-import { runSearch, type SearchOpts } from "./commands/search.js"
-import { runDetail, type DetailOpts } from "./commands/detail.js"
+import { runSearch, type SearchOpts } from "./commands/search.ts"
+import { runDetail, type DetailOpts } from "./commands/detail.ts"
 
 interface Flags {
   _: string[]
@@ -80,7 +80,7 @@ async function main(): Promise<number> {
 
   if (!cmd || flags.help || flags.h) {
     process.stdout.write(HELP)
-    return cmd ? 0 : 1
+    return flags.help || flags.h ? 0 : 1
   }
 
   // Reject unknown flags instead of silently discarding them: a discarded

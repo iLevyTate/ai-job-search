@@ -1,4 +1,4 @@
-import { apiGet, toResult, writeError, type FreehireJob, type JobResult } from "../helpers.js"
+import { apiGet, toResult, writeError, type FreehireJob, type JobResult } from "../helpers.ts"
 
 // The agent variant of the job search: the same query, ranking, and facets as the
 // web's /jobs/search, but each hit carries the posting's full description instead

@@ -12,8 +12,11 @@
 # Deliberately NOT here: live smoke tests of the job-portal CLIs. They hit
 # real portals (network-flaky, and the linkedin-search skill is personal-use
 # only per its own ToS warning - CI-automated requests would violate that).
-# CI runs typechecks and the checked-in fixture/mock test suites only; live
-# portal testing stays a local, on-demand step.
+# CI runs typechecks, the checked-in fixture/mock test suites, and `--help`
+# on each CLI. Live portal testing stays a local, on-demand step.
+# `--help` runs under Node's strip-only type stripping (Node 22 and 24).
+# A CLI whose package.json depends on @bunli/core is started with Bun instead:
+# that library requires Bun, and its README documents `bun run`.
 #
 # Security posture: this template ships pre-approved Claude Code permissions
 # and CLI code that every fork user executes, so the security-guards job
@@ -252,6 +255,46 @@ jobs:
             echo "No Bun tests found for ${{ matrix.tool }}; skipping"
           fi
         working-directory: .agents/skills/${{ matrix.tool }}/cli
+
+  cli-node-start:
+    # Typecheck under Bun accepts syntax Node's strip-only mode rejects
+    # (parameter properties, enums, namespaces, decorators). Running the
+    # documented entry point is what catches a CLI that compiles and then
+    # cannot start. Node 24 strips types by default, so the same bug returns
+    # there with no flag. The 22/24 matrix is only on this job.
+    name: Node ${{ matrix.node-version }} starts ${{ matrix.tool }}
+    needs: discover-clis
+    if: needs.discover-clis.outputs.tools != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: ${{ fromJSON(needs.discover-clis.outputs.tools) }}
+        node-version: ["22", "24"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: bun install
+        working-directory: .agents/skills/${{ matrix.tool }}/cli
+      - name: CLI starts under Node's strip-only type stripping
+        working-directory: .agents/skills/${{ matrix.tool }}/cli
+        run: |
+          set -euo pipefail
+          if grep -q '"@bunli/core"' package.json; then
+            echo "Documented runtime is Bun. @bunli/core does not run on Node."
+            bun run src/cli.ts --help
+            exit 0
+          fi
+          # Node 22.7 through 22.17 need the flag. Node 22.18+ and Node 24 strip
+          # types by default, and newer releases drop the old flag name.
+          if node --experimental-strip-types -e "process.exit(0)" >/dev/null 2>&1; then
+            node --experimental-strip-types src/cli.ts --help
+          else
+            node src/cli.ts --help
+          fi
 
   placeholder-integrity:
     name: Placeholder integrity (template repos)

@@ -8,7 +8,7 @@
     "ats-autofill": "src/cli.ts"
   },
   "scripts": {
-    "start": "bun run src/cli.ts",
+    "start": "node --experimental-strip-types src/cli.ts",
     "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit"
   },
@@ -16,7 +16,7 @@
     "playwright": "^1.48.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
+    "typescript": "^5.8.0",
     "@types/bun": "latest"
   }
 }

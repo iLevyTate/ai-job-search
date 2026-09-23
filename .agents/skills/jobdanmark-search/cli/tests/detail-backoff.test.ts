@@ -60,8 +60,11 @@ function firstStderrJson(out: { stderr: string[] }): unknown {
 }
 
 class ExitCalled extends Error {
-  constructor(public code: number | undefined) {
+  readonly code: number | undefined;
+
+  constructor(code: number | undefined) {
     super(`process.exit(${code})`);
+    this.code = code;
   }
 }
 
