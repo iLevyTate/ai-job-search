@@ -23,6 +23,7 @@ per-file diff commands.
 - `documents/projects/**` is ignored, matching upstream, so project summaries stay out of the repository.
 
 ### Fixed
+- Desk keeps the caret where you left it when Claude's status refreshes, the Files list no longer steals arrow keys from a preview, and an empty command search says nothing matched. Undated applications sort last. A dropped link no longer leaves the conversation.
 - Portal CLIs typecheck with `erasableSyntaxOnly`, and CI starts each one under Node 22 and Node 24 with `--help`. Autofill resolves a profile resume from the repo root when the command is run from the CLI directory. `@bunli/core` CLIs still start with Bun, which is the runtime they document.
 - The Files tab keeps generated CVs and letters after a turn finishes, including when the reply ends abruptly and after Desk restarts.
 - Python tools reconfigure stdout and stderr to UTF-8, so a non-Latin company or title no longer crashes `/rank`, salary lookup, or PDF verification on Windows.
