@@ -1,4 +1,4 @@
-export type ReviewDecision = "continue" | "cancel"
+export type ReviewDecision = "continue" | "cancel" | "submit"
 
 export interface ReviewRequest {
   url: string
@@ -30,8 +30,8 @@ export class StdinReviewGate implements ReviewGate {
 
   waitForDecision(request: ReviewRequest): Promise<ReviewDecision> {
     this.stderr.write(
-      "\nForm filled. The browser is open and Submit has NOT been clicked.\n" +
-        "Review every field, then submit manually. Press Enter here to close the browser.\n",
+      "\nForm filled. The browser is open and nothing has been sent yet.\n" +
+        "Check every field. Type submit and press Enter to send it, or press Enter alone to close without sending.\n",
     )
     return new Promise((resolve) => {
       let settled = false
@@ -44,7 +44,10 @@ export class StdinReviewGate implements ReviewGate {
         this.stdin.off?.("error", onCancel)
         resolve(decision)
       }
-      const onData = () => finish("continue")
+      const onData = (chunk: unknown) => {
+        const text = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : ""
+        finish(/^\s*submit\s*$/i.test(text) ? "submit" : "continue")
+      }
       const onCancel = () => finish("cancel")
       this.stdin.once("data", onData)
       this.stdin.once("end", onCancel)
@@ -113,7 +116,9 @@ export class DeskReviewGate implements ReviewGate {
         })
         if (!response.ok) return "cancel"
         const body = await response.json() as { decision?: string; pending?: boolean }
-        if (body.decision === "continue" || body.decision === "cancel") return body.decision
+        if (body.decision === "continue" || body.decision === "cancel" || body.decision === "submit") {
+          return body.decision
+        }
         if (body.pending === false) return "cancel"
         await new Promise((resolve) => setTimeout(resolve, this.options.pollMs ?? 200))
         if (Date.now() - started > 30 * 60 * 1000) return "cancel"

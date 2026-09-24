@@ -70,6 +70,30 @@ test("duplicate decisions are idempotent and stale generations are rejected", ()
   assert.equal(stale.reason, "stale-controller");
 });
 
+test("submit is a real decision and anything else is rejected", () => {
+  const api = bridge();
+  const started = api.start();
+  api.markReady({ token: started.token, url: "https://boards.greenhouse.io/acme/jobs/1" });
+  const sent = api.decide({
+    reviewId: started.reviewId,
+    token: started.token,
+    decision: "submit",
+    expectedControllerGeneration: 1,
+    currentGeneration: 1,
+  });
+  assert.equal(sent.ok, true);
+  assert.equal(sent.decision, "submit");
+  assert.equal(sent.state, "submit-selected");
+  const bad = api.decide({
+    reviewId: "missing",
+    token: started.token,
+    decision: "send",
+    expectedControllerGeneration: 1,
+    currentGeneration: 1,
+  });
+  assert.equal(bad.ok, false);
+});
+
 test("starting a new review cancels an orphaned waiting review", () => {
   const api = bridge();
   const first = api.start();

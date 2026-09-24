@@ -22,10 +22,18 @@ describe("StdinReviewGate", () => {
       return decision
     })
     expect(browserOpen).toBe(true)
-    expect(writes.join("")).toContain("Submit has NOT been clicked")
+    expect(writes.join("")).toContain("nothing has been sent yet")
     stdin.emit("data", Buffer.from("\n"))
     expect(await pending).toBe("continue")
     expect(reviewGateHasSubmit(gate)).toBe(false)
+  })
+
+  test("the word submit is the only line that sends the application", async () => {
+    const stdin = fakeStdin()
+    const gate = new StdinReviewGate(stdin, { write: () => {} })
+    const pending = gate.waitForDecision({ url: "https://boards.greenhouse.io/acme/jobs/1" })
+    stdin.emit("data", Buffer.from("submit\n"))
+    expect(await pending).toBe("submit")
   })
 
   test("stdin close cancels without a submit path", async () => {

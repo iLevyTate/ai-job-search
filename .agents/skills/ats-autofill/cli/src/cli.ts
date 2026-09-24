@@ -39,7 +39,7 @@ function parseFlags(argv: string[]): Flags {
   return flags
 }
 
-const HELP = `ats-autofill — prefill a job application form, never submit it
+const HELP = `ats-autofill — prefill a job application form, then send it only if you say so
 
 USAGE
   node --experimental-strip-types src/cli.ts fill <job_url> [flags]
@@ -53,13 +53,13 @@ FILL FLAGS
   --cover, -c <path>     Cover letter PDF to attach. Overrides the profile value.
   --screenshot, -o <p>   Where to write the filled-form screenshot.
                          Default: job_scraper/autofill_<timestamp>.png
-  --headed               Show the browser and pause for manual review. RECOMMENDED.
+  --headed               Show the browser. Type submit to send, or Enter to close. RECOMMENDED.
   --dry-run              Report what would be filled without touching the page.
   --timeout <ms>         Navigation timeout. Default 30000.
   --format <fmt>         json (default) | table
 
 COMMANDS
-  fill      Fill the application form and stop before submitting.
+  fill      Fill the application form. In a headed run, type submit to send it.
   inspect   List the form's fields and what each would be filled with (implies --dry-run).
   doctor    Check that Playwright, a browser, and the profile file are all present.
 

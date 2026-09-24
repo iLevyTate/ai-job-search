@@ -18,7 +18,7 @@
   <a href="assets/desk-tour.mp4"><img src="assets/desk-tour.gif" alt="Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill"></a>
 </p>
 
-Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit. [Full video](assets/desk-tour.mp4).
+Setup, the Jobs list, Apply, and Autofill. Submit for me sends the form. LinkedIn, Indeed, and Dice stay manual. [Full video](assets/desk-tour.mp4).
 
 This repository is the public **US** product: English defaults, US job boards, and an installable **[Job Search Desk](https://github.com/iLevyTate/ai-job-search/releases/latest)** for Windows, macOS Apple Silicon, and Linux. Open the app or clone the repo, run `/setup` once, then scrape, rank, tailor a CV and cover letter, and prep interviews. Claude Code is the runtime. Your profile and applications stay in a folder on your computer.
 
@@ -50,7 +50,7 @@ A second click of the shortcut focuses the window that is already running. It do
 
 macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then **Open**.
 
-The app does not replace `/setup`. Autofill never clicks Submit.
+The app does not replace `/setup`. Submit for me sends an employer form. LinkedIn, Indeed, and Dice stay manual.
 
 ## Run the demo page
 
@@ -95,7 +95,7 @@ files ready    with fit ratings     (LaTeX, tailored)        field report
                -> /apply            -> Revise -> Final output  and submit
 ```
 
-**`/autofill` never clicks Submit.** It fills the form, attaches your tailored documents, screenshots the result, and hands the browser to you. Automated submission on LinkedIn, Indeed, and Dice violates their Terms of Service.
+**`/autofill` sends the form only when you press Submit for me** (or type `submit` in the terminal). It fills the form, attaches your documents, and screenshots the result first. LinkedIn, Indeed, and Dice are never sent this way. Their terms forbid automated submission.
 
 Discovery defaults to LinkedIn, Indeed, Dice, Built In, Wellfound, ClearanceJobs, USAJobs, freehire.me, and employer ATS boards on Greenhouse, Lever, Ashby, and Workday. Danish portal CLIs still ship, disabled, so methodology updates do not flip the default search path.
 
