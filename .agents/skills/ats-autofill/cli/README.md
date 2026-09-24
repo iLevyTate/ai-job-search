@@ -1,6 +1,6 @@
 # ats-autofill CLI
 
-Prefills US job application forms from `application_profile.json`. **Never submits.**
+Prefills US job application forms from `application_profile.json`. Sends one only when you type `submit` or press Submit for me. LinkedIn, Indeed, and Dice stay manual.
 
 ## Install
 
@@ -16,7 +16,7 @@ node --experimental-strip-types src/cli.ts doctor
 
 | Command | Purpose |
 |---------|---------|
-| `fill <url>` | Fill the form and stop before submitting |
+| `fill <url>` | Fill the form. In a headed run, type `submit` to send it |
 | `inspect <url>` | List fields and what each would be filled with (no page interaction) |
 | `doctor` | Verify install and profile |
 
@@ -33,7 +33,7 @@ node --experimental-strip-types src/cli.ts doctor
 | `--timeout` | `30000` | Navigation timeout in ms |
 | `--format` | `json` (`table` for `inspect`) | Output format |
 
-Headed review uses `StdinReviewGate` (Enter continues, stdin close cancels) unless Desk set `JOB_SEARCH_DESK_REVIEW_URL`. Then `DeskReviewGate` posts browser-ready and waits for Continue or Cancel. Neither adapter can submit.
+Headed review uses `StdinReviewGate` (type `submit` to send, Enter closes without sending, stdin close cancels) unless Desk set `JOB_SEARCH_DESK_REVIEW_URL`. Then `DeskReviewGate` waits for Submit for me, Done, or Cancel.
 
 ## Exit codes
 

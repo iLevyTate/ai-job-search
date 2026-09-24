@@ -5,6 +5,7 @@ const STATES = new Set([
   "browser-ready",
   "waiting-for-user",
   "continue-selected",
+  "submit-selected",
   "cancel-selected",
   "closed",
 ]);
@@ -71,14 +72,18 @@ export function createAutofillBridge({
     }
     const review = get(reviewId);
     if (!review || review.token !== token) return commandResult(false, { reason: "unauthorized" });
-    if (decision !== "continue" && decision !== "cancel") {
+    if (decision !== "continue" && decision !== "cancel" && decision !== "submit") {
       return commandResult(false, { reason: "malformed" });
     }
     if (review.decision) {
       return commandResult(true, { reviewId, decision: review.decision, idempotent: true, state: review.state });
     }
     review.decision = decision;
-    review.state = decision === "continue" ? "continue-selected" : "cancel-selected";
+    review.state = decision === "continue"
+      ? "continue-selected"
+      : decision === "submit"
+        ? "submit-selected"
+        : "cancel-selected";
     return commandResult(true, { reviewId, decision, state: review.state });
   }
 

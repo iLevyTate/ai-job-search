@@ -3,25 +3,21 @@ name: ats-autofill
 description: >
   Prefills US job application forms (Greenhouse, Lever, Ashby, Workday, and generic forms)
   from a local profile, attaches the tailored resume and cover letter, screenshots the result,
-  and hands the browser over for human review. Never submits.
+  and can press the employer's Submit button when you ask it to. LinkedIn, Indeed, and Dice stay manual.
   Triggers on: autofill, fill application, apply to job, /autofill
 ---
 
 # ATS Autofill
 
-Fills out a job application form so the only thing left is reading it and clicking Submit.
+Fills out a job application form. You check it, then either send it yourself or tell the tool to press Submit.
 
-## The one rule
+## Sending the application
 
-**This skill never clicks Submit.** Not on Greenhouse, not on Lever, not anywhere. It fills, screenshots, reports, and stops.
+Nothing is sent until you say so. In Desk, **Submit for me** presses the employer's Submit button. In a terminal, type `submit` and press Enter. Enter alone closes the browser without sending.
 
-Three reasons, and none of them are negotiable:
+LinkedIn, Indeed, and Dice are the exception. Their terms forbid automated submission, so those three never get a Submit for me button. You click their button yourself.
 
-1. **Terms of Service.** Automated submission on LinkedIn, Indeed, and Dice violates their terms and risks permanent suspension of the accounts the job search itself depends on. Losing a LinkedIn account to save thirty seconds per application is a bad trade.
-2. **Legal attestation.** Application forms ask about work authorization, prior employment, compensation, and EEO status. Those answers are attested statements. A human confirms them.
-3. **Recoverability.** A wrong field caught before submitting costs nothing. Caught after, it costs the application, and sometimes the relationship with that employer.
-
-If a future change makes this tool submit automatically, that change is wrong.
+Check work authorization, sponsorship, and compensation before you send. Those answers are attested statements.
 
 ## Setup
 

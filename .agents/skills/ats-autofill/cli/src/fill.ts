@@ -1,8 +1,8 @@
 // Browser-driven form filling. Requires Playwright (see README).
 //
-// HARD RULE: this module never clicks a submit button. It fills, screenshots,
-// reports, and leaves the browser open for the human. Read the note in
-// SKILL.md before changing that.
+// Submit is a separate decision. The filler does not send the application
+// unless the review gate returns "submit". LinkedIn, Indeed, and Dice are
+// never sent from here.
 
 import { existsSync } from "fs"
 import { resolve as resolvePath } from "path"
@@ -24,7 +24,7 @@ export interface FillReport {
   filled: FilledField[]
   skipped: { label: string; reason: string }[]
   screenshot: string | null
-  submitted: false
+  submitted: boolean
   review?: ReviewDecision
 }
 
@@ -37,6 +37,26 @@ export interface FillReport {
 export function launchOptions(headless: boolean): { headless: boolean; executablePath?: string } {
   const override = process.env.ATS_AUTOFILL_CHROMIUM
   return override ? { headless, executablePath: override } : { headless }
+}
+
+const MANUAL_SUBMIT_HOSTS = ["linkedin.com", "indeed.com", "dice.com"]
+
+/** LinkedIn, Indeed, and Dice forbid automated submission. */
+export function submitBlockedHost(url: string): boolean {
+  let host = ""
+  try {
+    host = new URL(url).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  return MANUAL_SUBMIT_HOSTS.some((name) => host === name || host.endsWith(`.${name}`))
+}
+
+/** True when a control's visible label is the application's own submit button. */
+export function isApplicationSubmitLabel(label: string): boolean {
+  const text = label.replace(/\s+/g, " ").trim()
+  if (!text || /newsletter|subscribe|search jobs/i.test(text)) return false
+  return /^(submit|submit application|send application|send my application)$/i.test(text)
 }
 
 export function detectAts(url: string): AtsKind {
@@ -205,12 +225,47 @@ export async function fillApplication(opts: FillOptions): Promise<FillReport> {
         url: opts.url,
         screenshot: report.screenshot,
       })
+      if (report.review === "submit") {
+        if (submitBlockedHost(opts.url)) {
+          report.skipped.push({
+            label: "Submit",
+            reason: "LinkedIn, Indeed, and Dice have to be sent by hand",
+          })
+        } else {
+          report.submitted = await clickApplicationSubmit(page)
+          if (!report.submitted) {
+            report.skipped.push({ label: "Submit", reason: "no submit button found" })
+          } else {
+            await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {})
+          }
+        }
+      }
     }
   } finally {
     await browser.close().catch(() => {})
   }
 
   return report
+}
+
+async function clickApplicationSubmit(page: import("playwright").Page): Promise<boolean> {
+  const controls = page.locator('button, input[type="submit"], [role="button"]')
+  const count = await controls.count()
+  for (let i = 0; i < count; i++) {
+    const control = controls.nth(i)
+    if (!(await control.isVisible().catch(() => false))) continue
+    const label = await control
+      .evaluate((el) => {
+        const node = el as HTMLElement
+        const value = "value" in node ? String((node as HTMLInputElement).value || "") : ""
+        return (node.innerText || value || node.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim()
+      })
+      .catch(() => "")
+    if (!isApplicationSubmitLabel(label)) continue
+    await control.click({ timeout: 10000 })
+    return true
+  }
+  return false
 }
 
 function renderValue(v: FieldValue): string {

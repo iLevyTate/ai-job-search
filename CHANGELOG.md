@@ -14,6 +14,7 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Added
+- Autofill can press the employer's Submit button when you choose Submit for me, or type `submit` in the terminal. LinkedIn, Indeed, and Dice stay manual.
 - Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
 - Tools check explains what each program means for the search.
 - Every command field says what it is for and what happens when you leave it blank. Setup can update one part of the profile, and Reset spells out what each mode deletes. An expired Claude login opens Sign in from the error and from the account chip.

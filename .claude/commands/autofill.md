@@ -3,7 +3,7 @@ desk:
   id: autofill
   invocation: /autofill
   title: Autofill
-  description: Fill in an employer's application form for you to check and send.
+  description: Fill an application, then press Submit for me to send it.
   primaryOrder: 5
   arguments:
     - kind: url
@@ -11,7 +11,7 @@ desk:
       required: true
       label: Application URL
       placeholder: https://
-      hint: The employer's application form, not the job ad. Nothing is submitted. The filled-in browser is handed back to you to check and send yourself.
+      hint: The employer's application form, not the job ad. After it is filled, Submit for me sends it. LinkedIn, Indeed, and Dice still have to be sent by hand.
   examples:
     - /autofill https://boards.example.com/jobs/1
 ---
@@ -20,7 +20,7 @@ desk:
 
 Prefills the application form at `$ARGUMENTS` (a job URL) from `application_profile.json`, attaches the tailored documents, and hands the browser over for review.
 
-**This command never submits an application.** See `.agents/skills/ats-autofill/SKILL.md` for why.
+**Nothing is sent until you choose Submit for me** (or type `submit` in the terminal). LinkedIn, Indeed, and Dice are never sent by this command. See `.agents/skills/ats-autofill/SKILL.md`.
 
 ---
 

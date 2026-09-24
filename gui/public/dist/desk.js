@@ -10190,16 +10190,29 @@ ${multiline}` : rendered;
     ${outcome}
   </div>`;
   }
+  function submitBlockedHost(url) {
+    let host = "";
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return ["linkedin.com", "indeed.com", "dice.com"].some((name) => host === name || host.endsWith(`.${name}`));
+  }
   function renderAutofillBody(card) {
     const disabled = card.entered ? " disabled" : "";
     const rawUrl = card.payload.url || "";
+    const blocked = submitBlockedHost(rawUrl);
     const url = rawUrl ? /^(https?:|mailto:)/i.test(rawUrl) ? `<p><a href="${escapeHtml3(rawUrl)}" target="_blank" rel="noreferrer">${escapeHtml3(rawUrl)}</a></p>` : `<p>${escapeHtml3(rawUrl)}</p>` : "";
     const shot = card.payload.screenshot ? `<p class="hint">Screenshot saved at ${escapeHtml3(card.payload.screenshot)}</p>` : "";
+    const lead = blocked ? "The form is filled. LinkedIn, Indeed, and Dice do not allow Desk to press Submit. Check the fields and click their Submit button yourself, then press Done." : "The form is filled and nothing is sent yet. Submit for me presses the employer's Submit button. Or send it yourself, then press Done.";
+    const submit = blocked ? "" : `<button type="button" data-decision="submit"${disabled}>Submit for me</button>`;
     return `<div class="interaction" data-kind="autofill" data-id="${escapeHtml3(card.id)}" data-token="${escapeHtml3(card.payload.token || "")}">
-    <p>Claude filled in the application form but did not send it. Open the form in your browser, check every field, and click the employer's own Submit button yourself. Then press Done here so Claude can log it, or Cancel to abandon this application.</p>
+    <p>${lead}</p>
     ${url}
     ${shot}
     <div class="sheet-actions">
+      ${submit}
       <button type="button" data-decision="continue"${disabled}>Done, I submitted it</button>
       <button type="button" data-decision="cancel" class="ghost"${disabled}>Cancel</button>
     </div>

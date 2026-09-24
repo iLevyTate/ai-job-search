@@ -295,7 +295,7 @@ test("print mode shows a read-only question and permission cards use the SDK tit
   assert.ok(permission.querySelector('[data-decision="deny"]').textContent.includes("Don"));
 });
 
-test("autofill review cards expose Continue and Cancel only", () => {
+test("autofill can submit an employer form and still refuses LinkedIn, Indeed, and Dice", () => {
   const doc = document();
   const root = doc.createElement("section");
   let state = createDeskState();
@@ -303,16 +303,29 @@ test("autofill review cards expose Continue and Cancel only", () => {
     eventId: "e-af",
     sequence: 1,
     type: "autofill.review",
-    payload: { reviewId: "rev-1", entityId: "rev-1", token: "tok", url: "https://jobs.example/1" },
+    payload: { reviewId: "rev-1", entityId: "rev-1", token: "tok", url: "https://boards.greenhouse.io/acme/jobs/1" },
   });
   renderChat(root, state);
   const card = root.querySelector('[data-card-id="rev-1"]');
+  assert.ok(card.querySelector('[data-decision="submit"]'));
   assert.ok(card.querySelector('[data-decision="continue"]'));
   assert.ok(card.querySelector('[data-decision="cancel"]'));
-  assert.equal(card.querySelector('[data-decision="submit"]'), null);
+
+  const blocked = doc.createElement("section");
+  let blockedState = createDeskState();
+  blockedState = reduceDeskEvent(blockedState, {
+    eventId: "e-li",
+    sequence: 1,
+    type: "autofill.review",
+    payload: { reviewId: "rev-2", entityId: "rev-2", token: "tok", url: "https://www.linkedin.com/jobs/view/1" },
+  });
+  renderChat(blocked, blockedState);
+  assert.equal(blocked.querySelector('[data-decision="submit"]'), null);
+  assert.match(blocked.textContent, /LinkedIn, Indeed, and Dice/);
+
   state = markEntered(state, "rev-1");
   renderChat(root, state);
-  assert.equal(root.querySelector('[data-decision="continue"]').disabled, true);
+  assert.equal(root.querySelector('[data-decision="submit"]').disabled, true);
 });
 
 test("sidebar and palette render primary actions from metadata", () => {
