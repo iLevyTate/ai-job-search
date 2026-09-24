@@ -8,12 +8,18 @@ desk:
     - kind: integer
       name: minScore
       flag: --min-score
+      label: Minimum fit score
+      placeholder: "70"
+      hint: Only push jobs scored at or above this. Blank uses the default cutoff.
     - kind: boolean
       name: all
       flag: --all
+      label: Push everything, whatever it scored
     - kind: boolean
       name: rebuild
       flag: --rebuild
+      label: Rebuild the Notion database from scratch
+      hint: Replaces the rows instead of updating them. Only needed after the columns change.
   requirements:
     - Notion MCP
 ---

@@ -65,10 +65,14 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", "Artifacts");
   groupArtifactsByTurn(state.artifacts).forEach((group, index) => {
+    const section = document.createElement("div");
+    section.className = "artifact-group";
+    section.setAttribute("role", "group");
+    section.setAttribute("aria-label", `Reply ${index + 1}`);
     const heading = document.createElement("p");
     heading.className = "kicker";
     heading.textContent = `Reply ${index + 1}`;
-    list.append(heading);
+    section.append(heading);
     for (const artifact of group.items) {
       const button = document.createElement("button");
       button.type = "button";
@@ -78,8 +82,9 @@ export function renderArtifactView(container, state, { title = "Files" } = {}) {
       button.setAttribute("aria-selected", String(artifact.id === state.selectedId));
       button.tabIndex = artifact.id === state.selectedId ? 0 : -1;
       button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
-      list.append(button);
+      section.append(button);
     }
+    list.append(section);
   });
 
   const preview = document.createElement("div");

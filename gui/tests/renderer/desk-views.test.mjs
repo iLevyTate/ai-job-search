@@ -117,3 +117,26 @@ test("the tools dialog lists each tool with how to get it", () => {
   assert.match(items[0].querySelector(".what-this-means").textContent, /job-board search/);
   assert.match(items[1].querySelector(".what-this-means").textContent, /Checks PDFs/);
 });
+
+test("the job filters are toggle buttons, not a tablist", () => {
+  const doc = document();
+  const root = doc.createElement("section");
+  renderJobs(root, { jobs, filter: "open" });
+  const group = root.querySelector(".filters");
+  // aria-pressed on a child of role=tablist announces a broken tab widget.
+  assert.equal(group.getAttribute("role"), "group");
+  assert.equal(root.querySelector('[data-job-filter="open"]').getAttribute("aria-pressed"), "true");
+});
+
+test("an application with no date sorts to the bottom, not the top", () => {
+  const doc = document();
+  const root = doc.createElement("section");
+  renderApplications(root, {
+    applications: [
+      { id: "old", date: "2026-08-01", company: "Globex", role: "Lead", status: "applied" },
+      { id: "undated", date: "", company: "Initech", role: "Eng", status: "applied" },
+      { id: "new", date: "2026-09-02", company: "Acme", role: "Staff", status: "applied" },
+    ],
+  });
+  assert.deepEqual([...root.querySelectorAll("[data-app-id]")].map((row) => row.dataset.appId), ["new", "old", "undated"]);
+});

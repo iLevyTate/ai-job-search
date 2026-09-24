@@ -10,13 +10,21 @@ desk:
       name: focus
       required: false
       positional: true
+      label: Narrow to a theme
+      placeholder: healthcare
+      hint: Blank scores every new posting. A word here keeps only the postings that match it.
     - kind: boolean
       name: all
       flag: --all
+      label: Re-score jobs that were already ranked
+      hint: Off by default, so a normal run only looks at postings it has not scored yet.
     - kind: integer
       name: top
       flag: --top
       min: 1
+      label: Shortlist size
+      placeholder: "10"
+      hint: How many jobs to keep. Blank uses the built-in default.
   examples:
     - /rank
     - /rank healthcare --top 10

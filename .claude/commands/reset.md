@@ -4,12 +4,19 @@ desk:
   invocation: /reset
   title: Reset
   description: Reset profile data, generated documents, or both.
+  form: always
   arguments:
     - kind: choice
       name: scope
       values: [profile, documents, all]
       required: false
       positional: true
+      placeholder: Let me choose in the chat
+      label: What to clear
+      hint: "profile clears the answers /setup collected. documents clears generated CVs, cover letters, and the tracker. all clears both. Nothing is deleted until you confirm again in the chat."
+  examples:
+    - /reset
+    - /reset documents
 ---
 
 # /reset - Reset Candidate Profile Data

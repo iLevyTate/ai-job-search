@@ -14,6 +14,7 @@ import {
 import { mountTabs } from "./tabs.js";
 import { filterJobs, renderApplications, renderChecklist, renderJobs, renderTools } from "./desk-views.js";
 import { createTerminalView } from "./terminal-view.js";
+import { isExpiredAuthError } from "./auth-errors.js";
 import {
   answersFromQuestionForm,
   commandInputError,
@@ -22,6 +23,7 @@ import {
   filterCommands,
   renderChat,
   renderCommandForm,
+  renderCommandGuide,
   renderCommandInvocation,
   renderPaletteList,
   renderSidebar,
@@ -48,6 +50,7 @@ const sheetKicker = document.getElementById("sheet-kicker");
 const sheetCopy = document.getElementById("sheet-copy");
 const sheetFields = document.getElementById("sheet-fields");
 const sheetError = document.getElementById("sheet-error");
+const sheetGuide = document.getElementById("sheet-guide");
 const clockEl = document.getElementById("clock");
 const menuBtn = document.getElementById("menu");
 const scrim = document.getElementById("scrim");
@@ -184,9 +187,13 @@ function scrollLog() {
   jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
 }
 
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+}
+
 function jumpToLatest() {
   stickToBottom = true;
-  logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+  logEl.scrollTo({ top: logEl.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   jumpBtn.hidden = true;
 }
 
@@ -200,10 +207,12 @@ function paintMode() {
   modeEl.dataset.mode = state.permissionMode;
 }
 
+let announceTimer = null;
 function announce(text) {
   if (!announceEl) return;
   announceEl.textContent = "";
-  window.setTimeout(() => { announceEl.textContent = text; }, 50);
+  window.clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => { announceEl.textContent = text; }, 50);
 }
 
 function paintChat() {
@@ -290,6 +299,12 @@ function ingest(event) {
       refreshDeskData();
     } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
     else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
+    if (
+      event.type === "turn.failed"
+      && isExpiredAuthError(event.payload?.text || event.payload?.reason)
+    ) {
+      recoverExpiredLogin();
+    }
   }
   if (event.type === "artifact.discovered") {
     const incoming = {
@@ -560,6 +575,10 @@ async function runStep(name, prompt) {
 const KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
 
 function runAction(name) {
+  if (name === "signin") {
+    recoverExpiredLogin();
+    return;
+  }
   const command = commands.find((item) => item.id === name);
   setMenu(false);
   if (command && commandNeedsInput(command)) {
@@ -601,8 +620,16 @@ function openCommandSheet(command) {
     sheetCopy.textContent = command.description || "Add what the step needs, then run.";
   }
   sheetFields.innerHTML = renderCommandForm(command);
-  sheetError.hidden = true;
-  sheetError.textContent = "";
+  if (sheetError) {
+    sheetError.hidden = true;
+    sheetError.textContent = "";
+  }
+  if (sheetGuide) {
+    sheetGuide.innerHTML = renderCommandGuide(command);
+    sheetGuide.hidden = !sheetGuide.innerHTML;
+  }
+  const runBtn = document.getElementById("sheet-run");
+  if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
   sheet.showModal();
   sheetFields.querySelector("input, textarea, select")?.focus();
 }
@@ -1053,17 +1080,15 @@ resetBtn.addEventListener("click", async () => {
     statusEl.textContent = "Starting a new conversation…";
     return;
   }
-  if (!runtimeSend({ type: "conversation.reset" })) {
-    try {
-      const res = await post("/reset");
-      if (!res.ok) {
-        notice("Could not start a new conversation. Try again in a moment.");
-        return;
-      }
-    } catch {
-      notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+  try {
+    const res = await post("/reset");
+    if (!res.ok) {
+      notice("Could not start a new conversation. Try again in a moment.");
       return;
     }
+  } catch {
+    notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+    return;
   }
   const wasBusy = busy;
   clearConversation();
@@ -1357,8 +1382,12 @@ function applyPracticeJob() {
 jobsEl.addEventListener("click", async (event) => {
   const filter = event.target.closest("[data-job-filter]");
   if (filter) {
-    jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+    const chosen = filter.dataset.jobFilter;
+    jobsState = { ...jobsState, filter: chosen };
     paintJobs();
+    // The repaint replaces the button that was just pressed, which left a
+    // keyboard user back on <body> with no way to reach the next filter.
+    jobsEl.querySelector(`[data-job-filter="${CSS.escape(chosen)}"]`)?.focus();
     return;
   }
   if (event.target.closest("[data-sample-job]")) {
@@ -1532,23 +1561,33 @@ docInput?.addEventListener("change", () => {
 });
 
 let dragDepth = 0;
+// hidden alone left aria-hidden="true" on the panel even while it was on
+// screen, so a screen reader never heard the drop target announced.
+function setDropzone(open) {
+  dropzone.hidden = !open;
+  dropzone.setAttribute("aria-hidden", String(!open));
+}
+
 document.addEventListener("dragenter", (event) => {
   if (!event.dataTransfer?.types?.includes("Files")) return;
   dragDepth += 1;
-  dropzone.hidden = false;
+  setDropzone(true);
 });
 document.addEventListener("dragleave", () => {
   dragDepth = Math.max(0, dragDepth - 1);
-  if (!dragDepth) dropzone.hidden = true;
+  if (!dragDepth) setDropzone(false);
 });
 document.addEventListener("dragover", (event) => {
   if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
 });
 document.addEventListener("drop", (event) => {
   dragDepth = 0;
-  dropzone.hidden = true;
-  if (!event.dataTransfer?.files?.length) return;
+  setDropzone(false);
+  // A dropped link used to navigate the whole window, because preventDefault
+  // ran only on the file path. Text dropped into the composer still works.
+  if (event.target?.closest?.("input, textarea")) return;
   event.preventDefault();
+  if (!event.dataTransfer?.files?.length) return;
   uploadDocuments(event.dataTransfer.files);
 });
 
@@ -1586,6 +1625,9 @@ filesEl.addEventListener("click", (event) => {
   }
 });
 filesEl.addEventListener("keydown", (event) => {
+  // Only the file list moves the selection; inside the preview the arrows
+  // belong to whatever is being read.
+  if (!event.target?.closest?.(".artifact-list")) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
@@ -1629,6 +1671,7 @@ let lastHealth = null;
 let claudeAutoStarted = false;
 
 function setGate(open, title, copy) {
+  const wasOpen = document.body.classList.contains("gated");
   document.body.classList.toggle("gated", open);
   gate.hidden = !open;
   gate.inert = !open;
@@ -1643,7 +1686,10 @@ function setGate(open, title, copy) {
   if (open) {
     setMenu(false);
     gate.querySelector(".gate-card")?.focus();
-  } else {
+  } else if (wasOpen) {
+    // Only take focus back when the gate was really in the way. Every health
+    // refresh calls setGate(false), and that used to yank the caret out of the
+    // jobs search box or an open sheet mid-word.
     promptEl.focus();
   }
 }
@@ -1668,8 +1714,8 @@ function describeAccount(health) {
     if (document.body.classList.contains("demo")) return `Signed in${plan}`;
     return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
   }
-  if (health?.error) return "Claude status unknown";
-  if (needsLogin(health)) return "Signed out";
+  if (health?.error) return "Claude status unknown. Click to retry.";
+  if (needsLogin(health)) return "Sign in with Claude";
   return "localhost only";
 }
 
@@ -1685,10 +1731,24 @@ async function readHealth() {
   return res.json();
 }
 
+function recoverExpiredLogin() {
+  lastHealth = {
+    installed: true,
+    loggedIn: false,
+    ...(lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }),
+  };
+  claudeAutoStarted = false;
+  applyHealth(lastHealth);
+  bootstrapClaude();
+}
+
 function applyHealth(health) {
   lastHealth = health;
   accountLabel.textContent = describeAccount(health);
   accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+  accountLabel.title = health?.loggedIn
+    ? "Signed in. Click to sign in again if chat stops with a login error."
+    : "Sign in with Claude";
   gateCancel.hidden = true;
   if (health.loggedIn) {
     setGate(false);
@@ -1805,6 +1865,7 @@ gateAction.addEventListener("click", () => {
   bootstrapClaude();
 });
 gateCancel.addEventListener("click", () => post("/auth/cancel"));
+accountLabel?.addEventListener("click", () => recoverExpiredLogin());
 
 function paintGateChrome(info) {
   if (!gateChrome) return;
@@ -1912,7 +1973,10 @@ updateBtn?.addEventListener("click", async () => {
 checkClaude();
 
 tickClock();
-window.setInterval(tickClock, 30000);
+window.setTimeout(() => {
+  tickClock();
+  window.setInterval(tickClock, 60_000);
+}, 60_000 - (Date.now() % 60_000));
 refreshUpdate();
 window.setInterval(refreshUpdate, 60_000);
 sizePrompt();

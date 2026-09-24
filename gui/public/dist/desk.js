@@ -9435,10 +9435,14 @@ ${incoming}`;
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", "Artifacts");
     groupArtifactsByTurn(state2.artifacts).forEach((group, index) => {
+      const section = document2.createElement("div");
+      section.className = "artifact-group";
+      section.setAttribute("role", "group");
+      section.setAttribute("aria-label", `Reply ${index + 1}`);
       const heading = document2.createElement("p");
       heading.className = "kicker";
       heading.textContent = `Reply ${index + 1}`;
-      list.append(heading);
+      section.append(heading);
       for (const artifact of group.items) {
         const button = document2.createElement("button");
         button.type = "button";
@@ -9448,8 +9452,9 @@ ${incoming}`;
         button.setAttribute("aria-selected", String(artifact.id === state2.selectedId));
         button.tabIndex = artifact.id === state2.selectedId ? 0 : -1;
         button.innerHTML = `<strong>${escapeHtml(artifact.relativePath)}</strong><em>${escapeHtml(artifact.kind)}</em>`;
-        list.append(button);
+        section.append(button);
       }
+      list.append(section);
     });
     const preview = document2.createElement("div");
     preview.className = "artifact-preview";
@@ -9638,7 +9643,7 @@ ${incoming}`;
     const counts = countBuckets(jobs);
     const toolbar = document2.createElement("div");
     toolbar.className = "list-toolbar";
-    toolbar.innerHTML = `<div class="filters" role="tablist" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
+    toolbar.innerHTML = `<div class="filters" role="group" aria-label="Show">${JOB_FILTERS.map((item) => `<button type="button" class="filter${item.id === filter ? " selected" : ""}" data-job-filter="${item.id}" aria-pressed="${item.id === filter}">${item.label} <span class="count">${counts[item.id] ?? 0}</span></button>`).join("")}</div>
     <label class="search"><span class="sr-only">Search jobs</span><input type="search" data-job-search placeholder="Search title, company, place" value="${escapeHtml2(query)}"></label>`;
     container.append(toolbar);
     const shown = filterJobs(jobs, filter, query);
@@ -9701,7 +9706,12 @@ ${incoming}`;
     }
     const list = document2.createElement("div");
     list.className = "app-list";
-    const sorted = [...applications].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+    const sorted = [...applications].sort((left, right) => {
+      const leftDate = left.date ? String(left.date) : "";
+      const rightDate = right.date ? String(right.date) : "";
+      if (!leftDate || !rightDate) return leftDate ? -1 : rightDate ? 1 : 0;
+      return rightDate.localeCompare(leftDate);
+    });
     for (const app of sorted) {
       const row = document2.createElement("article");
       row.className = `app-row${app.open ? " open" : ""}`;
@@ -9835,6 +9845,11 @@ ${incoming}`;
     };
   }
 
+  // public/src/auth-errors.js
+  function isExpiredAuthError(text) {
+    return /oauth session expired|could not be refreshed|failed to authenticate|not logged in|please (run )?\/login/i.test(String(text || ""));
+  }
+
   // public/src/chat-view.js
   function escapeHtml3(text) {
     return String(text ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -9859,6 +9874,7 @@ ${incoming}`;
   }
   function commandNeedsInput(command) {
     if (!command) return false;
+    if (command.form === "always") return true;
     if (command.id === "setup") return true;
     if (commandTakesPaste(command)) return true;
     return (command.arguments || []).some((argument) => argument.required);
@@ -9972,9 +9988,32 @@ ${incoming}`;
     return multiline ? `${rendered}
 ${multiline}` : rendered;
   }
+  function renderArgumentFields(command, include) {
+    return (command.arguments || []).filter(include).map((argument) => {
+      const name = escapeHtml3(argument.name);
+      const label = escapeHtml3(labelFor(argument));
+      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
+      const hint = argument.hint ? `<small class="field-hint">${escapeHtml3(argument.hint)}</small>` : "";
+      if (argument.kind === "choice") {
+        const blank = argument.required === true ? "" : `<option value="">${escapeHtml3(argument.placeholder || "No preference")}</option>`;
+        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
+        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${blank}${options}</select>${hint}</label>`;
+      }
+      if (argument.kind === "boolean") {
+        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}${hint}</label>`;
+      }
+      if (argument.kind === "multiline") {
+        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea>${hint}</label>`;
+      }
+      const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
+      const bounds = argument.kind === "integer" ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}` : "";
+      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}">${hint}</label>`;
+    }).join("");
+  }
   function renderCommandForm(command) {
     if (command?.id === "setup") {
-      return `<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
+      const section = renderArgumentFields(command, (argument) => argument.kind === "choice");
+      return `${section}<label data-arg="setupName"><span>Name, as it should appear on a CV</span><input name="setupName" type="text" autocomplete="name" placeholder="Optional"></label>
 <label data-arg="setupLocation"><span>Where you live</span><input name="setupLocation" type="text" autocomplete="address-level2" placeholder="City, state. Remote is fine."></label>
 <label data-arg="setupTarget"><span>Roles you want</span><input name="setupTarget" type="text" placeholder="Staff engineer, research scientist"></label>
 <label data-arg="setupNotes"><span>Anything else Claude should know</span><textarea name="setupNotes" rows="4" placeholder="Optional. Skip any field; Claude will ask."></textarea></label>`;
@@ -9983,25 +10022,21 @@ ${multiline}` : rendered;
       const placeholder = escapeHtml3(COMMAND_PLACEHOLDERS[command.id] || "Paste a link or the full text.");
       return `<label data-arg="${PASTE_FIELD}"><span>Job link or posting</span><textarea name="${PASTE_FIELD}" rows="6" placeholder="${placeholder}"></textarea></label>`;
     }
-    const fields = (command.arguments || []).filter((argument) => argument.required).map((argument) => {
-      const name = escapeHtml3(argument.name);
-      const label = escapeHtml3(labelFor(argument));
-      const placeholder = escapeHtml3(argument.placeholder || COMMAND_PLACEHOLDERS[command.id] || "");
-      if (argument.kind === "choice") {
-        const options = (argument.values || []).map((value) => `<option value="${escapeHtml3(value)}">${escapeHtml3(value)}</option>`).join("");
-        return `<label data-arg="${name}"><span>${label}</span><select name="${name}">${options}</select></label>`;
-      }
-      if (argument.kind === "boolean") {
-        return `<label class="check" data-arg="${name}"><input type="checkbox" name="${name}"> ${label}</label>`;
-      }
-      if (argument.kind === "multiline") {
-        return `<label data-arg="${name}"><span>${label}</span><textarea name="${name}" rows="8" placeholder="${placeholder}"></textarea></label>`;
-      }
-      const type = argument.kind === "url" ? "url" : argument.kind === "integer" ? "number" : "text";
-      const bounds = argument.kind === "integer" ? `${Number.isFinite(argument.min) ? ` min="${argument.min}"` : ""}${Number.isFinite(argument.max) ? ` max="${argument.max}"` : ""}` : "";
-      return `<label data-arg="${name}"><span>${label}</span><input name="${name}" type="${type}"${bounds} placeholder="${placeholder}"></label>`;
-    });
-    return fields.join("");
+    const showOptional = command.form === "always";
+    return renderArgumentFields(command, (argument) => showOptional || argument.required);
+  }
+  function renderCommandGuide(command) {
+    const blocks = [];
+    const requirements = command.requirements || [];
+    if (requirements.length) {
+      blocks.push(`<p class="sheet-note">Needs ${requirements.map((item) => escapeHtml3(item)).join(", ")}.</p>`);
+    }
+    const examples = command.examples || [];
+    if (examples.length) {
+      const items = examples.map((example) => `<li><code>${escapeHtml3(example)}</code></li>`).join("");
+      blocks.push(`<p class="sheet-note">Same thing typed by hand:</p><ul class="sheet-examples">${items}</ul>`);
+    }
+    return blocks.join("");
   }
   function valuesFromForm(form2) {
     const values = {};
@@ -10183,6 +10218,13 @@ ${multiline}` : rendered;
       return `<p class="tool done">Saved ${escapeHtml3(card.payload.relativePath || "a file")}</p>`;
     }
     const text = card.payload.text || card.payload.reason || "";
+    if (card.type === "turn.failed" && isExpiredAuthError(text)) {
+      return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p>
+      <p class="hint">Your Claude login expired. Sign in again in this window, then retry the step.</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="signin">Sign in with Claude</button>
+      </div>`;
+    }
     if (card.type === "turn.failed" && card.payload.detail) {
       return `<p>${escapeHtml3(text).replace(/\n/g, "<br>")}</p><details><summary>Technical details</summary><pre>${escapeHtml3(card.payload.detail)}</pre></details>`;
     }
@@ -10272,6 +10314,13 @@ ${multiline}` : rendered;
   }
   function renderPaletteList(container, commands2) {
     container.replaceChildren();
+    if (!commands2.length) {
+      const empty = container.ownerDocument.createElement("p");
+      empty.className = "list-empty";
+      empty.textContent = "No steps match that.";
+      container.append(empty);
+      return;
+    }
     for (const command of commands2) {
       const button = container.ownerDocument.createElement("button");
       button.type = "button";
@@ -10314,6 +10363,7 @@ ${multiline}` : rendered;
   var sheetCopy = document.getElementById("sheet-copy");
   var sheetFields = document.getElementById("sheet-fields");
   var sheetError = document.getElementById("sheet-error");
+  var sheetGuide = document.getElementById("sheet-guide");
   var clockEl = document.getElementById("clock");
   var menuBtn = document.getElementById("menu");
   var scrim = document.getElementById("scrim");
@@ -10437,9 +10487,12 @@ ${multiline}` : rendered;
     if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
     jumpBtn.hidden = stickToBottom || !logEl.querySelector("article");
   }
+  function prefersReducedMotion() {
+    return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  }
   function jumpToLatest() {
     stickToBottom = true;
-    logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+    logEl.scrollTo({ top: logEl.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
     jumpBtn.hidden = true;
   }
   function paintMode() {
@@ -10449,10 +10502,12 @@ ${multiline}` : rendered;
     modeEl.title = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
     modeEl.dataset.mode = state.permissionMode;
   }
+  var announceTimer = null;
   function announce(text) {
     if (!announceEl) return;
     announceEl.textContent = "";
-    window.setTimeout(() => {
+    window.clearTimeout(announceTimer);
+    announceTimer = window.setTimeout(() => {
       announceEl.textContent = text;
     }, 50);
   }
@@ -10524,6 +10579,9 @@ ${multiline}` : rendered;
         refreshDeskData();
       } else if (event.type === "question.requested") notifyHidden("Claude has a question for you.");
       else if (event.type === "permission.requested") notifyHidden("Claude is asking for permission.");
+      if (event.type === "turn.failed" && isExpiredAuthError(event.payload?.text || event.payload?.reason)) {
+        recoverExpiredLogin();
+      }
     }
     if (event.type === "artifact.discovered") {
       const incoming = {
@@ -10764,6 +10822,10 @@ ${multiline}` : rendered;
   }
   var KNOWN_STEPS = ["setup", "scrape", "rank", "apply", "autofill", "interview", "outcome", "import", "upskill", "expand", "html-report", "gmail-sync", "notion-sync", "reset", "add-portal", "add-template"];
   function runAction(name) {
+    if (name === "signin") {
+      recoverExpiredLogin();
+      return;
+    }
     const command = commands.find((item) => item.id === name);
     setMenu(false);
     if (command && commandNeedsInput(command)) {
@@ -10801,8 +10863,16 @@ ${multiline}` : rendered;
       sheetCopy.textContent = command.description || "Add what the step needs, then run.";
     }
     sheetFields.innerHTML = renderCommandForm(command);
-    sheetError.hidden = true;
-    sheetError.textContent = "";
+    if (sheetError) {
+      sheetError.hidden = true;
+      sheetError.textContent = "";
+    }
+    if (sheetGuide) {
+      sheetGuide.innerHTML = renderCommandGuide(command);
+      sheetGuide.hidden = !sheetGuide.innerHTML;
+    }
+    const runBtn = document.getElementById("sheet-run");
+    if (runBtn) runBtn.textContent = command.id === "apply" || command.id === "import" ? "Draft" : "Run";
     sheet.showModal();
     sheetFields.querySelector("input, textarea, select")?.focus();
   }
@@ -11198,17 +11268,15 @@ ${multiline}` : rendered;
       statusEl.textContent = "Starting a new conversation\u2026";
       return;
     }
-    if (!runtimeSend({ type: "conversation.reset" })) {
-      try {
-        const res = await post("/reset");
-        if (!res.ok) {
-          notice("Could not start a new conversation. Try again in a moment.");
-          return;
-        }
-      } catch {
-        notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+    try {
+      const res = await post("/reset");
+      if (!res.ok) {
+        notice("Could not start a new conversation. Try again in a moment.");
         return;
       }
+    } catch {
+      notice("Could not start a new conversation: the desk is not reachable. Close this tab and open the desk again.");
+      return;
     }
     const wasBusy = busy;
     clearConversation();
@@ -11483,8 +11551,10 @@ ${jobsState.samplePosting}`);
   jobsEl.addEventListener("click", async (event) => {
     const filter = event.target.closest("[data-job-filter]");
     if (filter) {
-      jobsState = { ...jobsState, filter: filter.dataset.jobFilter };
+      const chosen = filter.dataset.jobFilter;
+      jobsState = { ...jobsState, filter: chosen };
       paintJobs();
+      jobsEl.querySelector(`[data-job-filter="${CSS.escape(chosen)}"]`)?.focus();
       return;
     }
     if (event.target.closest("[data-sample-job]")) {
@@ -11645,23 +11715,28 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     docInput.value = "";
   });
   var dragDepth = 0;
+  function setDropzone(open) {
+    dropzone.hidden = !open;
+    dropzone.setAttribute("aria-hidden", String(!open));
+  }
   document.addEventListener("dragenter", (event) => {
     if (!event.dataTransfer?.types?.includes("Files")) return;
     dragDepth += 1;
-    dropzone.hidden = false;
+    setDropzone(true);
   });
   document.addEventListener("dragleave", () => {
     dragDepth = Math.max(0, dragDepth - 1);
-    if (!dragDepth) dropzone.hidden = true;
+    if (!dragDepth) setDropzone(false);
   });
   document.addEventListener("dragover", (event) => {
     if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
   });
   document.addEventListener("drop", (event) => {
     dragDepth = 0;
-    dropzone.hidden = true;
-    if (!event.dataTransfer?.files?.length) return;
+    setDropzone(false);
+    if (event.target?.closest?.("input, textarea")) return;
     event.preventDefault();
+    if (!event.dataTransfer?.files?.length) return;
     uploadDocuments(event.dataTransfer.files);
   });
   modeToggle?.addEventListener("click", () => modeSheet.showModal());
@@ -11696,6 +11771,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     }
   });
   filesEl.addEventListener("keydown", (event) => {
+    if (!event.target?.closest?.(".artifact-list")) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       artifactState = moveArtifactSelection(artifactState, event.key === "ArrowDown" ? 1 : -1);
@@ -11731,6 +11807,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
   var lastHealth = null;
   var claudeAutoStarted = false;
   function setGate(open, title, copy) {
+    const wasOpen = document.body.classList.contains("gated");
     document.body.classList.toggle("gated", open);
     gate.hidden = !open;
     gate.inert = !open;
@@ -11745,7 +11822,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (open) {
       setMenu(false);
       gate.querySelector(".gate-card")?.focus();
-    } else {
+    } else if (wasOpen) {
       promptEl.focus();
     }
   }
@@ -11766,8 +11843,8 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
       if (document.body.classList.contains("demo")) return `Signed in${plan}`;
       return health.email ? `${health.email}${plan}` : `Signed in${plan}`;
     }
-    if (health?.error) return "Claude status unknown";
-    if (needsLogin(health)) return "Signed out";
+    if (health?.error) return "Claude status unknown. Click to retry.";
+    if (needsLogin(health)) return "Sign in with Claude";
     return "localhost only";
   }
   function waitForAuth(kind) {
@@ -11780,10 +11857,21 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     if (!res.ok) throw new Error("Could not read Claude status.");
     return res.json();
   }
+  function recoverExpiredLogin() {
+    lastHealth = {
+      installed: true,
+      loggedIn: false,
+      ...lastHealth && { email: lastHealth.email, subscriptionType: lastHealth.subscriptionType }
+    };
+    claudeAutoStarted = false;
+    applyHealth(lastHealth);
+    bootstrapClaude();
+  }
   function applyHealth(health) {
     lastHealth = health;
     accountLabel.textContent = describeAccount(health);
     accountLabel.classList.toggle("signed-in", Boolean(health?.loggedIn));
+    accountLabel.title = health?.loggedIn ? "Signed in. Click to sign in again if chat stops with a login error." : "Sign in with Claude";
     gateCancel.hidden = true;
     if (health.loggedIn) {
       setGate(false);
@@ -11893,6 +11981,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     bootstrapClaude();
   });
   gateCancel.addEventListener("click", () => post("/auth/cancel"));
+  accountLabel?.addEventListener("click", () => recoverExpiredLogin());
   function paintGateChrome(info) {
     if (!gateChrome) return;
     if (info?.installed || info?.forcedOff) {
@@ -11986,7 +12075,10 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
   });
   checkClaude();
   tickClock();
-  window.setInterval(tickClock, 3e4);
+  window.setTimeout(() => {
+    tickClock();
+    window.setInterval(tickClock, 6e4);
+  }, 6e4 - Date.now() % 6e4);
   refreshUpdate();
   window.setInterval(refreshUpdate, 6e4);
   sizePrompt();

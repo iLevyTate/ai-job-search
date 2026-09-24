@@ -16,12 +16,14 @@ per-file diff commands.
 ### Added
 - Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
 - Tools check explains what each program means for the search.
+- Every command field says what it is for and what happens when you leave it blank. Setup can update one part of the profile, and Reset spells out what each mode deletes. An expired Claude login opens Sign in from the error and from the account chip.
 
 ### Security
 - CI and Desk release runs execute the security guards, the Python tool tests (including rank candidate limits), and the placeholder-integrity checks on this public template. A personalized fork still skips the placeholder checks after `/setup`.
 - `documents/projects/**` is ignored, matching upstream, so project summaries stay out of the repository.
 
 ### Fixed
+- Desk keeps the caret where you left it when Claude's status refreshes, the Files list no longer steals arrow keys from a preview, and an empty command search says nothing matched. Undated applications sort last. A dropped link no longer leaves the conversation.
 - Portal CLIs typecheck with `erasableSyntaxOnly`, and CI starts each one under Node 22 and Node 24 with `--help`. Autofill resolves a profile resume from the repo root when the command is run from the CLI directory. `@bunli/core` CLIs still start with Bun, which is the runtime they document.
 - The Files tab keeps generated CVs and letters after a turn finishes, including when the reply ends abruptly and after Desk restarts.
 - Python tools reconfigure stdout and stderr to UTF-8, so a non-Latin company or title no longer crashes `/rank`, salary lookup, or PDF verification on Windows.
