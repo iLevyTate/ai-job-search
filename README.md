@@ -42,13 +42,15 @@ Release CI does **not** build Intel Mac. Apple Silicon only on macOS.
 
 1. Run the installer. Windows adds Start Menu and Desktop shortcuts and launches the app. If Windows SmartScreen says it protected your PC, click **More info**, then **Run anyway**. That warning is a missing signature, not a virus scan. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of this public repo (Git is optional).
-3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's installer. If you are signed out, **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there with your Claude plan or an Anthropic Console API key. Desk never sees the code or token.
+3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's official installer by piping `https://claude.ai/install.ps1` into PowerShell on Windows, or `https://claude.ai/install.sh` into bash elsewhere. If you are signed out, **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there with your Claude plan or an Anthropic Console API key. Desk never sees the code or token.
 4. If Claude in Chrome is missing, click **Add Claude in Chrome** on first run or the sign-in card. Chrome opens the official store. Add the extension; Desk uses it after that. The installer cannot pack a Chrome extension.
 5. After you are signed in, run **Setup** once so the folder has your profile.
 
 A second click of the shortcut focuses the window that is already running. It does not start a second desk.
 
 macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then **Open**.
+
+Updates: packaged Windows and Linux builds check this repository's [Releases](https://github.com/iLevyTate/ai-job-search/releases) on launch, download a newer version in the background, and install it when you quit. Portable builds and macOS skip the check and link you to Releases instead.
 
 The app does not replace `/setup`. Autofill never clicks Submit.
 
