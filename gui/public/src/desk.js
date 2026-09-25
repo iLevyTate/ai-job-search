@@ -200,10 +200,15 @@ function jumpToLatest() {
 function paintMode() {
   if (!modeEl) return;
   const autonomous = state.permissionMode === "autonomous";
-  modeEl.textContent = autonomous ? "Works on its own" : "Asks before acting";
-  modeEl.title = autonomous
+  const label = autonomous ? "Works on its own" : "Asks before acting";
+  const meaning = autonomous
     ? "Claude may create and change files in your job-search folder without asking first."
     : "Claude asks you before changing files or running commands.";
+  modeEl.textContent = label;
+  modeEl.title = meaning;
+  // The tooltip is mouse-only, so the same sentence has to reach a screen
+  // reader, and the button itself has to reach the keyboard and a finger.
+  modeEl.setAttribute("aria-label", `${label}. ${meaning} Change how much Claude asks.`);
   modeEl.dataset.mode = state.permissionMode;
 }
 
@@ -1593,6 +1598,9 @@ document.addEventListener("drop", (event) => {
 
 // ---- How much Claude asks (installed app only; print mode has one mode).
 modeToggle?.addEventListener("click", () => modeSheet.showModal());
+// The status word is the thing people actually look at, so it opens the same
+// sheet. Picking a mode while disconnected already answers with a notice.
+modeEl?.addEventListener("click", () => modeSheet?.showModal());
 modeSheet?.addEventListener("click", (event) => {
   const choice = event.target.closest("[data-mode-choice]");
   if (!choice) return;
