@@ -108,7 +108,7 @@ What gates it, if you build that branch yourself:
 - Neither gate can be answered by a flag. The environment chooses which gate runs rather than what it replies, with one honest exception: `JOB_SEARCH_DESK_REVIEW_URL` selects the server the Desk gate asks, so pointing it at a server you control amounts to answering it. That is a capability on your own machine, not a remote one, and it is why the review token is ephemeral and issued by the Desk.
 - LinkedIn, Indeed, and Dice refuse to send at all. Their terms forbid it, the block is on the hostname, and the refusal is reported rather than passed over quietly.
 - Only an exact button label matches: Submit, Submit application, Send application, Send my application. A newsletter or search button cannot be mistaken for the application's own.
-- One decision sends one application. There is no batch mode, and no flag or environment variable can answer the gate for you. The environment chooses *which* gate runs, never what it replies.
+- One decision sends one application. There is no batch mode.
 
 So the last decision stays yours. What changed is who performs the click: you used to press the button in the browser, and on that branch you authorize it and the tool presses it.
 
