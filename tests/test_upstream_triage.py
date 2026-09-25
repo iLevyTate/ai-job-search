@@ -194,6 +194,14 @@ if __name__ == "__main__":
     unittest.main()
 
 
+def locale_encoding() -> str:
+    """locale.getencoding() is 3.11+; this repo's CI still runs 3.10."""
+    getter = getattr(locale, "getencoding", None)
+    if getter is not None:
+        return getter()
+    return locale.getpreferredencoding(False)
+
+
 class EncodingGuardTests(unittest.TestCase):
     """Source-level guard, so a non-Windows CI still catches a regression.
 
@@ -226,7 +234,7 @@ class EncodingGuardTests(unittest.TestCase):
                       "piped stdout on Windows cannot encode them by default")
 
 
-@unittest.skipIf(locale.getencoding().lower().replace("-", "") == "utf8",
+@unittest.skipIf(locale_encoding().lower().replace("-", "") == "utf8",
                  "locale already decodes UTF-8; the cp1252 failure cannot occur here")
 class NonAsciiCommitTests(TriageRepoFixture):
     """Behavioural proof on a machine whose locale codepage is not UTF-8.
