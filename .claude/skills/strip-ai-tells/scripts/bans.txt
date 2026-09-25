@@ -1,0 +1,63 @@
+# Words and phrases that mark prose as machine-written.
+# One case-insensitive regular expression per line; '#' starts a comment.
+#
+# This is the machine-readable list. The prose rules for cover letters live in
+# .claude/skills/job-application-assistant/03-writing-style.md, which states
+# its cliche bans in sentences rather than patterns. The two overlap and are
+# maintained separately; when adding a rule to one, consider the other.
+#
+# Edit this file to tune the skill. Nothing here is hardcoded in the script.
+#
+# A hit is not automatically wrong. It is a place to look. The fix is to
+# rewrite the sentence so the word is not needed, never to swap in the
+# nearest synonym.
+
+# --- figurative filler ------------------------------------------------------
+\bdelve\b
+\btapestry\b
+\brealm\b
+\blandscape\b
+\btestament\b
+\bunderscore[sd]?\b
+\bnavigat(e|es|ing)\b
+\bfoster(s|ing|ed)?\b
+\bharness(es|ing|ed)?\b
+\bleverag(e|es|ing|ed)\b
+
+# --- inflated adjectives ----------------------------------------------------
+\brobust\b
+\bseamless(ly)?\b
+\bintricate\b
+\bnuanced\b
+\bmultifaceted\b
+\bmeticulous(ly)?\b
+\bpivotal\b
+\bcrucial\b
+\bvital\b
+\bcomprehensive\b
+
+# --- marketing verbs --------------------------------------------------------
+\bunlock(s|ing|ed)?\b
+\belevat(e|es|ing|ed)\b
+\bsupercharg(e|es|ing|ed)\b
+\btransform(s|ing|ed|ative)?\b
+\brevolutioniz(e|es|ing|ed)\b
+\bempower(s|ing|ed)?\b
+\bstreamlin(e|es|ing|ed)\b
+\bcutting[- ]edge\b
+\bgame[- ]chang(er|ing)\b
+
+# --- dead openers and cliches ----------------------------------------------
+in today's fast[- ]paced world
+in an era of
+\bhit the ground running\b
+\bdrive results\b
+\bsynerg(y|ies)\b
+\bI am passionate about\b
+\bI believe I would be a great fit\b
+
+# --- hedge and scaffolding --------------------------------------------------
+\bit'?s worth noting\b
+\bit'?s important to (note|remember)\b
+\bneedless to say\b
+\bat the end of the day\b
