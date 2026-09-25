@@ -1,3 +1,5 @@
+import locale
+import re
 import shutil
 import subprocess
 import sys
@@ -13,8 +15,15 @@ UPSTREAM_SLUG = "MadsLorentzen/ai-job-search"
 
 
 def git(root: Path, *args: str) -> str:
+    # Pinned for the same reason the tool under test is: this helper commits a
+    # subject containing U+201D, and decoding git's echo with the locale
+    # codepage kills the reader thread. subprocess.run then returns stdout=None
+    # with returncode 0, so check=True passes and the suite still reports OK
+    # while printing a UnicodeDecodeError traceback. The harness that proves
+    # the fix had the defect.
     return subprocess.run(
-        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     ).stdout
 
 
@@ -190,3 +199,94 @@ class WorkflowGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def locale_encoding() -> str:
+    """locale.getencoding() is 3.11+; this repo's CI still runs 3.10."""
+    getter = getattr(locale, "getencoding", None)
+    if getter is not None:
+        return getter()
+    return locale.getpreferredencoding(False)
+
+
+class EncodingGuardTests(unittest.TestCase):
+    """Source-level guard, so a non-Windows CI still catches a regression.
+
+    cp1252 leaves only five bytes undefined (0x81 0x8d 0x8f 0x90 0x9d), so the
+    bug hides behind most accented text and surfaces on characters whose UTF-8
+    encoding happens to contain one - a right double quotation mark, U+201D,
+    encodes as e2 80 9d. Reading git without an explicit encoding therefore
+    fails rarely and unpredictably, which is worse than failing always.
+    """
+
+    def test_every_git_subprocess_call_pins_an_encoding(self):
+        for name in ("upstream_triage.py", "check_upstream_updates.py"):
+            src = (REPO_ROOT / "tools" / name).read_text(encoding="utf-8")
+            for call in re.finditer(r"subprocess\.run\((.*?)\)\s*(?:\.stdout)?",
+                                    src, re.S):
+                body = call.group(1)
+                decodes = "text=True" in body or "universal_newlines=True" in body
+                if not decodes:
+                    continue  # binary mode; nothing is decoded, nothing can fail
+                self.assertIn(
+                    'encoding="utf-8"', body,
+                    f"{name}: a text-mode subprocess.run does not pin an "
+                    f"encoding, so it decodes with the locale codepage:\n{body}",
+                )
+
+    def test_triage_forces_utf8_on_its_own_output(self):
+        src = (REPO_ROOT / "tools" / "upstream_triage.py").read_text(encoding="utf-8")
+        self.assertIn('reconfigure(encoding="utf-8")', src,
+                      "the report prints upstream commit subjects verbatim; a "
+                      "piped stdout on Windows cannot encode them by default")
+
+
+@unittest.skipIf(locale_encoding().lower().replace("-", "") == "utf8",
+                 "locale already decodes UTF-8; the cp1252 failure cannot occur here")
+class NonAsciiCommitTests(TriageRepoFixture):
+    """Behavioural proof on a machine whose locale codepage is not UTF-8.
+
+    Without the fix the decode raises inside subprocess's reader thread and the
+    captured stdout comes back as None. Against a small repository that surfaces
+    at once as an AttributeError; against a real upstream it was observed to
+    hang instead, communicate() waiting on output that never arrives. Either way
+    the report is empty, which a caller cannot tell apart from "no upstream
+    commits need review".
+    """
+
+    # e2 80 9d: the 9d is one of the five bytes cp1252 cannot decode.
+    SMART_QUOTE = "”"
+
+    def run_triage_utf8(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(self.root / "tools" / "upstream_triage.py"), *args],
+            cwd=self.root, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=120,
+        )
+
+    def test_reports_a_commit_whose_subject_defeats_cp1252(self):
+        self.write("kept.py", "print('changed')\n")
+        self.commit(f"fix(jobnet): quote the {self.SMART_QUOTE}apply{self.SMART_QUOTE} link")
+        self.set_upstream_to_head()
+        git(self.root, "reset", "--hard", "HEAD~1")
+
+        result = self.run_triage_utf8()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip(),
+                        "triage printed nothing; a caller cannot tell that "
+                        "apart from having nothing to review")
+        self.assertNotIn("UnicodeDecodeError", result.stderr)
+
+    def test_reports_a_commit_whose_diff_defeats_cp1252(self):
+        # patch_id() runs `git show`, so the diff body gets decoded too.
+        self.write("kept.py", f"TITLE = {self.SMART_QUOTE}Kobenhavn{self.SMART_QUOTE}\n")
+        self.commit("upstream: touch kept.py")
+        self.set_upstream_to_head()
+        git(self.root, "reset", "--hard", "HEAD~1")
+
+        result = self.run_triage_utf8()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip(), "triage printed nothing")
+        self.assertNotIn("UnicodeDecodeError", result.stderr)

@@ -18,7 +18,7 @@
   <a href="assets/desk-tour.mp4"><img src="assets/desk-tour.gif" alt="Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill"></a>
 </p>
 
-Setup, the Jobs list, Apply, and Autofill. Submit for me sends the form. LinkedIn, Indeed, and Dice stay manual. [Full video](assets/desk-tour.mp4).
+Setup, the Jobs list, Apply, and Autofill. On this branch Submit for me sends the form; LinkedIn, Indeed, and Dice stay manual. [Full video](assets/desk-tour.mp4).
 
 This repository is the public **US** product: English defaults, US job boards, and an installable **[Job Search Desk](https://github.com/iLevyTate/ai-job-search/releases/latest)** for Windows, macOS Apple Silicon, and Linux. Open the app or clone the repo, run `/setup` once, then scrape, rank, tailor a CV and cover letter, and prep interviews. Claude Code is the runtime. Your profile and applications stay in a folder on your computer.
 
@@ -42,7 +42,7 @@ Release CI does **not** build Intel Mac. Apple Silicon only on macOS.
 
 1. Run the installer. Windows adds Start Menu and Desktop shortcuts and launches the app. If Windows SmartScreen says it protected your PC, click **More info**, then **Run anyway**. That warning is a missing signature, not a virus scan. macOS: open the `.dmg` and drag the app to Applications. Linux: mark the AppImage executable and run it.
 2. Open an existing job-search folder, or create a new copy of this public repo (Git is optional).
-3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's installer. If you are signed out, **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there with your Claude plan or an Anthropic Console API key. Desk never sees the code or token.
+3. The desk starts Claude Code when it opens. If Claude Code is missing, it runs Anthropic's official installer by piping `https://claude.ai/install.ps1` into PowerShell on Windows, or `https://claude.ai/install.sh` into bash elsewhere. If you are signed out, **Sign in to Claude Code** opens a terminal window with Claude Code's own sign-in; finish it there with your Claude plan or an Anthropic Console API key. Desk never sees the code or token.
 4. If Claude in Chrome is missing, click **Add Claude in Chrome** on first run or the sign-in card. Chrome opens the official store. Add the extension; Desk uses it after that. The installer cannot pack a Chrome extension.
 5. After you are signed in, run **Setup** once so the folder has your profile.
 
@@ -50,7 +50,9 @@ A second click of the shortcut focuses the window that is already running. It do
 
 macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then **Open**.
 
-The app does not replace `/setup`. Submit for me sends an employer form. LinkedIn, Indeed, and Dice stay manual.
+Updates: packaged Windows and Linux builds check this repository's [Releases](https://github.com/iLevyTate/ai-job-search/releases) on launch, download a newer version in the background, and install it when you quit. Portable builds and macOS skip the check and link you to Releases instead.
+
+The app does not replace `/setup`. On this branch Submit for me sends an employer form; LinkedIn, Indeed, and Dice stay manual.
 
 ## Run the demo page
 
@@ -95,7 +97,20 @@ files ready    with fit ratings     (LaTeX, tailored)        field report
                -> /apply            -> Revise -> Final output  and submit
 ```
 
-**`/autofill` sends the form only when you press Submit for me** (or type `submit` in the terminal). It fills the form, attaches your documents, and screenshots the result first. LinkedIn, Indeed, and Dice are never sent this way. Their terms forbid automated submission.
+**`/autofill` sends the form only when you answer its review gate with Submit.** It fills the form, attaches your tailored documents, and screenshots the result first. Automated submission on LinkedIn, Indeed, and Dice violates their Terms of Service, so those three are refused outright.
+
+**This is the branch where end-to-end submission lives.** It is in no tag and no release, and `master` does not carry it, so nothing anyone downloads today can send an application. Building this branch yourself is what turns it on.
+
+What gates it:
+
+- The review gate gained a third answer. It was Continue or Cancel; it is now Continue, Cancel, or Submit. You type `submit` in a terminal, or press **Submit for me** in the Desk.
+- The two gates fail closed differently, and the difference is worth stating. The Desk gate returns Cancel on every path that is not an explicit answer: a refused start, a missing token, a failed readiness call, a bad response, a closed review, an abort, an exception, or thirty minutes of silence. The terminal gate has no timer and no check for whether a terminal is attached; anything typed that is not `submit`, including the word cancel, is treated exactly like Enter and closes the browser without sending, while end of input, a closed stdin and an error return Cancel.
+- Neither gate can be answered by a flag. The environment chooses which gate runs rather than what it replies, with one honest exception: `JOB_SEARCH_DESK_REVIEW_URL` selects the server the Desk gate asks, so pointing it at a server you control amounts to answering it. That is a capability on your own machine, not a remote one, and it is why the review token is ephemeral and issued by the Desk.
+- LinkedIn, Indeed, and Dice refuse to send at all. Their terms forbid it, the block is on the hostname, and the refusal is reported rather than passed over quietly.
+- Only an exact button label matches: Submit, Submit application, Send application, Send my application. A newsletter or search button cannot be mistaken for the application's own.
+- One decision sends one application. There is no batch mode.
+
+So the last decision stays yours. What changed is who performs the click: you used to press the button in the browser, and here you authorize it and the tool presses it.
 
 Discovery defaults to LinkedIn, Indeed, Dice, Built In, Wellfound, ClearanceJobs, USAJobs, freehire.me, and employer ATS boards on Greenhouse, Lever, Ashby, and Workday. Danish portal CLIs still ship, disabled, so methodology updates do not flip the default search path.
 

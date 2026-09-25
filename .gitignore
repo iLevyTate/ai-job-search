@@ -84,6 +84,20 @@ cover_letters/cover_*.*
 cover_letters/Cover_*.*
 !cover_letters/cover_example.tex
 
+# Tailored documents are named <Name>_<Company>_Resume.tex and
+# <Name>_<Company>_Cover_Letter.tex, which none of the patterns above match:
+# they cover the upstream main_/cover_ convention only. Earlier releases closed
+# this with a pattern that spelled out the author's surname, which put a real
+# name in a public file; it was removed in 0d3f6c3 and nothing generic replaced
+# it, so the gap reopened. These match the shape instead of the person. The
+# compiled PDF is already caught by *.pdf above; the .tex source is the one
+# that carries the address, phone number and full history.
+cv/*_Resume.tex
+cv/*_Resume.txt
+cover_letters/*_Cover_Letter.tex
+!cv/main_example.tex
+!cover_letters/cover_example.tex
+
 # documents/ subfolder contents are personal — only README and folder structure are tracked
 documents/cv/**
 documents/linkedin/**

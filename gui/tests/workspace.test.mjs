@@ -26,7 +26,7 @@ import {
 } from "../workspace.mjs";
 
 test("sameWorkspace treats Windows paths as the same folder", () => {
-  const root = join("C:", "Users", "benja", "Documents", "GitHub", "ai-job-search");
+  const root = join("C:", "Users", "example", "Documents", "GitHub", "ai-job-search");
   assert.equal(sameWorkspace(root, root), true);
   if (process.platform === "win32") {
     assert.equal(sameWorkspace(root, root.toUpperCase()), true);

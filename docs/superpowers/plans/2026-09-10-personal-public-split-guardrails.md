@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 stdlib only (this repo's tools run on the system interpreter, no requirements file), POSIX `sh` for hook shims, `unittest` (run with `python -m unittest discover -s tests -t .`), git.
 
-**Where work happens:** Tasks 1-8 in the public checkout `C:\Users\benja\Documents\GitHub\ai-job-search-desk-1.3.0` on branch `split-guardrails` (already created from `origin/master`). Tasks 9-12 in the personal checkout `C:\Users\benja\Documents\GitHub\ai-job-search` on branch `personal`. Task 13 touches the other public folders. Never copy a file from the personal tree into the public tree.
+**Where work happens:** Tasks 1-8 in the public checkout `C:\Users\<you>\Documents\GitHub\ai-job-search-desk-1.3.0` on branch `split-guardrails` (already created from `origin/master`). Tasks 9-12 in the personal checkout `C:\Users\<you>\Documents\GitHub\ai-job-search` on branch `personal`. Task 13 touches the other public folders. Never copy a file from the personal tree into the public tree.
 
 **Conventions:** Commit messages are plain sentences, no attribution lines. Every Python file is UTF-8 with LF endings. Run the full suite before each commit: `python -m unittest discover -s tests -t .` (public baseline: 326 OK).
 
@@ -1312,7 +1312,7 @@ gh pr create --repo iLevyTate/ai-job-search --base master --head split-guardrail
 
 ### Task 9: Personal tree: archive the Desk work and make gui/ read-only
 
-Run in `C:\Users\benja\Documents\GitHub\ai-job-search`. Nothing here is pushed to `origin`.
+Run in `C:\Users\<you>\Documents\GitHub\ai-job-search`. Nothing here is pushed to `origin`.
 
 - [ ] **Step 1: Confirm the starting state**
 
@@ -1404,7 +1404,7 @@ git push personal personal
 - [ ] **Step 1: Save the dirty work in the old release checkout**
 
 ```bash
-cd C:/Users/benja/Documents/GitHub/ai-job-search-desk-release
+cd C:/Users/<you>/Documents/GitHub/ai-job-search-desk-release
 git status --short | wc -l        # 29
 git add -A
 git commit -m "WIP: desk command guidance (parked during checkout consolidation)"
@@ -1414,7 +1414,7 @@ git push -u origin desk-command-guidance
 - [ ] **Step 2: Rename the 1.3.0 checkout and wire it**
 
 ```bash
-cd C:/Users/benja/Documents/GitHub
+cd C:/Users/<you>/Documents/GitHub
 mv ai-job-search-desk-1.3.0 ai-job-search-public
 cd ai-job-search-public
 git remote -v                     # still has a 'personal' remote until setup removes it
@@ -1442,7 +1442,7 @@ The branches `desk-usability-audit` and `split-guardrails` moved with the folder
 - [ ] **Step 1: After PR #21 (the audit fixes) merges to master**
 
 ```bash
-cd C:/Users/benja/Documents/GitHub/ai-job-search
+cd C:/Users/<you>/Documents/GitHub/ai-job-search
 git fetch origin
 git merge origin/master            # touches gui/; allowed because MERGE_HEAD exists during a conflicted merge, and a clean merge makes no commit through pre-commit
 git diff --quiet origin/master -- gui && echo "gui matches public"
@@ -1461,7 +1461,7 @@ Do not start this task until the person says so in the session.
 For each of `ai-job-search-desk-12`, `ai-job-search-desk125`, `ai-job-search-desk-pr`, `ai-job-search-desk-release`, `ai-job-search-public-pr`:
 
 ```bash
-cd C:/Users/benja/Documents/GitHub/<folder>
+cd C:/Users/<you>/Documents/GitHub/<folder>
 git status --short | wc -l                  # expect 0
 git log --branches --not --remotes --oneline | wc -l    # expect 0 (no unpushed commits)
 git stash list | wc -l                      # expect 0
@@ -1471,7 +1471,7 @@ Any non-zero count stops the deletion of that folder; report it instead.
 - [ ] **Step 2: Delete**
 
 ```bash
-cd C:/Users/benja/Documents/GitHub
+cd C:/Users/<you>/Documents/GitHub
 rm -rf ai-job-search-desk-12 ai-job-search-desk125 ai-job-search-desk-pr ai-job-search-desk-release ai-job-search-public-pr
 ls -d ai-job-search*                        # expect: ai-job-search  ai-job-search-public
 ```

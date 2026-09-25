@@ -9536,9 +9536,11 @@ ${incoming}`;
         button.classList.toggle("selected", selected);
         const panel = container.ownerDocument.getElementById(`panel-${button.dataset.tab}`);
         if (panel) {
+          button.setAttribute("aria-controls", panel.id);
           panel.hidden = !selected;
           panel.setAttribute("role", "tabpanel");
           panel.setAttribute("aria-labelledby", button.id);
+          panel.tabIndex = 0;
         }
       }
     }
@@ -10511,8 +10513,11 @@ ${multiline}` : rendered;
   function paintMode() {
     if (!modeEl) return;
     const autonomous = state.permissionMode === "autonomous";
-    modeEl.textContent = autonomous ? "Works on its own" : "Asks before acting";
-    modeEl.title = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
+    const label = autonomous ? "Works on its own" : "Asks before acting";
+    const meaning = autonomous ? "Claude may create and change files in your job-search folder without asking first." : "Claude asks you before changing files or running commands.";
+    modeEl.textContent = label;
+    modeEl.title = meaning;
+    modeEl.setAttribute("aria-label", `${label}. ${meaning} Change how much Claude asks.`);
     modeEl.dataset.mode = state.permissionMode;
   }
   var announceTimer = null;
@@ -11753,6 +11758,7 @@ ${[job.title, job.company].filter(Boolean).join(" at ")} (no link was saved; ask
     uploadDocuments(event.dataTransfer.files);
   });
   modeToggle?.addEventListener("click", () => modeSheet.showModal());
+  modeEl?.addEventListener("click", () => modeSheet?.showModal());
   modeSheet?.addEventListener("click", (event) => {
     const choice = event.target.closest("[data-mode-choice]");
     if (!choice) return;

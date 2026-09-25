@@ -27,7 +27,9 @@ Native Chat permissions use the Claude Agent SDK `canUseTool` callback. **Safe**
 
 The embedded Terminal launches only the resolved `claude` executable in the selected workspace. The renderer can send opaque IDs, bounded strings, and bounded resize values. It cannot supply an executable, arguments, environment, or cwd. Opaque Windows `.cmd` shims are not spawned through the PTY.
 
-Autofill review tokens are ephemeral and inherited by the local CLI. The bridge accepts one Continue or Cancel decision. There is no submit endpoint. A Desk restart cancels an orphaned review.
+Autofill review tokens are ephemeral and inherited by the local CLI. The bridge accepts one Continue or Cancel decision. There is no submit endpoint in any released build. A Desk restart cancels an orphaned review.
+
+The `autofill-submit` branch adds a third decision, Submit, and with it a path that presses the employer's own button. It is unreleased and not on `master`. The Desk gate there fails closed the way this one does: Cancel on a refused start, a missing token, a failed readiness call, a bad response, a closed review, an abort, an exception, and after thirty minutes. The terminal gate is weaker and should be read as such: it has no timer and no test for an attached terminal, and anything typed that is not `submit` is treated as Enter and closes the browser without sending, so only end of input, a closed stdin or an error produce Cancel. LinkedIn, Indeed, and Dice are refused by hostname. The environment selects which gate runs rather than what it returns, except that `JOB_SEARCH_DESK_REVIEW_URL` selects the server the Desk gate asks, which on your own machine amounts to answering it. Treat this paragraph as the disclosure for that branch until it ships, at which point the sentence above it has to change.
 
 ## Scope notes
 
