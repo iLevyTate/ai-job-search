@@ -57,7 +57,7 @@ bun run src/cli.ts fill https://job-boards.greenhouse.io/acme/jobs/1234567 --hea
   --cover ../../../../cover_letters/cover_acme_ai_engineer.pdf
 ```
 
-With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field and submit by hand. In a direct CLI session, press Enter to close the browser (stdin close cancels). When Desk launched Autofill, use Continue or Cancel on the review card instead. There is no Submit control in either adapter.
+With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field, then either send it yourself in the browser or tell the gate to send it. In a direct CLI session, type `submit` to send, or press Enter to close without sending; anything else you type is treated as Enter, and a closed stdin cancels. When Desk launched Autofill, the review card offers Continue, Cancel, and Submit for me.
 
 ## How it decides what to fill
 
@@ -73,7 +73,7 @@ Fields marked `<-- CHECK` in the output were filled from heuristic rules. Read t
 
 ## What it does not do
 
-- Does not submit, under any flag
+- Does not submit unless a person answers the review gate with Submit. No flag, environment variable or batch mode answers it for them, and LinkedIn, Indeed and Dice are refused by hostname
 - Does not create accounts or log in. Log in yourself first if the portal requires it, or use `--headed` and authenticate in the open browser.
 - Does not defeat CAPTCHAs or bot detection. If a portal blocks automation, fill that one by hand.
 - Does not answer essay questions ("Why do you want to work here?"). Those come from `/apply`, which writes them against the actual posting.

@@ -87,7 +87,7 @@ bun run src/cli.ts fill "<job_url>" --headed \
   --cover "<abs path to tailored cover letter pdf>"
 ```
 
-The process fills the form and then waits. It does not click Submit.
+The process fills the form and then waits at a review gate. It sends nothing unless the user answers that gate with Submit: typing `submit` in a terminal, or pressing **Submit for me** in the Desk. Enter alone, or anything else typed, closes the browser without sending. LinkedIn, Indeed and Dice refuse to send at all.
 
 ---
 
@@ -119,7 +119,7 @@ This is the same 14-column header `/apply` and `/outcome` use (the Desk's Applic
 
 ## Rules
 
-1. **Never click Submit**, and never add a flag that would. The human submits.
+1. **Never answer the review gate for the user.** The tool can press the employer's Submit button, but only when a person answers Submit at the gate. Do not type `submit`, do not press Submit for me, and do not add a flag that would answer it. Report that the form is filled and waiting, then stop.
 2. **Never invent** contact details, work-authorization answers, or compensation figures. If the profile lacks a value, ask.
 3. **Never fill a compensation field** unless the user has set a figure in `application_profile.json`. Blank beats a number typed before knowing the range.
 4. **EEO fields default to decline-to-self-identify.** Only change them if the user explicitly asks.

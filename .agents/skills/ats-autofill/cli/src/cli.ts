@@ -2,8 +2,11 @@
 // CLI for prefilling US job application forms (Greenhouse, Lever, Ashby,
 // Workday, and generic forms) from a local profile file.
 //
-// This tool NEVER submits an application. It fills fields, attaches documents,
-// screenshots the result, and hands the browser to you. See SKILL.md.
+// This tool sends nothing on its own. It fills fields, attaches documents,
+// screenshots the result, and waits at a review gate. It presses the
+// employer's Submit button only when a person answers that gate with Submit:
+// typing `submit` in a terminal, or Submit for me in the Desk. LinkedIn,
+// Indeed and Dice are refused by hostname and stay manual. See SKILL.md.
 
 import { existsSync, readFileSync } from "fs"
 import { resolve as resolvePath, join, dirname } from "path"
@@ -69,9 +72,11 @@ EXAMPLES
   node --experimental-strip-types src/cli.ts fill https://jobs.lever.co/acme/abc-123 --headed \\
       -r ../../../../cv/main_acme.pdf -c ../../../../cover_letters/cover_acme_ai_engineer.pdf
 
-This tool does not click Submit. Ever. Review the form yourself and submit it.
-Automated submission on LinkedIn, Indeed, and Dice violates their Terms of
-Service and risks losing the accounts your job search depends on.
+This tool sends nothing until you answer the review gate with Submit. Type
+submit to send, or press Enter to close the browser without sending. Anything
+else you type is treated as Enter. LinkedIn, Indeed, and Dice are refused by
+hostname, because automated submission there violates their Terms of Service
+and risks losing the accounts your job search depends on.
 `
 
 function writeError(error: string, code: string): void {
@@ -120,7 +125,7 @@ function printReport(report: FillReport, format: string): void {
     const lines: string[] = []
     lines.push(`URL:        ${report.url}`)
     lines.push(`ATS:        ${report.ats}`)
-    lines.push(`Submitted:  no (by design)`)
+    lines.push(`Submitted:  ${report.submitted ? "yes" : "no"}`)
     if (report.screenshot) lines.push(`Screenshot: ${report.screenshot}`)
     lines.push("")
     lines.push(`FILLED (${report.filled.length})`)
