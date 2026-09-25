@@ -951,7 +951,6 @@ body.working .status::before {
   font: inherit;
 }
 .sheet input:focus, .sheet textarea:focus, .sheet select:focus, .gate-card input:focus {
-  outline: 0;
   border-color: rgba(208, 138, 58, 0.7);
 }
 .sheet-fields label > span { color: var(--paper); font-size: 0.9rem; }
@@ -1299,6 +1298,14 @@ body.gated .stage {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  /* It is a button so the keyboard and a finger can reach the explanation,
+     but it should keep reading as the quiet status line it always was. */
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .mode-label[data-mode="safe"] { color: var(--brass); }
@@ -1450,7 +1457,7 @@ body.gated .stage {
 }
 .artifact-actions button:disabled { opacity: 0.42; cursor: default; }
 
-.mode-label[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 0.2em; }
+.mode-label { text-decoration: underline dotted; text-underline-offset: 0.2em; }
 
 .q-list { margin: 0.3rem 0 0.6rem; padding-left: 1.3rem; font-family: var(--sans); font-size: 0.95rem; }
 .q-list li { margin: 0.25rem 0; }
@@ -1459,6 +1466,33 @@ body.gated .stage {
 .msg.error details { margin-top: 0.6rem; }
 .msg.error summary { cursor: pointer; font-size: 0.85rem; color: var(--fade); }
 .msg.error pre { margin: 0.4rem 0 0; white-space: pre-wrap; font-family: var(--mono); font-size: 0.74rem; color: var(--fade); }
+
+/* Windows High Contrast and other forced-colour modes drop box-shadow and
+   replace author colours with the system palette. Anything the desk signals
+   with shadow or colour alone disappears there, so those states are restated
+   with borders and system colour keywords, which forced-colour modes keep. */
+@media (forced-colors: active) {
+  /* Decorative washes only muddy a forced palette. */
+  .atmosphere, .vignette, .grain, .workline { display: none; }
+
+  :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+
+  /* The selected tab was carried by inset box-shadow plus a colour change,
+     both of which are flattened here. */
+  .tab.selected,
+  .tab[aria-selected="true"] {
+    border-bottom: 3px solid Highlight;
+    padding-bottom: calc(0.55rem - 3px);
+  }
+
+  /* Controls drawn with background alone need a real edge. */
+  button, .tab, .choice, .account,
+  .sheet input, .sheet textarea, .sheet select, .gate-card input, #prompt {
+    border: 1px solid ButtonBorder;
+  }
+
+  .msg.error { border: 1px solid Mark; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

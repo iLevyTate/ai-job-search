@@ -38,9 +38,13 @@ export function mountTabs(container, {
       button.classList.toggle("selected", selected);
       const panel = container.ownerDocument.getElementById(`panel-${button.dataset.tab}`);
       if (panel) {
+        button.setAttribute("aria-controls", panel.id);
         panel.hidden = !selected;
         panel.setAttribute("role", "tabpanel");
         panel.setAttribute("aria-labelledby", button.id);
+        // Panels scroll their own content, and a scrollable region the keyboard
+        // cannot reach cannot be scrolled without a pointer.
+        panel.tabIndex = 0;
       }
     }
   }

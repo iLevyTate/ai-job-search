@@ -50,3 +50,17 @@ test("arrow keys move tab focus", () => {
   list.dispatchEvent(new document.defaultView.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
   assert.equal(tabs.selectedId(), "chat");
 });
+
+test("each tab points at its panel and every panel is keyboard reachable", () => {
+  const { document } = withDom();
+  mountTabs(document.getElementById("surface-tabs"), { selectedId: "chat" });
+
+  for (const button of document.querySelectorAll("[role='tab']")) {
+    const panel = document.getElementById(`panel-${button.dataset.tab}`);
+    assert.equal(button.getAttribute("aria-controls"), panel.id);
+    assert.equal(panel.getAttribute("aria-labelledby"), button.id);
+    // The panels scroll their own content, so the keyboard has to be able to
+    // land on one whether or not it is the selected panel right now.
+    assert.equal(panel.tabIndex, 0);
+  }
+});
