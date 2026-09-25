@@ -37,8 +37,15 @@ import sys
 
 
 def git(*args: str) -> str:
+    # text=True alone decodes with the locale codepage. On Windows that is
+    # cp1252, which cannot decode five of the bytes UTF-8 produces, and the
+    # failure is not a clean error: the decode raises inside subprocess's
+    # reader thread, communicate() then waits forever for output that never
+    # arrives, and the tool hangs having printed nothing. A caller cannot tell
+    # that apart from "no upstream commits need review".
     return subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=True
+        ["git", *args], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True,
     ).stdout
 
 
@@ -50,10 +57,12 @@ def rev_list(range_spec: str) -> list[str]:
 def patch_id(sha: str) -> str | None:
     """Stable patch-id for a commit, or None if it has no diff."""
     show = subprocess.run(
-        ["git", "show", sha], capture_output=True, text=True, check=True
+        ["git", "show", sha], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True,
     ).stdout
     r = subprocess.run(
-        ["git", "patch-id", "--stable"], input=show, capture_output=True, text=True
+        ["git", "patch-id", "--stable"], input=show, capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     line = r.stdout.strip()
     return line.split()[0] if line else None
@@ -111,6 +120,14 @@ def commit_cell(short: str, sha: str, slug: str | None) -> str:
 
 
 def main() -> int:
+    # This report prints upstream commit subjects verbatim, and upstream is a
+    # Danish repository. A piped stdout on Windows defaults to the ANSI code
+    # page, which cannot encode them. Same guard as the other tools take.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)  # absent on a StringIO under test
+        if reconfigure:
+            reconfigure(encoding="utf-8")
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote", default="upstream")
     ap.add_argument("--branch", default="master")
