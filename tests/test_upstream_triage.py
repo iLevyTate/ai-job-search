@@ -15,8 +15,15 @@ UPSTREAM_SLUG = "MadsLorentzen/ai-job-search"
 
 
 def git(root: Path, *args: str) -> str:
+    # Pinned for the same reason the tool under test is: this helper commits a
+    # subject containing U+201D, and decoding git's echo with the locale
+    # codepage kills the reader thread. subprocess.run then returns stdout=None
+    # with returncode 0, so check=True passes and the suite still reports OK
+    # while printing a UnicodeDecodeError traceback. The harness that proves
+    # the fix had the defect.
     return subprocess.run(
-        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     ).stdout
 
 
