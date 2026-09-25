@@ -18,7 +18,7 @@
   <a href="assets/desk-tour.mp4"><img src="assets/desk-tour.gif" alt="Job Search Desk tour: Setup, the Jobs list, Apply, and Autofill"></a>
 </p>
 
-Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit. [Full video](assets/desk-tour.mp4).
+Setup, the Jobs list, Apply, and Autofill. Autofill never clicks Submit in a released build; see the note on end-to-end submission below. [Full video](assets/desk-tour.mp4).
 
 This repository is the public **US** product: English defaults, US job boards, and an installable **[Job Search Desk](https://github.com/iLevyTate/ai-job-search/releases/latest)** for Windows, macOS Apple Silicon, and Linux. Open the app or clone the repo, run `/setup` once, then scrape, rank, tailor a CV and cover letter, and prep interviews. Claude Code is the runtime. Your profile and applications stay in a folder on your computer.
 
@@ -52,7 +52,7 @@ macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then 
 
 Updates: packaged Windows and Linux builds check this repository's [Releases](https://github.com/iLevyTate/ai-job-search/releases) on launch, download a newer version in the background, and install it when you quit. Portable builds and macOS skip the check and link you to Releases instead.
 
-The app does not replace `/setup`. Autofill never clicks Submit.
+The app does not replace `/setup`. Autofill never clicks Submit in a released build.
 
 ## Run the demo page
 
@@ -97,7 +97,19 @@ files ready    with fit ratings     (LaTeX, tailored)        field report
                -> /apply            -> Revise -> Final output  and submit
 ```
 
-**`/autofill` never clicks Submit.** It fills the form, attaches your tailored documents, screenshots the result, and hands the browser to you. Automated submission on LinkedIn, Indeed, and Dice violates their Terms of Service.
+**`/autofill` never clicks Submit in any released build.** It fills the form, attaches your tailored documents, screenshots the result, and hands the browser to you. Automated submission on LinkedIn, Indeed, and Dice violates their Terms of Service.
+
+**End-to-end submission exists, on a branch, and is not released.** This fork has built the last step: an opt-in Submit that presses the employer's own button. It lives on `autofill-submit` and is in no tag, no release, and not on `master`, so nothing you download today can send an application. It is written down here rather than announced later, because a capability like this should be public before it ships, not after.
+
+What gates it, if you build that branch yourself:
+
+- The review gate gained a third answer. It was Continue or Cancel; it is now Continue, Cancel, or Submit. You type `submit` in a terminal, or press **Submit for me** in the Desk.
+- Pressing Enter alone still closes the browser without sending. Every other path returns Cancel: no terminal attached, end of input, a malformed reply, an error, or thirty minutes of silence.
+- LinkedIn, Indeed, and Dice refuse to send at all. Their terms forbid it, the block is on the hostname, and the refusal is reported rather than passed over quietly.
+- Only an exact button label matches: Submit, Submit application, Send application, Send my application. A newsletter or search button cannot be mistaken for the application's own.
+- One decision sends one application. There is no batch mode, and no flag or environment variable can answer the gate for you. The environment chooses *which* gate runs, never what it replies.
+
+So the last decision stays yours. What changed is who performs the click: you used to press the button in the browser, and on that branch you authorize it and the tool presses it.
 
 Discovery defaults to LinkedIn, Indeed, Dice, Built In, Wellfound, ClearanceJobs, USAJobs, freehire.me, and employer ATS boards on Greenhouse, Lever, Ashby, and Workday. Danish portal CLIs still ship, disabled, so methodology updates do not flip the default search path.
 
