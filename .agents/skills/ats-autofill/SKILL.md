@@ -57,7 +57,7 @@ bun run src/cli.ts fill https://job-boards.greenhouse.io/acme/jobs/1234567 --hea
   --cover ../../../../cover_letters/cover_acme_ai_engineer.pdf
 ```
 
-With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field, then either send it yourself in the browser or tell the gate to send it. In a direct CLI session, type `submit` to send, or press Enter to close without sending; anything else you type is treated as Enter, and a closed stdin cancels. When Desk launched Autofill, the review card offers Continue, Cancel, and Submit for me.
+With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field, then either send it yourself in the browser or tell the gate to send it. In a direct CLI session, type `submit` to send, or press Enter to close without sending; anything else you type is treated as Enter, and a closed stdin cancels. If stdin is not a terminal the gate refuses before it starts, so piped input cannot answer it, and a review nobody answers cancels after thirty minutes. When Desk launched Autofill, the review card offers Continue, Cancel, and Submit for me.
 
 ## How it decides what to fill
 

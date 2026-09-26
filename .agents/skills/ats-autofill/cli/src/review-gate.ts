@@ -10,9 +10,17 @@ export interface ReviewGate {
 }
 
 type StdinLike = {
+  isTTY?: boolean
   once(event: "data" | "end" | "close" | "error", listener: (...args: unknown[]) => void): StdinLike
   off?(event: string, listener: (...args: unknown[]) => void): StdinLike
 }
+
+export interface StdinReviewGateOptions {
+  timeoutMs?: number
+}
+
+// Matches the Desk gate: a review nobody answers is a cancel, not an open browser.
+const STDIN_REVIEW_TIMEOUT_MS = 30 * 60 * 1000
 
 type Writer = { write(chunk: string): unknown }
 
@@ -22,13 +30,25 @@ export class StdinReviewGate implements ReviewGate {
   // rejects. Keep this shape.
   private readonly stdin: StdinLike
   private readonly stderr: Writer
+  private readonly timeoutMs: number
 
-  constructor(stdin: StdinLike = process.stdin, stderr: Writer = process.stderr) {
+  constructor(stdin: StdinLike = process.stdin, stderr: Writer = process.stderr, options: StdinReviewGateOptions = {}) {
     this.stdin = stdin
     this.stderr = stderr
+    this.timeoutMs = options.timeoutMs ?? STDIN_REVIEW_TIMEOUT_MS
   }
 
   waitForDecision(request: ReviewRequest): Promise<ReviewDecision> {
+    // A pipe is not a person. The only input that can send an application is
+    // the word submit typed at an attached terminal; anything arriving from a
+    // script or a redirect is refused before a listener is even attached.
+    if (!this.stdin.isTTY) {
+      this.stderr.write(
+        "\nForm filled, but stdin is not a terminal, so nobody can review it here. Closing without sending.\n" +
+          "Run this in an interactive terminal, or launch it from Desk to use the review card.\n",
+      )
+      return Promise.resolve("cancel")
+    }
     this.stderr.write(
       "\nForm filled. The browser is open and nothing has been sent yet.\n" +
         "Check every field. Type submit and press Enter to send it, or press Enter alone to close without sending.\n",
@@ -38,6 +58,7 @@ export class StdinReviewGate implements ReviewGate {
       const finish = (decision: ReviewDecision) => {
         if (settled) return
         settled = true
+        clearTimeout(timer)
         this.stdin.off?.("data", onData)
         this.stdin.off?.("end", onCancel)
         this.stdin.off?.("close", onCancel)
@@ -53,6 +74,9 @@ export class StdinReviewGate implements ReviewGate {
       this.stdin.once("end", onCancel)
       this.stdin.once("close", onCancel)
       this.stdin.once("error", onCancel)
+      // Kept referenced on purpose: the CLI is awaiting this gate, and finish()
+      // clears the timer on every exit, so it never outlives the review.
+      const timer = setTimeout(() => finish("cancel"), this.timeoutMs)
       void request
     })
   }
