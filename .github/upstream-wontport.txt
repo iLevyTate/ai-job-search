@@ -3,10 +3,16 @@
 # in the weekly Upstream watch report. One SHA per line (short or full); text
 # after # is a note.
 #
-# Only for commits you've reviewed and rejected on purpose. Commits you DO
-# port drop off automatically once cherry-picked (patch-id match), so they
-# never need an entry here. Likewise commits that only touch files your fork
-# removed are auto-skipped - you don't need to list those either.
+# Two kinds of commit belong here:
 #
-# This ships empty on the template. Populate it in your own fork, e.g.:
-#   cffacfd   # Danish demo portals - my fork removed them on purpose
+#   1. Reviewed and rejected on purpose.
+#   2. Ported in adapted form. A straight cherry-pick drops off by itself once
+#      the patch-id matches, but an adapted port never matches - the upstream
+#      commit also touched files this fork does not carry, so the diff differs
+#      and the report re-surfaces it every week. Record it here instead.
+#
+# Commits that only touch files your fork removed are auto-skipped - you do not
+# need to list those.
+
+ba4f2397a31bbce11d062c98f8fbeda1330490b9  # UTF-8 stdout (#490) - ported; all four files this fork carries have _force_utf8_output. Upstream also touched tools/job_key.py and tools/verify_layout.py, which this fork does not have.
+09435eb1a572eddbd0180e8ea9c3acf84f90604a  # /apply page-count check (#476) - ported as adapted prose in .claude/commands/apply.md. Upstream's wording cross-references verify_layout.py; this fork has no such tool, so the note names Step 5d instead.
