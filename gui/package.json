@@ -12,6 +12,7 @@
     "dev": "node server.mjs",
     "dev:demo": "node server.mjs --demo",
     "record": "node scripts/record-tour.mjs",
+    "build:installer-art": "node scripts/build-installer-art.mjs",
     "cli": "node server.mjs --cli",
     "app": "electron .",
     "test": "npm run test:unit && npm run test:renderer",
