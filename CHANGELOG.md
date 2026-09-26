@@ -13,12 +13,24 @@ per-file diff commands.
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-09-26
+
+### Changed
+- Desk no longer downloads an update on its own. When a newer release exists the button reads **Download 1.x.y** and nothing is fetched until you click it; after the download, **Restart** installs it as before. The installers are unsigned, so a release nobody announced should be something you see and can decline, not something that installs itself at next quit.
+- `SECURITY.md` names every environment variable the Desk and Autofill read, starting with the three that decide what the Desk trusts (`CLAUDE_BIN`, `JOB_SEARCH_TEMPLATE_URL`, and the review-gate pair), and says plainly that none of them submits an application or skips a gate.
+- `SECURITY.md` discloses the unreleased `autofill-submit` branch and describes both review gates as they are in the code. Nothing on `master` or in this release submits.
+- Desk focus rings, the current mode, and contrast states are visible on every control.
+
 ### Added
+- A test fails the build if `SECURITY.md` still claims there is no submit endpoint while the Autofill gate can return one, or the other way round, so the disclosure cannot go stale when that branch lands.
+- A prose audit (`strip-ai-tells`) that runs on finished drafts, after writing rather than during it.
+- Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
 - Check email is a main step. It runs `/gmail-sync`, which looks for employer replies and writes nothing until you approve it. If this folder has already run it, the step says so.
 - Tools check explains what each program means for the search.
 - Every command field says what it is for and what happens when you leave it blank. Setup can update one part of the profile, and Reset spells out what each mode deletes. An expired Claude login opens Sign in from the error and from the account chip.
 
 ### Security
+- The local account name was removed from the public tree (a plan document and one test fixture carried it in paths). The split guard's pattern file now also matches path, home-directory, and email classes rather than only listed strings.
 - CI and Desk release runs execute the security guards, the Python tool tests (including rank candidate limits), and the placeholder-integrity checks on this public template. A personalized fork still skips the placeholder checks after `/setup`.
 - `documents/projects/**` is ignored, matching upstream, so project summaries stay out of the repository.
 
@@ -29,6 +41,7 @@ per-file diff commands.
 - Python tools reconfigure stdout and stderr to UTF-8, so a non-Latin company or title no longer crashes `/rank`, salary lookup, or PDF verification on Windows.
 - `/apply` Step 5b runs `verify_pdf.py --pages` (2 for the CV, 1 for the cover letter). Step 5d extracts text and does not check page count.
 - `/reset` clears `documents/projects/` with the other personal document folders.
+- The upstream triage report survives a non-UTF-8 locale on Windows, and ports that landed in adapted form are recorded on the won't-port list so the weekly report stops re-listing work that is done.
 
 ## [1.3.4] - 2026-09-21
 
