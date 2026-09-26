@@ -1945,7 +1945,15 @@ async function refreshUpdate() {
     const res = await fetch("/update/status");
     if (!res.ok) return;
     const info = await res.json();
-    if (info.channel === "downloaded" && info.version) {
+    updateBtn.disabled = false;
+    if (info.channel === "available" && info.version) {
+      updateBtn.hidden = false;
+      updateBtn.textContent = `Download ${info.version}`;
+    } else if (info.channel === "downloading") {
+      updateBtn.hidden = false;
+      updateBtn.disabled = true;
+      updateBtn.textContent = info.percent ? `Downloading ${info.percent}%` : "Downloading";
+    } else if (info.channel === "downloaded" && info.version) {
       updateBtn.hidden = false;
       updateBtn.textContent = `Restart for ${info.version}`;
     } else if (info.channel === "manual") {
@@ -1967,11 +1975,14 @@ updateBtn?.addEventListener("click", async () => {
     if (href) window.open(href, "_blank", "noreferrer");
     return;
   }
+  const downloading = updateBtn.dataset.channel === "available";
   try {
-    const res = await post("/update/install");
+    const res = await post(downloading ? "/update/download" : "/update/install");
     const data = await res.json().catch(() => null);
     if (!res.ok || data?.ok === false) {
-      notice(data?.error || "Could not restart into the new version.");
+      notice(data?.error || (downloading ? "Could not start the download." : "Could not restart into the new version."));
+    } else if (downloading) {
+      refreshUpdate();
     }
   } catch {
     notice("Could not reach the local desk.");

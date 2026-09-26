@@ -48,7 +48,7 @@ import {
   systemOpener,
 } from "./desk-data.mjs";
 import { attachSample } from "./sample-job.mjs";
-import { applyFakeUpdateState, getUpdateState, requestUpdateInstall } from "./update.mjs";
+import { applyFakeUpdateState, getUpdateState, requestUpdateDownload, requestUpdateInstall } from "./update.mjs";
 
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
@@ -816,6 +816,14 @@ async function handleDeskDataRequest(req, res, url) {
   if (req.method === "GET" && url.pathname === "/update/status") {
     applyFakeUpdateState();
     json(res, 200, getUpdateState());
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/update/download") {
+    if (process.env.JOB_SEARCH_UPDATE_FAKE === "1") {
+      json(res, 200, { ok: true, dryRun: true });
+      return true;
+    }
+    json(res, 200, requestUpdateDownload());
     return true;
   }
   if (req.method === "POST" && url.pathname === "/update/install") {

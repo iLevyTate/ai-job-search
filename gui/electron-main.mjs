@@ -15,7 +15,7 @@ import { createDeskRuntimeFactory } from "./desk-session.mjs";
 import { startDesk } from "./server.mjs";
 import { createClaudePty, defaultSpawnPty } from "./terminal/claude-pty.mjs";
 import { switchToChat, switchToTerminal } from "./terminal/handoff.mjs";
-import { applyFakeUpdateState, registerUpdateInstaller, setUpdateState } from "./update.mjs";
+import { applyFakeUpdateState, registerUpdateDownloader, registerUpdateInstaller, setUpdateState } from "./update.mjs";
 import {
   createWorkspace,
   defaultBrowseDir,
@@ -163,18 +163,31 @@ async function startUpdates() {
     setUpdateState({ channel: "manual", current });
     return;
   }
-  autoUpdater.autoDownload = true;
+  // Nothing is fetched until a person clicks Download. The installers are
+  // unsigned, so the updater has no signature to check; a release nobody
+  // announced should be something the person sees and can decline, not
+  // something that installs itself at next quit.
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("checking-for-update", () => setUpdateState({ channel: "checking", current }));
   autoUpdater.on("update-available", (info) => {
     setUpdateState({ channel: "available", current, version: info?.version || "" });
   });
   autoUpdater.on("update-not-available", () => setUpdateState({ channel: "idle", current, version: "" }));
+  autoUpdater.on("download-progress", (progress) => {
+    setUpdateState({ channel: "downloading", current, percent: Math.round(progress?.percent || 0) });
+  });
   autoUpdater.on("update-downloaded", (info) => {
     setUpdateState({ channel: "downloaded", current, version: info?.version || "" });
   });
   autoUpdater.on("error", (err) => {
     setUpdateState({ channel: "error", current, error: err?.message || "Update check failed." });
+  });
+  registerUpdateDownloader(() => {
+    setUpdateState({ channel: "downloading", current, percent: 0 });
+    autoUpdater.downloadUpdate().catch((err) => {
+      setUpdateState({ channel: "error", current, error: err?.message || "Download failed." });
+    });
   });
   registerUpdateInstaller(() => {
     // Silent install picks "Replace" in installer.nsh via /SD IDYES and

@@ -15,6 +15,7 @@ let state = {
 };
 
 let installer = null;
+let downloader = null;
 
 export function getUpdateState() {
   return { ...state };
@@ -29,6 +30,18 @@ export function registerUpdateInstaller(fn) {
   installer = typeof fn === "function" ? fn : null;
 }
 
+export function registerUpdateDownloader(fn) {
+  downloader = typeof fn === "function" ? fn : null;
+}
+
+export function requestUpdateDownload() {
+  if (!downloader) {
+    return { ok: false, error: "Open the latest installer from GitHub Releases." };
+  }
+  downloader();
+  return { ok: true };
+}
+
 export function requestUpdateInstall() {
   if (!installer) {
     return { ok: false, error: "Open the latest installer from GitHub Releases." };
@@ -40,7 +53,7 @@ export function requestUpdateInstall() {
 export function applyFakeUpdateState(env = process.env) {
   if (env.JOB_SEARCH_UPDATE_FAKE !== "1") return false;
   setUpdateState({
-    channel: "downloaded",
+    channel: env.JOB_SEARCH_UPDATE_FAKE_CHANNEL || "downloaded",
     current: env.JOB_SEARCH_UPDATE_CURRENT || "1.3.4",
     version: env.JOB_SEARCH_UPDATE_NEXT || "1.9.9",
     error: "",

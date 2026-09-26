@@ -50,7 +50,7 @@ A second click of the shortcut focuses the window that is already running. It do
 
 macOS Gatekeeper: the release is unsigned. In Finder, right-click the app, then **Open**.
 
-Updates: packaged Windows and Linux builds check this repository's [Releases](https://github.com/iLevyTate/ai-job-search/releases) on launch, download a newer version in the background, and install it when you quit. Portable builds and macOS skip the check and link you to Releases instead.
+Updates: packaged Windows and Linux builds check this repository's [Releases](https://github.com/iLevyTate/ai-job-search/releases) on launch and, when a newer version exists, offer a Download button. Nothing is fetched until you click it; after the download, Restart installs it. Portable builds and macOS skip the check and link you to Releases instead.
 
 The app does not replace `/setup`. Autofill never clicks Submit in a released build.
 
