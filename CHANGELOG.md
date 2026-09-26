@@ -20,6 +20,7 @@ per-file diff commands.
 - `SECURITY.md` names every environment variable the Desk and Autofill read, starting with the three that decide what the Desk trusts (`CLAUDE_BIN`, `JOB_SEARCH_TEMPLATE_URL`, and the review-gate pair), and says plainly that none of them submits an application or skips a gate.
 - `SECURITY.md` discloses the unreleased `autofill-submit` branch and describes both review gates as they are in the code. Nothing on `master` or in this release submits.
 - Desk focus rings, the current mode, and contrast states are visible on every control.
+- The Desk runs on Electron 39.8.10 (from 36.9.5), with `qs` 6.16.0 and `js-yaml` 4.3.2. The release workflow's packaged tests (`rebuild:native`, `dist:dir`, `test:packaged`) passed on all three platforms against it.
 
 ### Added
 - A test fails the build if `SECURITY.md` still claims there is no submit endpoint while the Autofill gate can return one, or the other way round, so the disclosure cannot go stale when that branch lands.
