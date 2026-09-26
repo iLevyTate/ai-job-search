@@ -1,0 +1,23 @@
+1
+00:00:00,000 --> 00:00:05,000
+Job Search Desk. What it does.
+
+2
+00:00:05,000 --> 00:00:12,000
+Setup. Claude writes your profile from a few answers.
+
+3
+00:00:12,000 --> 00:00:22,000
+Jobs. Find openings, then Rank scores the ones that fit.
+
+4
+00:00:22,000 --> 00:00:30,000
+Apply. Claude drafts a CV and cover letter. You review them.
+
+5
+00:00:30,000 --> 00:00:38,000
+Autofill. It prefills the form. You click Submit.
+
+6
+00:00:38,000 --> 00:00:40,800
+Applications stay on this computer, with the files attached.
