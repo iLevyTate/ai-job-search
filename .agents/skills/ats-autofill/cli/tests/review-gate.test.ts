@@ -6,9 +6,12 @@ import {
   reviewGateHasSubmit,
 } from "../src/review-gate.ts"
 
-function fakeStdin() {
-  const stream = new EventEmitter()
-  return stream as EventEmitter & { off: typeof stream.off }
+function fakeStdin(options: { isTTY?: boolean } = {}) {
+  const stream = new EventEmitter() as EventEmitter & { off: typeof EventEmitter.prototype.off; isTTY?: boolean }
+  // Default to an attached terminal: that is the only stdin the gate accepts,
+  // and the tests below that pass isTTY: false are the ones proving it.
+  stream.isTTY = options.isTTY ?? true
+  return stream
 }
 
 describe("StdinReviewGate", () => {
@@ -42,6 +45,25 @@ describe("StdinReviewGate", () => {
     const pending = gate.waitForDecision({ url: "https://jobs.example/1" })
     stdin.emit("close")
     expect(await pending).toBe("cancel")
+  })
+
+  test("refuses when stdin is not a terminal, so piped input cannot submit", async () => {
+    const stdin = fakeStdin({ isTTY: false })
+    const writes: string[] = []
+    const gate = new StdinReviewGate(stdin, { write: (text) => writes.push(text) })
+    const pending = gate.waitForDecision({ url: "https://boards.greenhouse.io/acme/jobs/1" })
+    // The word that would send it, arriving from a pipe rather than a person.
+    stdin.emit("data", Buffer.from("submit\n"))
+    expect(await pending).toBe("cancel")
+    expect(writes.join("")).toMatch(/terminal/i)
+    expect(stdin.listenerCount("data")).toBe(0)
+  })
+
+  test("cancels after the timeout when nobody answers", async () => {
+    const stdin = fakeStdin()
+    const gate = new StdinReviewGate(stdin, { write: () => {} }, { timeoutMs: 5 })
+    expect(await gate.waitForDecision({ url: "https://jobs.example/1" })).toBe("cancel")
+    expect(stdin.listenerCount("data")).toBe(0)
   })
 })
 

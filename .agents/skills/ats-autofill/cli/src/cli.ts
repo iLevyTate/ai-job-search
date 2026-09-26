@@ -74,7 +74,8 @@ EXAMPLES
 
 This tool sends nothing until you answer the review gate with Submit. Type
 submit to send, or press Enter to close the browser without sending. Anything
-else you type is treated as Enter. LinkedIn, Indeed, and Dice are refused by
+else you type is treated as Enter. Piped input is refused outright, and an
+unanswered gate cancels after thirty minutes. LinkedIn, Indeed, and Dice are refused by
 hostname, because automated submission there violates their Terms of Service
 and risks losing the accounts your job search depends on.
 `
