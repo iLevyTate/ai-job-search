@@ -153,3 +153,11 @@ company_research/*.json
 # screencast frames are build output and regenerate from the script.
 assets/desk-tour-views/
 assets/desk-tour-raw-*/
+
+# Installer art rendered by gui/scripts/build-installer-art.mjs is committed
+
+# (electron-builder reads it; CI does not regenerate it).
+
+!gui/build/*.png
+
+!gui/build/icons/*.png

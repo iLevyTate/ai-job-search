@@ -1,6 +1,6 @@
 appId: com.ai-job-search.desk
 productName: Job Search Desk
-copyright: AI Job Search
+copyright: (c) 2026 Job Search Desk contributors. MIT License.
 asar: true
 directories:
   output: release
@@ -41,6 +41,14 @@ nsis:
   deleteAppDataOnUninstall: false
   uninstallDisplayName: Job Search Desk ${version}
   include: build/installer.nsh
+  # Art rendered by scripts/build-installer-art.mjs from build/src/*.svg.
+  # These are electron-builder's default resource names, so the files are
+  # found either way; naming them keeps the wiring visible.
+  installerIcon: installerIcon.ico
+  uninstallerIcon: uninstallerIcon.ico
+  installerHeader: installerHeader.bmp
+  installerSidebar: installerSidebar.bmp
+  uninstallerSidebar: installerSidebar.bmp
 mac:
   category: public.app-category.productivity
   icon: build/icon.png
@@ -49,9 +57,28 @@ mac:
     - dmg
     - zip
   artifactName: JobSearchDesk-${version}-mac-${arch}.${ext}
+dmg:
+  title: Job Search Desk
+  background: background.png
+  iconSize: 128
+  window:
+    width: 660
+    height: 400
+  contents:
+    - x: 170
+      y: 210
+      type: file
+    - x: 490
+      y: 210
+      type: link
+      path: /Applications
 linux:
   category: Office
-  icon: build/icon.png
+  icon: icons
+  desktop:
+    entry:
+      Comment: Job search desk that keeps the hunt in a folder on this computer
+      Keywords: job;search;cv;resume;application;
   target:
     - AppImage
   artifactName: JobSearchDesk-${version}-linux-${arch}.${ext}

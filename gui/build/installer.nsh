@@ -1,5 +1,12 @@
 !include "LogicLib.nsh"
 
+; Welcome page copy. electron-builder inserts customHeader before the MUI
+; page macros and defines neither of these itself. $\r$\n is a line break.
+!macro customHeader
+  !define MUI_WELCOMEPAGE_TITLE "Job Search Desk"
+  !define MUI_WELCOMEPAGE_TEXT "Job Search Desk keeps a job search in a folder on this computer: postings found, applications drafted, and what happened to each one.$\r$\n$\r$\nSetup adds Start Menu and Desktop shortcuts and installs for your account only, with no administrator rights.$\r$\n$\r$\nYour job-search folder stays wherever you put it and is never uploaded."
+!macroend
+
 ; Asked on upgrade: replace the previous Desk, or keep a copy then install.
 ; The copy must happen in customInit. electron-builder uninstalls the old
 ; app before customInstall runs.

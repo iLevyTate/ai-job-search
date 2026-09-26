@@ -13,6 +13,9 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Changed
+- The installers look like the app. The Windows wizard has a sidebar, header, welcome copy, and the MIT license page, with distinct installer and uninstaller icons; the macOS disk image has a background that shows the drag to Applications and says the build is unsigned; the Linux AppImage has a full icon set and a desktop entry that describes the app. Every asset is rendered from SVG sources in `gui/build/src/` by `npm run build:installer-art` and guarded by a test. Publisher and copyright name the project.
+
 ## [1.3.5] - 2026-09-26
 
 ### Changed
