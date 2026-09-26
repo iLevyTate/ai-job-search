@@ -52,6 +52,14 @@ test("the app icon set covers the standard sizes and icon.png is 512", async () 
   }
 });
 
+test("installer.nsh sets the welcome copy and keeps the upgrade dialog", async () => {
+  const nsh = await readFile(build("installer.nsh"), "utf8");
+  assert.match(nsh, /!macro customHeader/);
+  assert.match(nsh, /MUI_WELCOMEPAGE_TEXT ".*never uploaded\."/);
+  assert.match(nsh, /!macro customInit/);
+  assert.match(nsh, /Yes = replace it with this version/);
+});
+
 test("the license shown by the installer is the repository LICENSE", async () => {
   const shown = await readFile(build("license.txt"), "utf8");
   const source = await readFile(new URL("../../LICENSE", import.meta.url), "utf8");
