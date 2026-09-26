@@ -28,6 +28,30 @@ test("runtime dependencies are production dependencies without lifecycle scripts
   assert.ok(pkg.devDependencies["@playwright/test"]);
 });
 
+test("the installer metadata names the project, not a placeholder", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url)));
+  assert.equal(pkg.author, "Job Search Desk contributors");
+  const yml = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
+  assert.match(yml, /^copyright: \(c\) 2026 Job Search Desk contributors\. MIT License\.$/m);
+});
+
+test("electron-builder references every generated installer asset", async () => {
+  const yml = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
+  for (const line of [
+    "installerIcon: installerIcon.ico",
+    "uninstallerIcon: uninstallerIcon.ico",
+    "installerHeader: installerHeader.bmp",
+    "installerSidebar: installerSidebar.bmp",
+    "uninstallerSidebar: installerSidebar.bmp",
+    "background: background.png",
+    "icon: icons",
+    "Comment: Job search desk that keeps the hunt in a folder on this computer",
+    "Keywords: job;search;cv;resume;application;",
+  ]) {
+    assert.ok(yml.includes(line), `missing: ${line}`);
+  }
+});
+
 test("electron-main loads electron-updater as CommonJS, not a named ESM export", async () => {
   const src = await readFile(new URL("../electron-main.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /import\s*\{[^}]*autoUpdater[^}]*\}\s*from\s*["']electron-updater["']/);
