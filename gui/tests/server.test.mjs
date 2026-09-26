@@ -145,6 +145,17 @@ test("GET /update/status reports the idle channel by default", async () => {
   assert.match(body.releasesUrl, /github\.com\/iLevyTate\/ai-job-search\/releases/);
 });
 
+test("POST /update/download without a registered downloader is a safe no-op", async () => {
+  const res = await fetch(`${base}/update/download`, {
+    method: "POST",
+    headers: { Origin: base, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+});
+
 test("POST /update/install without a registered installer is a safe no-op", async () => {
   const res = await fetch(`${base}/update/install`, {
     method: "POST",
