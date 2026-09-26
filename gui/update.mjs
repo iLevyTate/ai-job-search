@@ -54,7 +54,7 @@ export function applyFakeUpdateState(env = process.env) {
   if (env.JOB_SEARCH_UPDATE_FAKE !== "1") return false;
   setUpdateState({
     channel: env.JOB_SEARCH_UPDATE_FAKE_CHANNEL || "downloaded",
-    current: env.JOB_SEARCH_UPDATE_CURRENT || "1.3.4",
+    current: env.JOB_SEARCH_UPDATE_CURRENT || "1.3.5",
     version: env.JOB_SEARCH_UPDATE_NEXT || "1.9.9",
     error: "",
   });
