@@ -128,6 +128,12 @@ ALLOWED_IGNORE_NEGATIONS = {
     # US-fork negation: the Desk installer icon must stay versioned inside the
     # otherwise-ignored Electron build directory so electron-builder can pack it.
     "!gui/build/icon.png",
+    # Same reason, wider: the installer art (DMG background, Linux icon set) is
+    # rendered from gui/build/src/*.svg by scripts/build-installer-art.mjs and
+    # committed so electron-builder can pack it without regenerating. Nothing
+    # personal is ever written under gui/build; the sweep scans the SVG sources.
+    "!gui/build/*.png",
+    "!gui/build/icons/*.png",
 }
 
 # Hook commands the template legitimately ships, as "<Event>:<command>" strings.
