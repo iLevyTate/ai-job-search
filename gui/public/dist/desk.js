@@ -10345,6 +10345,24 @@ ${multiline}` : rendered;
   }
 
   // public/src/desk.js
+  var deskToken = (() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const token = params.get("token") || "";
+      if (token) {
+        params.delete("token");
+        const rest = params.toString();
+        history.replaceState(null, "", `${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
+      }
+      return token;
+    } catch {
+      return "";
+    }
+  })();
+  function withDeskToken(url) {
+    if (!deskToken) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(deskToken)}`;
+  }
   var logEl = document.getElementById("panel-chat");
   var announceEl = document.getElementById("announce");
   var statusEl = document.getElementById("status");
@@ -10902,7 +10920,7 @@ ${multiline}` : rendered;
     paletteQuery.focus();
   }
   function connectRuntime() {
-    const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    const socket = new WebSocket(withDeskToken(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`));
     socket.addEventListener("open", () => {
       runtimeSocket = socket;
       socket.send(JSON.stringify({
@@ -10967,7 +10985,7 @@ ${multiline}` : rendered;
       socket.close();
     });
   }
-  var source = new EventSource("/events");
+  var source = new EventSource(withDeskToken("/events"));
   source.addEventListener("hello", (event) => {
     const data = JSON.parse(event.data);
     rememberSession({ ...data, restored: Boolean(data.sessionId && (data.transcript || []).length) });

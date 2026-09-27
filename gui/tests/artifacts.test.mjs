@@ -123,3 +123,24 @@ test("symlink and junction escapes are rejected", async () => {
   await assert.rejects(() => service.registerFromPath("escape/secret.txt"), /link|escape/i);
   await assert.rejects(() => service.preview("missing"), /unknown/i);
 });
+
+test("open refuses a file the system opener would run and points at Reveal", async () => {
+  const root = workspace();
+  write(root, "job_scraper/fetch.sh", "#!/bin/sh\necho hi\n");
+  write(root, "cv/main.pdf", "%PDF-1.4");
+  const opened = [];
+  const service = createArtifactService({
+    workspace: root,
+    createId: (() => { let n = 0; return () => `art-${++n}`; })(),
+    openImpl: { open(path) { opened.push(path); }, reveal() {} },
+  });
+  const script = await service.registerFromPath("job_scraper/fetch.sh");
+  const pdf = await service.registerFromPath("cv/main.pdf");
+  await assert.rejects(() => service.open(script.id), /does not open \.sh files.*Reveal in folder/);
+  assert.deepEqual(opened, []);
+  // Reveal is the way out for such a file, and documents still open.
+  await service.reveal(script.id);
+  await service.open(pdf.id);
+  assert.equal(opened.length, 1);
+  assert.ok(opened[0].endsWith("main.pdf"));
+});

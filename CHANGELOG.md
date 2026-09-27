@@ -13,6 +13,14 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Security
+- The Desk's local server needs a per-launch key. Every start mints a random 32-byte token that lives only in memory; the page receives it once, in the launch link (`http://127.0.0.1:8765/?token=…`), keeps it as an `HttpOnly`, `SameSite=Strict` cookie, takes it off the address bar, and sends it on the event stream and the WebSocket, which cannot carry headers. Every route (the page and its files, `/events`, `/artifacts/*`, `/workspace-file`, `/documents`, `/auth/*`, `/workspace/*`, `/send`) and the WebSocket upgrade answer `401` without it. Before this, any program on the computer could reach `127.0.0.1` with no headers at all and drive Claude in print mode with permissions skipped, switch the runtime to Autonomous over the WebSocket, or read the conversation; the `Host` and `Origin` checks only ever stopped web pages, and they still run. The app loads the launch link itself; `node gui/server.mjs` prints it once. The Autofill review gate (`/autofill/*`) keeps its own one-time review token, because the Autofill CLI runs under Claude and must never hold the Desk's key.
+- `POST /send` (print mode, `--dangerously-skip-permissions`) answers `409` while the desk runtime is attached, so it cannot be a second door around the permission modes.
+- The desk page, and every HTML file the server serves, carries `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`; an HTML artifact preview carries `frame-ancestors 'self'`, since the Desk frames it. A foreign page can no longer lay itself over the Allow buttons or the Autonomous switch.
+- Autofill attaches only documents from the job-search folder. `--resume`, `--cover`, and `--profile` are resolved through `realpath` and refused outside the repo root or without a document extension (`.pdf`, `.docx`, `.doc`, `.txt`, `.md`, `.rtf`, `.odt`; `.json` for the profile); paths from `application_profile.json` go through the same check. `fill` refuses to run headless unless `--dry-run` is given, so the review in the visible browser cannot be skipped. `.claude/settings.json` pre-approves only `inspect` and `doctor`; `fill` always asks.
+- **Open in Terminal** on macOS single-quotes the folder and the command for the shell. The old double-quoted script let a folder name containing `$(…)` or backticks run as a command in the login shell.
+- **Open** on the Files and Applications tabs hands only document types (`.pdf`, `.tex`, `.txt`, `.md`, `.docx`, `.doc`, `.csv`, `.png`, `.jpg`, `.jpeg`, `.html`) to the system opener. Anything else answers with a note pointing at **Reveal in folder**, since `xdg-open`, `open`, and `explorer.exe` would run a script as readily as show a PDF.
+
 ## [1.3.6] - 2026-09-26
 
 ### Changed

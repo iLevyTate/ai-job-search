@@ -61,7 +61,7 @@ bun run src/cli.ts fill https://job-boards.greenhouse.io/acme/jobs/1234567 --hea
   --cover ../../../../cover_letters/cover_acme_ai_engineer.pdf
 ```
 
-With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field and submit by hand. In a direct CLI session, press Enter to close the browser (stdin close cancels). When Desk launched Autofill, use Continue or Cancel on the review card instead. There is no Submit control in either adapter.
+With `--headed`, the browser opens, the form fills, and a review gate waits. Review every field and submit by hand. `fill` refuses to run without `--headed` unless `--dry-run` is given: a headless fill has no review. The resume, the cover letter, and the profile must be document files inside this folder (symlinks are resolved first); a path outside it, or a file that is not a document, is refused, so a form can only ever receive a document from here. In a direct CLI session, press Enter to close the browser (stdin close cancels). When Desk launched Autofill, use Continue or Cancel on the review card instead. There is no Submit control in either adapter.
 
 ## How it decides what to fill
 

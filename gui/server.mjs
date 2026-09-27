@@ -6,6 +6,7 @@
  */
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
@@ -38,6 +39,7 @@ import { createCommandRegistry } from "./command-registry.mjs";
 import {
   checkTools,
   MAX_DOCUMENT_BYTES,
+  openableWithSystem,
   readApplications,
   readJobs,
   readProgress,
@@ -917,7 +919,12 @@ async function handleDeskDataRequest(req, res, url) {
       return true;
     }
     if (body.reveal) systemOpener.reveal(found.absolutePath);
-    else systemOpener.open(found.absolutePath);
+    else if (!openableWithSystem(found.absolutePath)) {
+      // Anything else would run through the system opener (a .sh, a .url,
+      // a .lnk). Point at the folder instead and let the person decide.
+      json(res, 415, { ok: false, error: noOpenText(found.absolutePath) });
+      return true;
+    } else systemOpener.open(found.absolutePath);
     json(res, 200, { ok: true, path: found.relativePath });
     return true;
   }
@@ -962,6 +969,77 @@ function autofillApi() {
 
 // The actual bound port (the preferred port may be taken; startDesk scans up).
 let boundPort = PORT;
+
+// A per-launch secret. The Host and Origin checks below stop other web
+// pages; they do nothing against another local process, which can send any
+// headers it likes to 127.0.0.1 and would otherwise drive Claude with
+// permissions skipped, switch the runtime to Autonomous, or read the
+// conversation. The token lives in memory only and reaches the page once, in
+// the launch link. It is never written to disk or to the log on its own.
+let deskToken = "";
+const SESSION_COOKIE = "desk_session";
+const UNAUTHORIZED_TEXT = "This desk needs its launch link. Open the address the desk printed when it started, or restart the app.";
+// The Autofill review gate is called by the Autofill CLI, a separate process
+// that presents its own one-time review token and must never hold this one:
+// it runs under Claude, and a prompt-injected turn could read it.
+const REVIEW_GATE_ROUTES = new Set(["/autofill/start", "/autofill/ready", "/autofill/decision", "/autofill/decide"]);
+
+function cookieName() {
+  // Cookies ignore the port, so two desks on one machine (a folder switch in
+  // the app, the demo next to a real desk) would otherwise overwrite each
+  // other's session in the same browser.
+  return `${SESSION_COOKIE}_${boundPort}`;
+}
+
+function tokenMatches(candidate) {
+  if (typeof candidate !== "string" || !candidate || !deskToken) return false;
+  const given = Buffer.from(candidate, "utf8");
+  const expected = Buffer.from(deskToken, "utf8");
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || "").split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    const key = part.slice(0, index).trim();
+    if (key && !(key in out)) out[key] = part.slice(index + 1).trim();
+  }
+  return out;
+}
+
+// How the request proved it belongs to this desk: "query" (the launch link,
+// and the streams, which cannot send headers), "header" (a Bearer token),
+// "cookie" (every later page request), or "" when it did not.
+function requestAuth(req, url) {
+  if (tokenMatches(url.searchParams.get("token"))) return "query";
+  if (tokenMatches(bearerToken(req))) return "header";
+  if (tokenMatches(parseCookies(req.headers.cookie)[cookieName()])) return "cookie";
+  return "";
+}
+
+function sessionCookie() {
+  // Not Secure: the desk is plain http on loopback. HttpOnly: the page never
+  // needs to read it. SameSite=Strict: no other site's request carries it.
+  return `${cookieName()}=${deskToken}; Path=/; HttpOnly; SameSite=Strict`;
+}
+
+// The page must not be framed by another page (a foreign tab could lay a
+// transparent copy over the Allow buttons or the Autonomous switch).
+const NO_FRAME_HEADERS = {
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": "frame-ancestors 'none'",
+};
+
+function launchHref() {
+  return `http://${HOST}:${boundPort}/?token=${deskToken}`;
+}
+
+function noOpenText(absolutePath) {
+  const ext = extname(absolutePath).toLowerCase();
+  return `Desk does not open ${ext ? `${ext} files` : "files of this kind"}. Use Reveal in folder and open it yourself.`;
+}
 
 function hostAllowed(host) {
   // Exact match only: a prefix check passes DNS-rebinding names like
@@ -1011,6 +1089,17 @@ async function handleRequest(req, res) {
     }
 
     const url = new URL(req.url || "/", `http://${HOST}:${PORT}`);
+
+    // Every route but the review gate needs the launch token: static files
+    // and the page, the streams, files, documents, sign-in, and /send.
+    let auth = "";
+    if (!REVIEW_GATE_ROUTES.has(url.pathname)) {
+      auth = requestAuth(req, url);
+      if (!auth) {
+        json(res, 401, { ok: false, error: UNAUTHORIZED_TEXT });
+        return;
+      }
+    }
 
     if (req.method === "GET" && url.pathname === "/events") {
       res.writeHead(200, {
@@ -1062,9 +1151,12 @@ async function handleRequest(req, res) {
         if (action === "preview" && req.method === "GET") {
           const preview = await deskArtifacts.preview(artifactId);
           if (preview.kind === "html") {
+            // The desk itself frames this preview, so 'self' rather than
+            // 'none': a page on another origin (or another local port) may not.
             res.writeHead(200, {
               "Content-Type": "text/html; charset=utf-8",
               "Content-Security-Policy": ARTIFACT_HTML_CSP,
+              "X-Frame-Options": "SAMEORIGIN",
               "X-Content-Type-Options": "nosniff",
             });
             res.end(preview.text);
@@ -1263,6 +1355,13 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/send") {
+      if (deskRuntime) {
+        // The page talks to the runtime over the WebSocket, where the
+        // permission modes live. Print mode skips permissions, so it must
+        // not stay open as a second door while the runtime is attached.
+        json(res, 409, { ok: false, error: "The desk runtime is running; messages go through it, not print mode." });
+        return;
+      }
       const body = await readJson(req);
       if (!body) {
         json(res, 400, { ok: false, error: "invalid JSON body" });
@@ -1364,7 +1463,15 @@ async function handleRequest(req, res) {
     try {
       const path = join(PUBLIC, file.slice(1));
       const data = await readFile(path);
-      res.writeHead(200, { "Content-Type": MIME[extname(path)] || "application/octet-stream" });
+      const type = MIME[extname(path)] || "application/octet-stream";
+      const headers = { "Content-Type": type };
+      if (type.startsWith("text/html")) {
+        Object.assign(headers, NO_FRAME_HEADERS);
+        // The launch link is used once: from here on the browser sends the
+        // cookie, and the page takes the token off the address bar.
+        if (auth === "query") headers["Set-Cookie"] = sessionCookie();
+      }
+      res.writeHead(200, headers);
       res.end(data);
     } catch {
       res.writeHead(404).end("not found");
@@ -1461,6 +1568,8 @@ export async function startDesk(options = {}) {
   loadTranscript();
   const open = options.openBrowser ?? process.env.JOB_SEARCH_GUI_NO_BROWSER !== "1";
   const server = createDeskServer();
+  // A fresh secret for every desk, including a folder switch in the app.
+  deskToken = randomBytes(32).toString("hex");
   // Bind first: the runtime spawns Claude when it starts, and that child only
   // sees JOB_SEARCH_DESK_REVIEW_URL if the port is known before the spawn.
   const bound = await bindDeskPort(server, options.port);
@@ -1526,10 +1635,14 @@ export async function startDesk(options = {}) {
       runtime,
       hostAllowed,
       originAllowed,
+      authorize: (req, url) => Boolean(requestAuth(req, url)),
     });
   }
   const href = `http://${HOST}:${bound}/`;
-  console.log(`Job search desk: ${href}`);
+  // The one place the link with the token is shown: the person opens it.
+  const launch = launchHref();
+  console.log(`Job search desk: ${launch}`);
+  console.log("That link carries this desk's launch key. It changes every start; open the desk from here, not from a bookmark.");
   if (demoMode) {
     console.log(`Workspace: ${DEMO_LABEL}`);
     console.log("Demo mode. Jobs, CVs, and the profile on this page are fictional.");
@@ -1546,9 +1659,13 @@ export async function startDesk(options = {}) {
         : "Claude Code runs locally with --dangerously-skip-permissions.",
   );
   console.log("Localhost only. Close this window to stop.");
-  if (open) openBrowser(href);
+  if (open) openBrowser(launch);
   return {
     href,
+    // What a window or browser must load first; `href` stays the plain
+    // origin for prefix checks (the app's navigation guard) and tests.
+    launchHref: launch,
+    token: deskToken,
     server,
     workspace,
     displayWorkspace: publicWorkspace(),

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   checkTools,
+  openableWithSystem,
+  openWithSystem,
   readGmailStatus,
   csvRecords,
   parseCsv,
@@ -135,4 +137,16 @@ test("gmail status reads a prior sync and stays quiet before the first one", () 
   writeFileSync(join(root, "gmail_sync", "state.json"), JSON.stringify({ last_sync: "2026-09-20T15:00:00.000Z", processed_message_ids: [] }));
   assert.deepEqual(readGmailStatus(root), { started: true, lastSync: "2026-09-20T15:00:00.000Z" });
   assert.equal(readProgress(root).gmail.started, true);
+});
+
+test("Open hands only document types to the system opener", () => {
+  for (const name of ["cv.pdf", "cv.PDF", "main.tex", "notes.md", "log.txt", "letter.docx", "old.doc", "tracker.csv", "shot.png", "photo.jpg", "photo.jpeg", "report.html"]) {
+    assert.equal(openableWithSystem(join("/work", name)), true, name);
+  }
+  // Anything the opener would run rather than show stays closed.
+  for (const name of ["run.sh", "setup.bat", "tool.exe", "link.url", "link.lnk", "app.desktop", "page.htm", "data.json", "noext", "cv.pdf.sh"]) {
+    assert.equal(openableWithSystem(join("/work", name)), false, name);
+  }
+  // The refusal happens before anything is spawned and names the way out.
+  assert.throws(() => openWithSystem(join("/work", "run.sh")), /does not open \.sh files.*Reveal in folder/);
 });

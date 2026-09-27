@@ -13,7 +13,7 @@ test("the demo page does not start Claude", async () => {
     assert.equal(desk.demo, true);
     const res = await fetch(`${desk.href}send`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${desk.token}` },
       body: JSON.stringify({ prompt: "Draft the Harbor Health CV." }),
     });
     assert.equal(res.status, 202);

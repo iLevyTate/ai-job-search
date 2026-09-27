@@ -30,6 +30,31 @@ import {
   valuesFromForm,
 } from "./chat-view.js";
 
+// The launch link carries this desk's key once. Keep it for the two streams,
+// which cannot send headers, then take it off the address bar so a copied or
+// bookmarked URL does not carry it. Fetches ride on the cookie that first
+// page load set; after a reload only the cookie is left, and the server
+// accepts it for the streams too.
+const deskToken = (() => {
+  try {
+    const params = new URLSearchParams(location.search);
+    const token = params.get("token") || "";
+    if (token) {
+      params.delete("token");
+      const rest = params.toString();
+      history.replaceState(null, "", `${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
+    }
+    return token;
+  } catch {
+    return "";
+  }
+})();
+
+function withDeskToken(url) {
+  if (!deskToken) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(deskToken)}`;
+}
+
 const logEl = document.getElementById("panel-chat");
 const announceEl = document.getElementById("announce");
 const statusEl = document.getElementById("status");
@@ -664,7 +689,7 @@ function openPalette() {
 }
 
 function connectRuntime() {
-  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  const socket = new WebSocket(withDeskToken(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`));
   socket.addEventListener("open", () => {
     runtimeSocket = socket;
     socket.send(JSON.stringify({
@@ -734,7 +759,7 @@ function connectRuntime() {
   });
 }
 
-const source = new EventSource("/events");
+const source = new EventSource(withDeskToken("/events"));
 source.addEventListener("hello", (event) => {
   const data = JSON.parse(event.data);
   rememberSession({ ...data, restored: Boolean(data.sessionId && (data.transcript || []).length) });

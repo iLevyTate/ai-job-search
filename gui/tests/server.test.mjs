@@ -29,12 +29,15 @@ const REPO_ROOT = join(HERE, "..", "..");
 
 let desk;
 let base;
+// The launch token, as the page's cookie carries it; without it every route is 401 (see desk-auth.test.mjs).
+let auth;
 
 before(async () => {
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
   process.env.JOB_SEARCH_GUI_PORT = "8791";
   desk = await startDesk({ root: REPO_ROOT, openBrowser: false });
   base = desk.href.replace(/\/$/, "");
+  auth = { Authorization: `Bearer ${desk.token}` };
 });
 
 after(() => {
@@ -44,19 +47,19 @@ after(() => {
 test("malformed JSON body answers 400, does not crash the server", async () => {
   const res = await fetch(`${base}/send`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: "not json at all",
   });
   assert.equal(res.status, 400);
   // The server is still up for the next request - the whole point.
-  const alive = await fetch(`${base}/workspace`);
+  const alive = await fetch(`${base}/workspace`, { headers: auth });
   assert.equal(alive.status, 200);
 });
 
 test("cross-origin POST is rejected with 403", async () => {
   const res = await fetch(`${base}/send`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    headers: { "Content-Type": "application/json", Origin: "https://evil.example", ...auth },
     body: JSON.stringify({ prompt: "hi" }),
   });
   assert.equal(res.status, 403);
@@ -74,13 +77,13 @@ test("DNS-rebinding Host is rejected with 403", async () => {
 test("same-origin POST is allowed through the guard", async () => {
   const res = await fetch(`${base}/stop`, {
     method: "POST",
-    headers: { Origin: base },
+    headers: { Origin: base, ...auth },
   });
   assert.equal(res.status, 200);
 });
 
-test("a GET with no Origin (curl, CLI) still works", async () => {
-  const res = await fetch(`${base}/auth/meta`);
+test("a GET with no Origin (curl, CLI) still works when it carries the launch token", async () => {
+  const res = await fetch(`${base}/auth/meta`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.ok("chromeExtensionUrl" in body);
@@ -93,14 +96,14 @@ test("POST /auth/code is gone: the desk never relays a sign-in code", async () =
   // come back.
   const res = await fetch(`${base}/auth/code`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: base },
+    headers: { "Content-Type": "application/json", Origin: base, ...auth },
     body: JSON.stringify({ code: "abc" }),
   });
   assert.equal(res.status, 404);
 });
 
 test("GET /chrome-extension/status reports whether Claude in Chrome is present", async () => {
-  const res = await fetch(`${base}/chrome-extension/status`);
+  const res = await fetch(`${base}/chrome-extension/status`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(typeof body.installed, "boolean");
@@ -111,18 +114,18 @@ test("GET /chrome-extension/status reports whether Claude in Chrome is present",
 test("an upload over 25 MB answers 413 with a sentence instead of resetting the connection", async () => {
   const res = await fetch(`${base}/documents?name=big.pdf&kind=cv`, {
     method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
+    headers: { "Content-Type": "application/octet-stream", ...auth },
     body: Buffer.alloc(26 * 1024 * 1024, 1),
   });
   assert.equal(res.status, 413);
   const body = await res.json();
   assert.match(body.error, /25 MB/);
-  const alive = await fetch(`${base}/workspace`);
+  const alive = await fetch(`${base}/workspace`, { headers: auth });
   assert.equal(alive.status, 200);
 });
 
 test("GET /commands lists discovered workflows", async () => {
-  const res = await fetch(`${base}/commands`);
+  const res = await fetch(`${base}/commands`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.ok(body.commands.some((command) => command.id === "setup"));
@@ -130,7 +133,7 @@ test("GET /commands lists discovered workflows", async () => {
 });
 
 test("GET /jobs includes the practice posting text", async () => {
-  const res = await fetch(`${base}/jobs`);
+  const res = await fetch(`${base}/jobs`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.ok(Array.isArray(body.jobs));
@@ -138,7 +141,7 @@ test("GET /jobs includes the practice posting text", async () => {
 });
 
 test("GET /update/status reports the idle channel by default", async () => {
-  const res = await fetch(`${base}/update/status`);
+  const res = await fetch(`${base}/update/status`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.ok, true);
@@ -148,7 +151,7 @@ test("GET /update/status reports the idle channel by default", async () => {
 test("POST /update/download without a registered downloader is a safe no-op", async () => {
   const res = await fetch(`${base}/update/download`, {
     method: "POST",
-    headers: { Origin: base, "Content-Type": "application/json" },
+    headers: { Origin: base, "Content-Type": "application/json", ...auth },
     body: "{}",
   });
   assert.equal(res.status, 200);
@@ -159,7 +162,7 @@ test("POST /update/download without a registered downloader is a safe no-op", as
 test("POST /update/install without a registered installer is a safe no-op", async () => {
   const res = await fetch(`${base}/update/install`, {
     method: "POST",
-    headers: { Origin: base, "Content-Type": "application/json" },
+    headers: { Origin: base, "Content-Type": "application/json", ...auth },
     body: "{}",
   });
   assert.equal(res.status, 200);

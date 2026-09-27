@@ -80,9 +80,12 @@ function boundedDim(value, fallback, min, max) {
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
+// The window loads the launch link, which carries the desk's per-launch
+// token once and sets the session cookie; `desk.href` stays the plain origin
+// for the navigation guard below.
 async function openDesk(root) {
   if (desk && desk.workspace === root) {
-    if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
+    if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.launchHref));
     return;
   }
   // Start the new desk before touching the old one or the pointer: if the new
@@ -98,7 +101,7 @@ async function openDesk(root) {
   writeWorkspace(root);
   process.env.JOB_SEARCH_ROOT = root;
   process.env.JOB_SEARCH_GUI_NO_BROWSER = "1";
-  if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
+  if (mainWindow) await ignoreNavigationAbort(() => mainWindow.loadURL(desk.launchHref));
 }
 
 function preloadPath() {
@@ -431,8 +434,8 @@ if (!hasLock) {
       try {
         await openDesk(root);
       } catch (err) {
-        if (isNavigationAbort(err) && desk?.href) {
-          await ignoreNavigationAbort(() => mainWindow.loadURL(desk.href));
+        if (isNavigationAbort(err) && desk?.launchHref) {
+          await ignoreNavigationAbort(() => mainWindow.loadURL(desk.launchHref));
         } else {
           dialog.showErrorBox(
             "Job Search Desk",

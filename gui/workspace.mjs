@@ -423,6 +423,16 @@ export function windowsCliLaunch(command, ready, args = []) {
 }
 
 /**
+ * Quote one word for a POSIX shell. Single quotes take everything literally,
+ * so a folder named `$(rm -rf ~)` or one with backticks stays a folder name;
+ * JSON-style double quotes let the login shell expand both. A single quote
+ * inside ends the quote, adds an escaped quote, and starts the quote again.
+ */
+export function posixQuote(word) {
+  return `'${String(word).replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Open a real terminal window running Claude Code. The Desk never reads or
  * writes that window: whatever Claude Code prints or asks for stays between
  * the person and Anthropic's own program.
@@ -448,9 +458,12 @@ export function openClaudeTerminal(root, command, env, { args = [], title = "Job
     return { ok: true, root };
   }
   if (process.platform === "darwin") {
+    // Terminal runs the script through the login shell, so every word is
+    // single-quoted; the JSON.stringify below is AppleScript's own string
+    // syntax for the osascript argument, not shell quoting.
     const script = ready
-      ? `cd ${JSON.stringify(root)} && exec ${[command, ...args].map((part) => JSON.stringify(part)).join(" ")}`
-      : `cd ${JSON.stringify(root)} && echo ${NOT_INSTALLED_NOTE}`;
+      ? `cd ${posixQuote(root)} && exec ${[command, ...args].map(posixQuote).join(" ")}`
+      : `cd ${posixQuote(root)} && echo ${posixQuote(NOT_INSTALLED_NOTE)}`;
     const child = spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`], {
       detached: true,
       stdio: "ignore",

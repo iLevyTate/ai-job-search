@@ -10,6 +10,12 @@ export function attachWebSocketTransport({
   runtime,
   hostAllowed,
   originAllowed,
+  // (req, url) => boolean: whether the client holds the desk's launch token.
+  // Host and Origin stop other web pages; this stops other local processes,
+  // which could otherwise send permission.mode and switch Claude to
+  // Autonomous. The token rides on ?token= because a WebSocket cannot set
+  // headers, or on the session cookie the page already has.
+  authorize = () => true,
   path = "/ws",
   WebSocketServerImpl = WebSocketServer,
 } = {}) {
@@ -24,6 +30,11 @@ export function attachWebSocketTransport({
     }
     if (!hostAllowed(req.headers.host || "") || !originAllowed(req.headers.origin)) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (!authorize(req, url)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }

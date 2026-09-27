@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from "fs"
 import { resolve as resolvePath, join, dirname } from "path"
 import { fileURLToPath } from "url"
-import { resolveDocumentPath } from "./documents.ts"
+import { confineDocumentPath, DocumentPathError, PROFILE_EXTENSIONS, resolveDocumentPath } from "./documents.ts"
 import { detectAts, fillApplication, type FillReport } from "./fill.ts"
 import { createReviewGateFromEnv } from "./review-gate.ts"
 import type { Profile } from "./matcher.ts"
@@ -53,15 +53,24 @@ FILL FLAGS
   --cover, -c <path>     Cover letter PDF to attach. Overrides the profile value.
   --screenshot, -o <p>   Where to write the filled-form screenshot.
                          Default: job_scraper/autofill_<timestamp>.png
-  --headed               Show the browser and pause for manual review. RECOMMENDED.
+  --headed               Show the browser and pause for manual review.
+                         Required for fill: a headless fill has no review.
   --dry-run              Report what would be filled without touching the page.
+                         The only way fill runs without --headed.
   --timeout <ms>         Navigation timeout. Default 30000.
   --format <fmt>         json (default) | table
 
 COMMANDS
-  fill      Fill the application form and stop before submitting.
+  fill      Fill the application form and stop before submitting. Needs --headed
+            (or --dry-run).
   inspect   List the form's fields and what each would be filled with (implies --dry-run).
   doctor    Check that Playwright, a browser, and the profile file are all present.
+
+PATHS
+  --profile, --resume, and --cover must point inside the job-search folder
+  (symlinks are resolved first). Documents must be .pdf, .docx, .doc, .txt,
+  .md, .rtf, or .odt; the profile must be .json. Anything else is refused,
+  so a form can only ever receive a document from this folder.
 
 EXAMPLES
   node --experimental-strip-types src/cli.ts doctor
@@ -210,10 +219,20 @@ async function main(): Promise<number> {
   }
 
   const root = repoRoot()
-  const profilePath =
+  let profilePath =
     typeof flags.profile === "string"
       ? resolvePath(flags.profile)
       : join(root, "application_profile.json")
+  // An explicit --profile is held inside the repo like every other path.
+  // doctor still reports a missing default profile in its own checks.
+  if (typeof flags.profile === "string" && (cmd !== "doctor" || existsSync(profilePath))) {
+    try {
+      profilePath = confineDocumentPath(profilePath, root, { label: "profile", extensions: PROFILE_EXTENSIONS })
+    } catch (e) {
+      writeError((e as Error).message, e instanceof DocumentPathError ? e.code : "BAD_PROFILE")
+      return 1
+    }
+  }
 
   if (cmd === "doctor") return runDoctor(profilePath)
 
@@ -229,6 +248,19 @@ async function main(): Promise<number> {
   }
   if (!/^https?:\/\//i.test(url)) {
     writeError(`"${url}" is not an http(s) URL`, "BAD_URL")
+    return 1
+  }
+
+  const dryRun = cmd === "inspect" || flags["dry-run"] === true
+  // A headless fill types personal data and attaches documents with nobody
+  // watching and no review gate at the end. The visible browser is the
+  // review, so fill needs --headed; --dry-run only reports.
+  if (cmd === "fill" && !dryRun && flags.headed !== true) {
+    writeError(
+      "fill runs with --headed, so the browser stays open for you to review every field before you submit. " +
+        "Add --headed, or use --dry-run (or inspect) to see what would be filled without touching the page.",
+      "HEADLESS_FILL",
+    )
     return 1
   }
 
@@ -257,17 +289,20 @@ async function main(): Promise<number> {
   if (resume !== undefined) profile.documents.resume = resume
   if (cover !== undefined) profile.documents.coverLetter = cover
 
-  for (const [label, p] of [
-    ["resume", profile.documents.resume],
-    ["cover letter", profile.documents.coverLetter],
-  ] as const) {
-    if (p && !existsSync(p)) {
-      writeError(`${label} not found at ${p}`, "MISSING_DOCUMENT")
-      return 1
+  // Whatever ends up attached must be a document from inside the repo,
+  // whether it came from a flag or from the profile file.
+  try {
+    if (profile.documents.resume) {
+      profile.documents.resume = confineDocumentPath(profile.documents.resume, root, { label: "resume" })
     }
+    if (profile.documents.coverLetter) {
+      profile.documents.coverLetter = confineDocumentPath(profile.documents.coverLetter, root, { label: "cover letter" })
+    }
+  } catch (e) {
+    writeError((e as Error).message, e instanceof DocumentPathError ? e.code : "BAD_DOCUMENT")
+    return 1
   }
 
-  const dryRun = cmd === "inspect" || flags["dry-run"] === true
   const timeout = flags.timeout ? parseInt(flags.timeout as string, 10) : 30000
   if (isNaN(timeout) || timeout <= 0) {
     writeError(`--timeout must be a positive number, got "${flags.timeout}"`, "BAD_ARG")
