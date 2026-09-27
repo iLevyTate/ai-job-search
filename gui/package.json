@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
-    "electron": "^39.8.10",
+    "electron": "^44.4.5",
     "electron-builder": "^26.0.12",
     "esbuild": "0.28.2",
     "happy-dom": "20.11.12"
@@ -44,8 +44,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "overrides": {
-    "extract-zip": "npm:@electron-internal/extract-zip@^1.0.1"
   }
 }

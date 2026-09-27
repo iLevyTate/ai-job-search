@@ -21,6 +21,9 @@ per-file diff commands.
 - **Open in Terminal** on macOS single-quotes the folder and the command for the shell. The old double-quoted script let a folder name containing `$(…)` or backticks run as a command in the login shell.
 - **Open** on the Files and Applications tabs hands only document types (`.pdf`, `.tex`, `.txt`, `.md`, `.docx`, `.doc`, `.csv`, `.png`, `.jpg`, `.jpeg`, `.html`) to the system opener. Anything else answers with a note pointing at **Reveal in folder**, since `xdg-open`, `open`, and `explorer.exe` would run a script as readily as show a PDF.
 
+### Changed
+- The Desk runs on Electron 44 (from 39). Electron 39's installer pulled in `extract-zip`, which carries two advisories with no fixed release (GHSA-jmr9-qjv8-65gv, GHSA-7pqw-9j4j-h8q3); Electron 40 and later ship their own extractor, and 40 and 41 carry an advisory of their own (GHSA-9f4c-93c8-jc8g), so the move goes straight to the current line. `npm audit` in `gui/` now reports nothing.
+
 ## [1.3.6] - 2026-09-26
 
 ### Changed
