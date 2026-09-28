@@ -19,6 +19,9 @@ const RAW_DIR = join(OUT_DIR, `desk-tour-raw-${Date.now()}`);
 const FINAL = join(OUT_DIR, "desk-tour.mp4");
 const PORT = Number(process.env.JOB_SEARCH_GUI_PORT || 8770);
 const URL = `http://127.0.0.1:${PORT}/`;
+// The desk prints its launch link (with the per-launch token) once it is up;
+// a bare URL answers 401. startDesk fills this in from that line.
+let launchUrl = URL;
 const WIDTH = 1920;
 const HEIGHT = 1080;
 const FPS = 60;
@@ -55,6 +58,14 @@ function startDesk() {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  // Keep reading for the link after the promise settles: stderr can speak
+  // first, and waitForDesk polls until the link is known.
+  let printed = "";
+  child.stdout.on("data", (chunk) => {
+    printed += String(chunk);
+    const link = /http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]+/.exec(printed);
+    if (link) launchUrl = link[0];
+  });
   return new Promise((resolve, reject) => {
     let output = "";
     const onData = (chunk) => {
@@ -85,9 +96,9 @@ function startDesk() {
 async function waitForDesk(page) {
   for (let i = 0; i < 40; i += 1) {
     try {
-      const res = await fetch(URL, { signal: AbortSignal.timeout(500) });
+      const res = await fetch(launchUrl, { signal: AbortSignal.timeout(500) });
       if (res.ok) {
-        await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.goto(launchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
         return;
       }
     } catch {

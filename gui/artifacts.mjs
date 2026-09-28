@@ -39,6 +39,17 @@ const PREVIEW_TYPES = {
   ".htm": { mime: "text/html", kind: "html" },
 };
 
+// What Open hands to the system opener (xdg-open, open, explorer.exe). Any
+// other type would run rather than open: a .sh, a .url, a .lnk, a .desktop
+// file Claude was talked into writing. Reveal in folder covers those.
+export const OPENABLE_EXTENSIONS = new Set([
+  ".pdf", ".tex", ".txt", ".md", ".docx", ".doc", ".csv", ".png", ".jpg", ".jpeg", ".html",
+]);
+
+export function openableWithSystem(absolutePath) {
+  return OPENABLE_EXTENSIONS.has(extname(String(absolutePath || "")).toLowerCase());
+}
+
 function fail(message) {
   const error = new Error(message);
   error.code = "ARTIFACT_PATH";
@@ -330,6 +341,9 @@ export function createArtifactService({
       if (!record) fail("unknown artifact");
       const resolved = await resolveExisting(record.relativePath);
       await assertStillThere(resolved.absolutePath);
+      if (!openableWithSystem(resolved.absolutePath)) {
+        fail(`Desk does not open ${extname(resolved.relativePath).toLowerCase() || "this kind of"} files. Use Reveal in folder and open it yourself.`);
+      }
       await openImpl.open(resolved.absolutePath);
       return { id, relativePath: resolved.relativePath, absolutePath: resolved.absolutePath };
     },
@@ -344,4 +358,6 @@ export function createArtifactService({
   };
 }
 
-export const ARTIFACT_HTML_CSP = "default-src 'none'; sandbox; style-src 'unsafe-inline'; img-src data:";
+// frame-ancestors 'self': only the desk page may frame a preview, never a
+// page on another origin or another local port.
+export const ARTIFACT_HTML_CSP = "default-src 'none'; sandbox; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'";

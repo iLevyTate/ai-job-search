@@ -11,6 +11,9 @@ import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep 
 import { resolveCommand } from "./claude.mjs";
 import { chromeExtensionInstalled } from "./claude-chrome.mjs";
 import { CHROME_EXTENSION_URL } from "./defaults.mjs";
+import { openableWithSystem } from "./artifacts.mjs";
+
+export { openableWithSystem };
 
 const IS_WIN = process.platform === "win32";
 
@@ -348,6 +351,11 @@ export function revealWithSystem(absolutePath) {
 export const systemOpener = { open: openWithSystem, reveal: revealWithSystem };
 
 export function openWithSystem(absolutePath) {
+  // The system opener runs a script as readily as it shows a PDF. Only
+  // document types go through; callers offer Reveal in folder for the rest.
+  if (!openableWithSystem(absolutePath)) {
+    throw new Error(`Desk does not open ${extname(absolutePath).toLowerCase() || "this kind of"} files. Use Reveal in folder and open it yourself.`);
+  }
   const detach = { detached: true, stdio: "ignore" };
   let child;
   // explorer.exe takes the path as one argument; `cmd /c start` re-parses

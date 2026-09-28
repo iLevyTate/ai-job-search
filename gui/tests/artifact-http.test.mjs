@@ -52,6 +52,8 @@ async function withDesk(testFn) {
   try {
     await testFn({
       base: desk.href.replace(/\/$/, ""),
+      // What the page's session cookie carries, as a header.
+      auth: { Authorization: `Bearer ${desk.token}` },
       artifacts,
       opened,
       revealed,
@@ -63,8 +65,8 @@ async function withDesk(testFn) {
 }
 
 test("opening an artifact whose file was deleted answers 404, not ok", async () => {
-  await withDesk(async ({ base, opened }) => {
-    const listed = await (await fetch(`${base}/artifacts`)).json();
+  await withDesk(async ({ base, auth, opened }) => {
+    const listed = await (await fetch(`${base}/artifacts`, { headers: auth })).json();
     const notes = listed.artifacts.find((item) => item.relativePath === "documents/notes.md");
     assert.ok(notes, "fixture artifact missing");
     const path = join(REPO, "documents", "notes.md");
@@ -72,7 +74,7 @@ test("opening an artifact whose file was deleted answers 404, not ok", async () 
     try {
       const res = await fetch(`${base}/artifacts/${notes.id}/open`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...auth },
         body: JSON.stringify({ expectedControllerGeneration: 2 }),
       });
       assert.equal(res.status, 404);
@@ -86,40 +88,44 @@ test("opening an artifact whose file was deleted answers 404, not ok", async () 
 });
 
 test("artifact routes look up opaque IDs and protect previews", async () => {
-  await withDesk(async ({ base, artifacts, opened, revealed }) => {
-    const listed = await (await fetch(`${base}/artifacts`)).json();
+  await withDesk(async ({ base, auth, artifacts, opened, revealed }) => {
+    const listed = await (await fetch(`${base}/artifacts`, { headers: auth })).json();
     assert.ok(listed.artifacts.length >= 1);
     const notes = listed.artifacts.find((item) => item.relativePath.endsWith("notes.md"));
     const html = listed.artifacts.find((item) => item.relativePath.endsWith("preview.html"));
     assert.ok(notes.id);
     assert.equal(notes.relativePath.includes(".."), false);
 
-    const missing = await fetch(`${base}/artifacts/unknown/preview`);
+    const missing = await fetch(`${base}/artifacts/unknown/preview`, { headers: auth });
     assert.equal(missing.status, 404);
 
-    const preview = await fetch(`${base}/artifacts/${html.id}/preview`);
+    const preview = await fetch(`${base}/artifacts/${html.id}/preview`, { headers: auth });
     assert.equal(preview.status, 200);
     assert.match(preview.headers.get("content-type"), /text\/html/);
     assert.match(preview.headers.get("content-security-policy") || "", /sandbox/);
     assert.match(preview.headers.get("content-security-policy") || "", /default-src 'none'/);
+    // Only the desk page may frame a preview; a foreign page or another
+    // local port may not.
+    assert.match(preview.headers.get("content-security-policy") || "", /frame-ancestors 'self'/);
+    assert.equal(preview.headers.get("x-frame-options"), "SAMEORIGIN");
 
     const forbidden = await fetch(`${base}/artifacts/${notes.id}/open`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example", ...auth },
       body: JSON.stringify({ expectedControllerGeneration: 2 }),
     });
     assert.equal(forbidden.status, 403);
 
     const stale = await fetch(`${base}/artifacts/${notes.id}/open`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: base },
+      headers: { "Content-Type": "application/json", Origin: base, ...auth },
       body: JSON.stringify({ expectedControllerGeneration: 1 }),
     });
     assert.equal(stale.status, 409);
 
     const openedRes = await fetch(`${base}/artifacts/${notes.id}/open`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: base },
+      headers: { "Content-Type": "application/json", Origin: base, ...auth },
       body: JSON.stringify({ expectedControllerGeneration: 2 }),
     });
     assert.equal(openedRes.status, 200);
@@ -130,7 +136,7 @@ test("artifact routes look up opaque IDs and protect previews", async () => {
 
     const revealRes = await fetch(`${base}/artifacts/${notes.id}/reveal`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: base },
+      headers: { "Content-Type": "application/json", Origin: base, ...auth },
       body: JSON.stringify({ expectedControllerGeneration: 2 }),
     });
     assert.equal(revealRes.status, 200);

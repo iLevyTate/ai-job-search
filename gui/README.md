@@ -33,6 +33,8 @@ From the repo root:
 node gui/server.mjs
 ```
 
+The desk prints a link that carries this launch's key (`http://127.0.0.1:8765/?token=…`) and opens it. Open that link, not the bare address: every request without the key answers 401, which is what keeps other programs on the computer out of the desk. The key changes on every start and is never written anywhere.
+
 Same folder, terminal instead of the page:
 
 ```bash

@@ -323,3 +323,33 @@ test("the page can switch between Safe and Autonomous and gets the new snapshot 
   await transport.close();
   server.close();
 });
+
+test("an upgrade the authorizer refuses is answered 401 and never opens a socket", async () => {
+  const runtime = fakeRuntime();
+  const server = createServer((_req, res) => res.end("ok"));
+  const port = await listen(server);
+  // The desk's authorizer checks its launch token; here it is the query
+  // token alone, which is how the page sends it (a WebSocket has no headers).
+  const transport = attachWebSocketTransport({
+    server,
+    runtime,
+    ...allowed(port),
+    authorize: (req, url) => url.searchParams.get("token") === "launch-secret",
+  });
+  try {
+    assert.equal(await upgradeStatus(port, {}), 401);
+    assert.equal(transport.clientCount(), 0);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=launch-secret`);
+    await once(ws, "open");
+    const readJson = attachInbox(ws);
+    ws.send(JSON.stringify({ type: "hello", conversationId: "c1", afterSequence: 0, protocolVersion: 1 }));
+    assert.equal((await readJson()).type, "snapshot");
+    assert.equal(transport.clientCount(), 1);
+    ws.close();
+    await once(ws, "close");
+  } finally {
+    await transport.close();
+    server.close();
+  }
+});

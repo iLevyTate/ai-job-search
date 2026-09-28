@@ -43,14 +43,17 @@ ALLOWED_PERMISSIONS = {
     # pre-approved `bun run <any file>`. One entry per shipped portal CLI,
     # matching what each SKILL.md already declares in its allowed-tools.
     # This US fork also keeps ats-autofill, bun test, bun install, and
-    # playwright on the reviewed list.
+    # playwright on the reviewed list. ats-autofill is pre-approved for its
+    # read-only commands only: `fill` types personal data into a form and
+    # attaches documents, so it always asks first.
     "Bash(bun run .agents/skills/jobbank-search/cli/src/cli.ts:*)",
     "Bash(bun run .agents/skills/jobdanmark-search/cli/src/cli.ts:*)",
     "Bash(bun run .agents/skills/jobindex-search/cli/src/cli.ts:*)",
     "Bash(bun run .agents/skills/jobnet-search/cli/src/cli.ts:*)",
     "Bash(bun run .agents/skills/linkedin-search/cli/src/cli.ts:*)",
     "Bash(bun run .agents/skills/freehire-search/cli/src/cli.ts:*)",
-    "Bash(bun run .agents/skills/ats-autofill/cli/src/cli.ts:*)",
+    "Bash(bun run .agents/skills/ats-autofill/cli/src/cli.ts inspect:*)",
+    "Bash(bun run .agents/skills/ats-autofill/cli/src/cli.ts doctor:*)",
     "Bash(bun test:*)",
     "Bash(bun install)",
     "Bash(bunx playwright:*)",

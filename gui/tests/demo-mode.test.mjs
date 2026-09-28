@@ -13,6 +13,8 @@ mkdirSync(appdata, { recursive: true });
 
 let desk;
 let base;
+// Every request carries the desk's launch token, the way the page's cookie does.
+let auth;
 const priorAppdata = process.env.APPDATA;
 const priorDemo = process.env.JOB_SEARCH_DEMO;
 
@@ -27,6 +29,7 @@ before(async () => {
     port: 0,
   });
   base = desk.href.replace(/\/$/, "");
+  auth = { Authorization: `Bearer ${desk.token}` };
 });
 
 after(() => {
@@ -39,7 +42,7 @@ after(() => {
 });
 
 test("demo mode reports the generic folder name, not a disk path", async () => {
-  const res = await fetch(`${base}/workspace`);
+  const res = await fetch(`${base}/workspace`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.demo, true);
@@ -50,11 +53,11 @@ test("demo mode reports the generic folder name, not a disk path", async () => {
 });
 
 test("demo mode serves fictional jobs and applications", async () => {
-  const jobs = await (await fetch(`${base}/jobs`)).json();
+  const jobs = await (await fetch(`${base}/jobs`, { headers: auth })).json();
   assert.ok(jobs.jobs.some((job) => job.company === "Harbor Health"));
   assert.doesNotMatch(JSON.stringify(jobs), /@/);
 
-  const apps = await (await fetch(`${base}/applications`)).json();
+  const apps = await (await fetch(`${base}/applications`, { headers: auth })).json();
   assert.ok(apps.applications.some((app) => app.company === "Harbor Health"));
   assert.ok(apps.applications.every((app) => String(app.cvFile).includes(DEMO_PERSON.name.replace(" ", "_"))));
 });
@@ -70,7 +73,7 @@ test("demo mode does not rewrite the saved workspace pointer", () => {
 });
 
 test("demo mode hides the signed-in email", async () => {
-  const res = await fetch(`${base}/auth/status`);
+  const res = await fetch(`${base}/auth/status`, { headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.email, "");
@@ -80,7 +83,7 @@ test("demo mode hides the signed-in email", async () => {
 
 test("demo mode replays chat and does not start Claude", async () => {
   const ac = new AbortController();
-  const stream = await fetch(`${base}/events`, { signal: ac.signal });
+  const stream = await fetch(`${base}/events`, { signal: ac.signal, headers: auth });
   const reader = stream.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -105,7 +108,7 @@ test("demo mode replays chat and does not start Claude", async () => {
           sent = true;
           const res = await fetch(`${base}/send`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...auth },
             body: JSON.stringify({ prompt: "Draft the Harbor Health CV." }),
           });
           assert.equal(res.status, 202);
@@ -123,13 +126,13 @@ test("demo mode replays chat and does not start Claude", async () => {
   assert.equal(sent, true);
   assert.match(reply, /ready for you to read/);
   assert.equal(seen.includes("turn-error"), false);
-  const cv = await (await fetch(`${base}/workspace-file?path=${encodeURIComponent("cv/Alex_Rivera_Harbor_Health_Resume.txt")}`)).text();
+  const cv = await (await fetch(`${base}/workspace-file?path=${encodeURIComponent("cv/Alex_Rivera_Harbor_Health_Resume.txt")}`, { headers: auth })).text();
   assert.match(cv, /clinical operations/);
   assert.doesNotMatch(cv, /documentclass|Fictional demo|Practice row/i);
 });
 
 test("demo mode refuses Open in Terminal so the real folder stays closed", async () => {
-  const res = await fetch(`${base}/workspace/cli`, { method: "POST" });
+  const res = await fetch(`${base}/workspace/cli`, { method: "POST", headers: auth });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.ok, false);

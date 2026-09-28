@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import {
   hasBinary,
   openClaudeLogin,
   openFolderHint,
+  posixQuote,
   readSharedWorkspace,
   rememberWorkspace,
   resolveGit,
@@ -221,4 +223,18 @@ test("download and clone failures become sentences a first-time user can act on"
   assert.match(humanWorkspaceError(""), /did not finish/);
   assert.match(humanWorkspaceError("spawn unzip ENOENT"), /did not finish\. Try again\. \(spawn unzip ENOENT\)/);
   assert.doesNotMatch(NOT_A_WORKSPACE_TEXT, /AGENTS\.md|gui\//);
+});
+
+test("posixQuote keeps command substitution, backticks, and quotes literal", () => {
+  // The macOS Terminal script runs through the login shell. Double quotes
+  // (the old JSON.stringify) let it expand $(...) and backticks inside a
+  // folder name; single quotes take every byte as written.
+  const nasty = "/Users/me/job $(touch /tmp/pwned) `id` \"q\" it's";
+  const quoted = posixQuote(nasty);
+  assert.equal(quoted, "'/Users/me/job $(touch /tmp/pwned) `id` \"q\" it'\\''s'");
+  assert.ok(quoted.startsWith("'") && quoted.endsWith("'"));
+  // Round trip through a real POSIX shell: the word comes back byte for byte.
+  const out = execFileSync("sh", ["-c", `printf %s ${quoted}`], { encoding: "utf8" });
+  assert.equal(out, nasty);
+  assert.equal(posixQuote(""), "''");
 });
