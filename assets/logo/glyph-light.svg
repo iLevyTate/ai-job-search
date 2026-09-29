@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="56 58 140 140">
+  <!-- The letter alone, for light backgrounds. -->
+  <mask id="flap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+    <path d="M75 66H130A62 62 0 0 1 130 190H75Q60 190 60 175V81Q60 66 75 66Z" fill="#fff"/>
+    <path d="M40 46.32L123 128L226 26.63" fill="none" stroke="#000" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  </mask>
+  <rect width="256" height="256" fill="#1c1814" mask="url(#flap)"/>
+  <circle cx="123" cy="128" r="17" fill="#d08a3a"/>
+</svg>

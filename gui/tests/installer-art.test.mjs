@@ -21,6 +21,20 @@ test("every SVG source declares the size its target needs", async () => {
   }
 });
 
+test("the favicon and assets/logo carry the mark the icons are rendered from, and the Desk the logo's glyph", async () => {
+  const read = (rel) => readFile(new URL(rel, import.meta.url), "utf8");
+  const source = await read("../build/src/mark.svg");
+  for (const copy of ["../public/favicon.svg", "../../assets/logo/mark.svg"]) {
+    assert.equal(await read(copy), source, copy);
+  }
+  assert.equal(await read("../public/mark.svg"), await read("../../assets/logo/glyph-dark.svg"), "public/mark.svg");
+  for (const page of ["index.html", "first-run.html", "starting.html"]) {
+    const html = await read(`../public/${page}`);
+    assert.match(html, /<img class="mark" src="\/?mark\.svg" alt=""/, page);
+    assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="\/?favicon\.svg">/, page);
+  }
+});
+
 test("the NSIS bitmaps are the exact size MUI2 expects and 24-bit", async () => {
   for (const [name, w, h] of [["installerSidebar.bmp", 164, 314], ["installerHeader.bmp", 150, 57]]) {
     const header = readBmpHeader(await readFile(build(name)));
