@@ -11,13 +11,15 @@ REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 
 IMG_SRC = re.compile(r'<img[^>]+src="([^"]+)"')
+# <picture> theme variants: the dark-mode logo lives only in a <source srcset>.
+SOURCE_SRCSET = re.compile(r'<source[^>]+srcset="([^"\s]+)')
 MD_IMG = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 
 
 class ReadmeImageReferences(unittest.TestCase):
     def _local_refs(self):
         text = README.read_text(encoding="utf-8")
-        refs = IMG_SRC.findall(text) + MD_IMG.findall(text)
+        refs = IMG_SRC.findall(text) + SOURCE_SRCSET.findall(text) + MD_IMG.findall(text)
         return [r for r in refs if not r.startswith(("http://", "https://"))]
 
     def test_readme_exists_and_references_at_least_one_local_image(self):

@@ -136,21 +136,18 @@ body.working .workline {
 .dock, .stage, .gate, .first-run-shell, .scrim, .jump { position: relative; z-index: 1; }
 
 .mark {
-  display: grid;
-  place-items: center;
-  width: 2.15rem;
-  height: 2.15rem;
+  display: block;
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
   margin: 0;
-  border: 1px solid rgba(208, 138, 58, 0.42);
-  background:
-    linear-gradient(180deg, rgba(208, 138, 58, 0.18), rgba(208, 138, 58, 0.05));
-  color: var(--brass);
-  font-family: var(--display);
-  font-size: 1.18rem;
-  font-weight: 520;
-  font-variation-settings: "opsz" 36;
-  box-shadow: inset 0 1px 0 rgba(244, 235, 216, 0.08);
+  /* The tile's own corner (48 of 256), with a hairline so it holds its edge on the dark cards. */
+  border-radius: 18.75%;
+  box-shadow: 0 0 0 1px var(--line-strong);
 }
+
+.gate-card .mark,
+.first-run-shell .mark { margin-bottom: 0.7rem; }
 
 .brand {
   margin: 0;
@@ -1001,7 +998,7 @@ body.working .status::before {
   line-height: 1.05;
 }
 
-.gate-card > p:not(.mark):not(.brand):not(.brand-sub),
+.gate-card > p:not(.brand):not(.brand-sub),
 .first-run-shell .lede {
   color: var(--fade);
   line-height: 1.65;

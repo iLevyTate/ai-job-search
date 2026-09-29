@@ -1,12 +1,15 @@
 <p align="center">
-  <img src="assets/mascot/pip_flight_loop.gif" alt="Pip, the courier bird" height="140">
-  &nbsp;&nbsp;
-  <img src="assets/logo/mark.svg" alt="Job Search Desk logo: a sealed letter with a brass D seal" height="140">
+  <img src="assets/mascot/pip_flight_loop.gif" alt="Pip, the courier bird" height="110">
 </p>
 
-# Job Search Desk
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/lockup-dark.svg">
+    <img src="assets/logo/lockup-light.svg" alt="Job Search Desk" height="96">
+  </picture>
+</h1>
 
-*A US job search that runs on your machine. Install the Desk, or clone the repo and talk to Claude Code.*
+<p align="center"><em>A US job search that runs on your machine. Install the Desk, or clone the repo and talk to Claude Code.</em></p>
 
 <p align="center">
   <a href="https://github.com/iLevyTate/ai-job-search/actions/workflows/ci.yml"><img src="https://github.com/iLevyTate/ai-job-search/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
