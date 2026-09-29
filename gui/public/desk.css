@@ -141,9 +141,6 @@ body.working .workline {
   width: 2.75rem;
   height: 2.75rem;
   margin: 0;
-  /* The tile's own corner (48 of 256), with a hairline so it holds its edge on the dark cards. */
-  border-radius: 18.75%;
-  box-shadow: 0 0 0 1px var(--line-strong);
 }
 
 .gate-card .mark,
