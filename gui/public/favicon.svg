@@ -1,7 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- The mark reduced for tab size: no shadow, no seal lettering. -->
+  <!-- Job Search Desk mark: a D that is also a sealed letter. The flap is cut out of the D; the brass seal sits where it meets. -->
   <path d="M163.2 0c32.48 0 48.72 0 61.13 6.32a58 58 0 0 1 25.35 25.35c6.32 12.41 6.32 28.65 6.32 61.13L256 163.2c0 32.48 0 48.72 -6.32 61.13a58 58 0 0 1 -25.35 25.35c-12.41 6.32 -28.65 6.32 -61.13 6.32L92.8 256c-32.48 0 -48.72 0 -61.13 -6.32a58 58 0 0 1 -25.35 -25.35c-6.32 -12.41 -6.32 -28.65 -6.32 -61.13L0 92.8c0 -32.48 0 -48.72 6.32 -61.13a58 58 0 0 1 25.35 -25.35c12.41 -6.32 28.65 -6.32 61.13 -6.32Z" fill="#1c1814"/>
-  <rect x="42" y="75" width="172" height="114" rx="11" fill="#f4ead6"/>
-  <path d="M42 86Q42 75 53 75H203Q214 75 214 86L137 134.48Q128 141.48 119 134.48Z" fill="#e3d3b4"/>
-  <circle cx="128" cy="139.98" r="32" fill="#d08a3a"/>
+  <mask id="flap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+    <path d="M75 66H130A62 62 0 0 1 130 190H75Q60 190 60 175V81Q60 66 75 66Z" fill="#fff"/>
+    <path d="M40 46.32L123 128L226 26.63" fill="none" stroke="#000" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  </mask>
+  <rect width="256" height="256" fill="#f4ead6" mask="url(#flap)"/>
+  <circle cx="123" cy="128" r="17" fill="#d08a3a"/>
 </svg>

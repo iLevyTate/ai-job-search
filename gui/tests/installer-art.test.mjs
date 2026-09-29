@@ -21,13 +21,15 @@ test("every SVG source declares the size its target needs", async () => {
   }
 });
 
-test("the Desk pages and assets/logo carry the same mark the icons are rendered from", async () => {
-  const source = await readFile(build("src/mark.svg"), "utf8");
-  for (const copy of ["../public/mark.svg", "../../assets/logo/mark.svg"]) {
-    assert.equal(await readFile(new URL(copy, import.meta.url), "utf8"), source, copy);
+test("the favicon and assets/logo carry the mark the icons are rendered from, and the Desk the logo's glyph", async () => {
+  const read = (rel) => readFile(new URL(rel, import.meta.url), "utf8");
+  const source = await read("../build/src/mark.svg");
+  for (const copy of ["../public/favicon.svg", "../../assets/logo/mark.svg"]) {
+    assert.equal(await read(copy), source, copy);
   }
+  assert.equal(await read("../public/mark.svg"), await read("../../assets/logo/glyph-dark.svg"), "public/mark.svg");
   for (const page of ["index.html", "first-run.html", "starting.html"]) {
-    const html = await readFile(new URL(`../public/${page}`, import.meta.url), "utf8");
+    const html = await read(`../public/${page}`);
     assert.match(html, /<img class="mark" src="\/?mark\.svg" alt=""/, page);
     assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="\/?favicon\.svg">/, page);
   }

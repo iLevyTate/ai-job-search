@@ -1,25 +1,43 @@
 # Job Search Desk logo
 
-A sealed application letter. The brass wax seal carries a Fraunces D, for Desk.
+A D that is also a sealed letter. The D's flat back and round bowl are the envelope, the flap is a line cut out of it, and the brass seal sits where the flap meets. Everything is flat color: no gradients, no shadows.
 
 | File | Use |
 | --- | --- |
-| `mark.svg` | The app mark on its own tile. Use it where the name already appears in text next to it. |
-| `lockup-dark.svg` | Mark and wordmark for dark backgrounds (cream text, brass kicker). The README shows it to GitHub's dark theme. |
-| `lockup-light.svg` | Mark and wordmark for light backgrounds (ink text, deep brass kicker). The README's default. |
+| `lockup-dark.svg` | The primary logo on dark backgrounds: glyph, wordmark, and kicker. The README shows it to GitHub's dark theme. |
+| `lockup-light.svg` | The primary logo on light backgrounds. The README's default. |
+| `glyph-dark.svg` | The letter alone, paper on transparent, for dark backgrounds. The Desk's sidebar, sign-in card, and first-run and starting screens use it. |
+| `glyph-light.svg` | The letter alone, ink on transparent, for light backgrounds. |
+| `mark.svg` | The app icon: the letter on its dark tile. |
 
-The mark exists in three places that must stay byte-identical, and `gui/tests/installer-art.test.mjs` checks it: `gui/build/src/mark.svg` (the source every app and installer icon is rendered from), `gui/public/mark.svg` (the Desk's sidebar, sign-in card, and first-run and starting screens), and `mark.svg` here.
+Some of these live in more than one place, and `gui/tests/installer-art.test.mjs` checks that the copies stay byte-identical:
 
-All text is outlined, so the files render the same with or without the fonts installed. The wordmark is Fraunces at optical size 144, weight 440, tracked -0.02em; the kicker is IBM Plex Mono 500 tracked 0.28em; the seal's D is Fraunces at optical size 144, weight 600. Both typefaces are under the SIL Open Font License and ship with the Desk in `gui/public/vendor/fonts/`.
+- `mark.svg` is the same file as `gui/build/src/mark.svg` (the source every app and installer icon is rendered from) and `gui/public/favicon.svg`.
+- `glyph-dark.svg` is the same file as `gui/public/mark.svg`.
 
-How it is drawn:
+## Construction
 
-- The tile has continuous corners (radius 58 of 256, 60% smoothing, the curve Apple uses on app icons), a top-to-bottom gradient from `#261f19` to `#0e0b09`, a faint brass light in the top-left corner, and a rim that is lit at the top and fades down the sides. The rim is what keeps the tile's edge on the Desk's dark cards, so the page needs no border around it.
-- The letter is paper `#f9f2e4` shading to `#efe4cd`, with a flap from `#ebdec4` to `#e0cfb0`, lifted off the tile by a soft blurred shadow.
-- The seal is a brass disc (`#ecb66f` through `#d08a3a` to `#a4601c`, lit from the top left) with a milled edge of 32 teeth, an engraved ring, and a D struck into it in `#45260a` with a thin highlight under it.
+On a 256 grid:
 
-Below about 32px the D and the ring stop reading, and the mark becomes an envelope with a brass dot. `gui/public/favicon.svg` draws exactly that, flat and without the shadow, for the browser tab.
+- The tile has continuous corners (radius 58, 60% smoothing, the curve Apple uses on app icons), flat `#1c1814`.
+- The D is 124 tall: a 70-unit straight run from a flat back with 15-unit corners, closed by a half circle of radius 62. It sits 2 units left of center, because the bowl carries more visual weight than the back.
+- The flap is an 11-unit line with round caps, cut out of the D rather than drawn on it, so it is the background showing through. Its left arm runs into the top-left corner; its right arm is the mirror line, stopped by the bowl.
+- The seal is a circle of radius 17 at the flap's apex.
 
-If you change the mark, edit `gui/build/src/mark.svg`, copy it to `gui/public/` and here, and run `npm run build:installer-art` in `gui/` to re-render the icons.
+| Role | App icon | Uninstaller |
+| --- | --- | --- |
+| Tile | `#1c1814` ink | `#d08a3a` brass |
+| Letter | `#f4ead6` paper | `#1c1814` ink |
+| Seal | `#d08a3a` brass | `#f4ead6` paper |
 
-Don't put the mark on a light tile or recolor the seal: the dark tile and the brass seal are what make it recognizable at 16px. The one sanctioned variant is `gui/build/src/uninstall-mark.svg`, which swaps to a brass tile and a dark seal with a brass D so the uninstaller never looks like the app.
+The colors are the Desk's own, from `gui/public/desk.css`. The uninstaller swaps them so it is never mistaken for the app in Add/Remove.
+
+## Wordmark
+
+Bricolage Grotesque 700 at optical size 96, tracked -0.025em, with the kicker in IBM Plex Mono 500 tracked 0.28em. Both are outlined, so the files render the same with or without the fonts installed. Both typefaces are under the SIL Open Font License and ship with the Desk in `gui/public/vendor/fonts/`. The installer sidebar, header, and macOS disk-image title use the same face as live text.
+
+## Rules
+
+Keep the seal brass on the ink tile and the paper glyph; that dot is what identifies the mark at 16px. Don't add gradients, shadows, or outlines back. Don't set the glyph on a mid-tone where neither the paper nor the ink version has contrast; use the app icon there.
+
+If you change the mark, edit `gui/build/src/mark.svg`, copy it to `gui/public/favicon.svg` and here, and run `npm run build:installer-art` in `gui/` to re-render the icons. Change the glyphs to match.
