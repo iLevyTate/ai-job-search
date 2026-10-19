@@ -44,5 +44,12 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "@electron/get": {
+        "global-agent": "^4.1.3"
+      }
+    }
   }
 }
