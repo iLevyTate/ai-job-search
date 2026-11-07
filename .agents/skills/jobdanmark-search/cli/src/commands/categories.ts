@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 interface Category {
   id: number
@@ -13,7 +13,7 @@ export const categories = defineCommand({
   name: "categories",
   description: "List all job categories with live counts",
   options: {
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap number of categories returned",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

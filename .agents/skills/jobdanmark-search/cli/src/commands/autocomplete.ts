@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 interface AutocompleteItem {
   id: string
@@ -44,7 +44,7 @@ export const autocomplete = defineCommand({
     query: option(z.string().optional(), {
       description: "Search text to autocomplete (required)",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total suggestions returned",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

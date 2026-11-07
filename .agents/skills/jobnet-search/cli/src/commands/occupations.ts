@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 interface OccupationAlias {
   aliasIdentifier: string
@@ -21,7 +21,7 @@ export const occupations = defineCommand({
     "search-string": option(z.string().optional(), {
       description: "Search term for occupation, e.g. sygeplejerske",
     }),
-    "per-page": option(z.coerce.number().int().min(1).default(10), {
+    "per-page": option(positiveIntegerFlag.default(10), {
       description: "Max results to return",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

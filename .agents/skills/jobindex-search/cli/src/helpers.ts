@@ -1,3 +1,4 @@
+import { z } from "zod"
 export const BASE_URL = "https://www.jobindex.dk"
 
 export function writeError(error: string, code: string): void {
@@ -344,3 +345,9 @@ export function parseHitCount(html: string): number {
   const numStr = match[1].replace(/\./g, "")
   return parseInt(numStr, 10) || 0
 }
+
+// Keep numeric flag errors stable for callers parsing the CLI's JSON output.
+export const positiveIntegerFlag = z.coerce
+  .number({ error: "Expected number" })
+  .int({ error: "Expected integer, received float" })
+  .min(1, { error: "Number must be greater than or equal to 1" })
