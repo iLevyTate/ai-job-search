@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { rssFetch, fetchWithUA, writeError, parseRssDescription, extractJobIdFromUrl, BASE_URL, type RssItem } from "../helpers.js"
+import { positiveIntegerFlag, rssFetch, fetchWithUA, writeError, parseRssDescription, extractJobIdFromUrl, BASE_URL, type RssItem } from "../helpers.js"
 
 export function normalizeSearchItem(item: RssItem): Record<string, unknown> {
   const parsed = parseRssDescription(item.description)
@@ -54,7 +54,7 @@ export const search = defineCommand({
     "suitable-for": option(z.union([z.string(), z.array(z.string())]).optional(), {
       description: "Suitable-for code (andet). Repeatable.",
     }),
-    company: option(z.coerce.number().int().min(1).optional(), {
+    company: option(positiveIntegerFlag.optional(), {
       description: "Company ID (virk)",
     }),
     remote: option(z.string().optional(), {
@@ -63,7 +63,7 @@ export const search = defineCommand({
     since: option(z.string().optional(), {
       description: "Posted on or after date, format YYYY-MM-DD (oprettet)",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total results returned by CLI (client-side)",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

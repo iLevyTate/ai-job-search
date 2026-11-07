@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { BASE_URL, htmlFetch, parseSearchPage, writeError, type JobCard } from "../helpers.js"
+import { positiveIntegerFlag, BASE_URL, htmlFetch, parseSearchPage, writeError, type JobCard } from "../helpers.js"
 
 export const search = defineCommand({
   name: "search",
@@ -10,16 +10,16 @@ export const search = defineCommand({
       short: "q",
       description: "Keyword search query (e.g. python, grafisk designer)",
     }),
-    page: option(z.coerce.number().int().min(1).default(1), {
+    page: option(positiveIntegerFlag.default(1), {
       description: "Page number (1-indexed)",
     }),
-    jobage: option(z.coerce.number().int().min(1).default(9999), {
+    jobage: option(positiveIntegerFlag.default(9999), {
       description: "Max age of posting in days: 1, 7, 14, 30, or 9999 (all)",
     }),
     sort: option(z.string().default("score"), {
       description: "Sort order: score (relevance) or date (newest first)",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total results returned by the CLI (client-side)",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiPost, writeError, BASE_URL } from "../helpers.js"
+import { positiveIntegerFlag, apiPost, writeError, BASE_URL } from "../helpers.js"
 
 export interface ApiSearchItem {
   title: string
@@ -88,10 +88,10 @@ export const search = defineCommand({
     text: option(z.string().optional(), {
       description: "Free-text keyword search (job title, keyword)",
     }),
-    category: option(z.coerce.number().int().min(1).optional(), {
+    category: option(positiveIntegerFlag.optional(), {
       description: "Category ID",
     }),
-    "jobtitle-id": option(z.coerce.number().int().min(1).optional(), {
+    "jobtitle-id": option(positiveIntegerFlag.optional(), {
       description: "Job title ID from autocomplete results",
     }),
     municipality: option(z.string().optional(), {
@@ -106,10 +106,10 @@ export const search = defineCommand({
     "job-type": option(z.string().optional(), {
       description: "Comma-separated job types: fuldtid,deltid,fleksjob,elev,studiejob,praktik",
     }),
-    page: option(z.coerce.number().int().min(1).default(1), {
+    page: option(positiveIntegerFlag.default(1), {
       description: "Page number (30 items per page, server-enforced)",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total results returned by CLI (client-side)",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

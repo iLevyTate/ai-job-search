@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 export interface SearchApiResponse {
   jobAds: JobAdRaw[]
@@ -142,10 +142,10 @@ export const search = defineCommand({
     "search-string": option(z.string().optional(), {
       description: "Free-text keyword search (job title, skills, employer)",
     }),
-    page: option(z.coerce.number().int().min(1).default(1), {
+    page: option(positiveIntegerFlag.default(1), {
       description: "Page number (1-indexed)",
     }),
-    "per-page": option(z.coerce.number().int().min(1).default(10), {
+    "per-page": option(positiveIntegerFlag.default(10), {
       description: "Results per page",
     }),
     order: option(z.string().default("PublicationDate"), {
@@ -166,7 +166,7 @@ export const search = defineCommand({
     "postal-code": option(z.string().optional(), {
       description: "Postal code for radius search",
     }),
-    radius: option(z.coerce.number().int().min(1).default(50), {
+    radius: option(positiveIntegerFlag.default(50), {
       description: "Radius in km from postal code",
     }),
     "occupation-area": option(z.string().optional(), {
@@ -175,7 +175,7 @@ export const search = defineCommand({
     "occupation-group": option(z.string().optional(), {
       description: "Occupation group identifier, e.g. 10060",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total results returned by CLI",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

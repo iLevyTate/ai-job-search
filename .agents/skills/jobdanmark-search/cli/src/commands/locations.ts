@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 interface LocationItem {
   id: string
@@ -22,7 +22,7 @@ export const locations = defineCommand({
     query: option(z.string().optional(), {
       description: "Location text to search (city, zip code, region) (required)",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap total suggestions returned",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

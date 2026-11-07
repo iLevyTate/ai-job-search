@@ -1,6 +1,6 @@
 import { defineCommand, option } from "@bunli/core"
 import { z } from "zod"
-import { apiFetch, writeError } from "../helpers.js"
+import { positiveIntegerFlag, apiFetch, writeError } from "../helpers.js"
 
 export const suggestions = defineCommand({
   name: "suggestions",
@@ -9,7 +9,7 @@ export const suggestions = defineCommand({
     query: option(z.string().optional(), {
       description: "Partial search string to complete",
     }),
-    limit: option(z.coerce.number().int().min(1).optional(), {
+    limit: option(positiveIntegerFlag.optional(), {
       description: "Cap number of suggestions returned",
     }),
     format: option(z.enum(["json", "table", "plain"]).default("json"), {

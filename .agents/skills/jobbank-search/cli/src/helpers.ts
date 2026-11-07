@@ -1,4 +1,5 @@
 import { parse as parseHtml } from "node-html-parser"
+import { z } from "zod"
 
 export const BASE_URL = "https://jobbank.dk"
 
@@ -203,3 +204,9 @@ export function parseJobPostingJsonLd(html: string): Record<string, unknown> | n
 
   return null
 }
+
+// Keep numeric flag errors stable for callers parsing the CLI's JSON output.
+export const positiveIntegerFlag = z.coerce
+  .number({ error: "Expected number" })
+  .int({ error: "Expected integer, received float" })
+  .min(1, { error: "Number must be greater than or equal to 1" })

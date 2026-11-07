@@ -1,3 +1,4 @@
+import { z } from "zod"
 export const BASE_URL = "https://jobnet.dk/bff"
 export const USER_AGENT = "Mozilla/5.0 (compatible; jobnet-cli/1.0)"
 
@@ -65,3 +66,9 @@ export function normalizeJobId(input: string): string | null {
   return null
 }
 
+
+// Keep numeric flag errors stable for callers parsing the CLI's JSON output.
+export const positiveIntegerFlag = z.coerce
+  .number({ error: "Expected number" })
+  .int({ error: "Expected integer, received float" })
+  .min(1, { error: "Number must be greater than or equal to 1" })
