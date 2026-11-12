@@ -80,6 +80,13 @@ class Candidates(RankStateCase):
             "stay on disk rather than entering the conversation",
         )
 
+    def test_legacy_imported_status_counts_as_new(self):
+        # Older /import runs wrote "imported"; /import's docs promise /rank
+        # treats it as new, so those jobs must not sit unranked forever.
+        self.write_state({"a": entry(status="imported"), "b": entry(status="ranked")})
+        out = self.run_tool("candidates", "--tracker", str(self.tmp / "none.csv"))
+        self.assertEqual([row["key"] for row in out["selected"]], ["a"])
+
     def test_limit_defers_the_rest_and_reports_the_count(self):
         self.write_state({f"k{i}": entry(title=f"Role {i}") for i in range(25)})
         out = self.run_tool("candidates", "--limit", "10", "--tracker", str(self.tmp / "none.csv"))

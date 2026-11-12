@@ -44,7 +44,7 @@ Follow these steps **in order**.
 
 `$ARGUMENTS` may contain:
 
-- Nothing → rank up to 10 jobs with status `new` in `job_scraper/seen_jobs.json`
+- Nothing → rank up to 10 jobs with status `new` (or the legacy `imported`) in `job_scraper/seen_jobs.json`
 - A focus area (e.g. `/rank data science`) → rank only jobs whose title or stored fit-notes match the focus
 - `--all` → re-rank every job that has not been applied to, including previously ranked ones (useful after the profile changes)
 - `--limit <N>` → maximum number of jobs to score this run (default 10)
@@ -62,7 +62,7 @@ Never read `job_scraper/seen_jobs.json` into the conversation. It holds every jo
 python3 tools/rank_state.py candidates --limit 10          # add --all / --focus "<text>" per Step 0
 ```
 
-It applies the status filter (`new`, or any status with `--all`), the tracker exclusion (any company+role already in `job_search_tracker.csv` is out of scope regardless of flags - it has been applied to or consciously tracked), the focus filter, and `--limit`, then prints one compact object per candidate (`key`, `title`, `company`, `url`, `portal`, `deadline`, `posted_date`) plus the counts: `eligible`, `deferred` (eligible beyond the limit, kept at their current status so a later run continues the backlog), `excluded_by_tracker`.
+It applies the status filter (`new` or the legacy `imported`, or any status with `--all`), the tracker exclusion (any company+role already in `job_search_tracker.csv` is out of scope regardless of flags - it has been applied to or consciously tracked), the focus filter, and `--limit`, then prints one compact object per candidate (`key`, `title`, `company`, `url`, `portal`, `deadline`, `posted_date`) plus the counts: `eligible`, `deferred` (eligible beyond the limit, kept at their current status so a later run continues the backlog), `excluded_by_tracker`. `/import` writes `new` today but wrote `imported` before the vocabularies converged; both mean "collected, never triaged".
 
 If it reports no candidates, say so ("Nothing new to rank - run /scrape to find fresh postings") and stop. If it exits with "not found", tell the user to run `/scrape` first and stop.
 

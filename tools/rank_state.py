@@ -143,7 +143,8 @@ def cmd_candidates(args) -> int:
         if args.all:
             if status == "skipped":
                 continue
-        elif status != "new":
+        elif status not in ("new", "imported"):
+            # Older /import runs wrote "imported"; both mean collected, never triaged.
             continue
         if (norm(entry.get("company")), norm(entry.get("title"))) in excluded:
             skipped_tracker += 1
