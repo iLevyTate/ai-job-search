@@ -46,9 +46,11 @@ If any profile value is literally `CONFIRM`, stop and ask the user for it before
 
 Determine the company and role from the URL or from the user.
 
-Look for tailored documents from a prior `/apply` run:
-- `cv/main_<company>.pdf`
+Look for tailored documents from a prior `/apply` run. Prefer the tracker row's `cv_file`/`cover_letter_file` columns (with a `.pdf` extension); otherwise use the names `/apply` writes, deriving `<company>_<role>` by the **Subfolder naming** rule in `documents/README.md`:
+- `cv/main_<company>_<role>.pdf`
 - `cover_letters/cover_<company>_<role>.pdf`
+
+If an `ACTIVE-TEMPLATE` block in `05-cv-templates.md` or `06-cover-letter-templates.md` declares a custom **Output file** name, use that name instead, with its tokens filled in the same way.
 
 If the tailored PDFs do not exist:
 1. Tell the user which documents are missing.
