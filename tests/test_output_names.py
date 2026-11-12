@@ -112,15 +112,15 @@ class TokenDerivation(unittest.TestCase):
         text = read(DOCS_README)
         self.assertIn("`<Company>` and `<Role>` follow the same rule but keep each letter's case",
                       text)
-        self.assertIn("`AE Studio` becomes\n`AE_Studio`", text)
+        self.assertIn("`Acme AI` becomes\n`Acme_AI`", text)
 
     def test_case_kept_and_lowercase_forms_differ_only_in_case(self):
-        for company in ("AE Studio", "eClinical Solutions", "Novo Nordisk A/S", "AT&T Labs"):
+        for company in ("Acme AI", "eXample Health", "Novo Nordisk A/S", "Initech & Co"):
             with self.subTest(company=company):
                 kept = derive(company, keep_case=True)
                 self.assertEqual(kept.lower(), derive(company))
                 self.assertNotIn("/", kept)
-        self.assertEqual(derive("AE Studio", keep_case=True), "AE_Studio")
+        self.assertEqual(derive("Acme AI", keep_case=True), "Acme_AI")
 
 
 class IgnoreRuleCoversCollisionNames(unittest.TestCase):

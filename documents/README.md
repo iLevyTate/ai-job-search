@@ -123,8 +123,8 @@ underscores are trimmed. If the derived name is empty, stop and ask the user for
 role containing at least one letter or digit; do not create a file or directory. Every non-empty
 result is therefore a single path component whatever the posting contains.
 
-`<Company>` and `<Role>` follow the same rule but keep each letter's case (`AE Studio` becomes
-`AE_Studio`). Only a custom output file name set with `/add-template` uses them; archive folders
+`<Company>` and `<Role>` follow the same rule but keep each letter's case (`Acme AI` becomes
+`Acme_AI`). Only a custom output file name set with `/add-template` uses them; archive folders
 always use the lowercase form.
 
 Examples:
