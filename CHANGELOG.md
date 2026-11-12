@@ -27,6 +27,9 @@ per-file diff commands.
 - The Desk has a logo: a D that is also a sealed letter, with the envelope flap cut out of the D and a brass seal where it meets, in flat ink, paper, and brass on a continuous-corner tile. The wordmark is Bricolage Grotesque 700. It replaces the placeholder card as the app icon on every platform and the Windows installer and uninstaller icons, and the installer sidebar, header, and macOS disk-image title take the new wordmark face; all of it is re-rendered by `npm run build:installer-art` from `gui/build/src/`. Inside the Desk, the letter alone takes the place of the lettered D box on the sidebar, the sign-in card, and the first-run and starting screens, and the app icon is the pages' favicon. `assets/logo/` holds the app icon, the glyph for dark and light backgrounds, and two lockups with the text outlined, so they render without the fonts installed; the README header shows the dark or light lockup to match the reader's GitHub theme. A test keeps the copies in `gui/build/src/`, `gui/public/`, and `assets/logo/` identical.
 - The Desk runs on Electron 44 (from 39). Electron 39's installer pulled in `extract-zip`, which carries two advisories with no fixed release (GHSA-jmr9-qjv8-65gv, GHSA-7pqw-9j4j-h8q3); Electron 40 and later ship their own extractor, and 40 and 41 carry an advisory of their own (GHSA-9f4c-93c8-jc8g), so the move goes straight to the current line. `npm audit` in `gui/` now reports nothing.
 
+### Fixed
+- **`/rank` picks up jobs saved by older `/import` runs** (`tools/rank_state.py` `candidates`, `tests/test_rank_state.py`, `.claude/commands/rank.md`) - `/import` once wrote status `imported`, and its docs say `/rank` treats that as `new`, but `rank_state.py candidates` selected only `new`. Those jobs were never offered for ranking unless `--all` was given. The default filter now takes both.
+
 ## [1.3.6] - 2026-09-26
 
 ### Changed
