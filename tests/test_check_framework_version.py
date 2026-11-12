@@ -84,6 +84,26 @@ class FrameworkVersionGateTests(CheckerRepoFixture):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("modified without bumping 'framework_version'", result.stdout)
 
+    def test_content_lines_that_look_like_diff_headers_still_count(self):
+        # A content line starting "--" shows up in the diff as "--- ...", and
+        # one starting "++" as "+++ ..."; neither is a file header once the
+        # first hunk has begun, so editing them without a bump must fail.
+        removed = "-- a note that starts with two dashes"
+        self.framework_file.write_text(FRONTMATTER + BODY + removed + "\n", encoding="utf-8")
+        self.git("commit", "-q", "-am", "add a dash-led line")
+        cases = {
+            "removed '--' line": FRONTMATTER + BODY,
+            "added '++' line": FRONTMATTER + BODY + removed + "\n++ a line that starts with two pluses\n",
+        }
+        for name, content in cases.items():
+            with self.subTest(case=name):
+                self.framework_file.write_text(content, encoding="utf-8")
+
+                result = self.run_checker()
+
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.git("checkout", "-q", "--", str(self.framework_file))
+
     def test_bumped_edit_passes(self):
         bumped = FRONTMATTER.replace("1.0.0", "1.0.1")
         self.framework_file.write_text(

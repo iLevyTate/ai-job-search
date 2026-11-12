@@ -526,3 +526,17 @@ class Apply(RankStateCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StateFileLineEndings(RankStateCase):
+    def test_apply_writes_lf_line_endings(self):
+        # Text mode on Windows writes CRLF unless newline="\n" is pinned;
+        # a CRLF seen_jobs.json is the PowerShell-rewrite corruption signature
+        # that strict parsers and diff tools trip over.
+        src = (REPO / "tools" / "rank_state.py").read_text(encoding="utf-8")
+        self.assertIn('newline="\\n"', src)
+        self.write_state({"a": entry()})
+        results = self.tmp / "results.json"
+        results.write_text(json.dumps([{"key": "a", "status": "expired"}]), encoding="utf-8")
+        self.run_tool("apply", "--results", str(results))
+        self.assertNotIn(b"\r\n", self.state.read_bytes())

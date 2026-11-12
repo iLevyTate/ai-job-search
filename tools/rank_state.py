@@ -77,7 +77,8 @@ def save_state(path: Path, doc: dict) -> None:
     """Atomic replace: a half-written seen_jobs.json loses the scrape history."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".seen_jobs.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        # newline="\n": text mode on Windows would otherwise write CRLF.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(doc, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         os.replace(tmp, path)
