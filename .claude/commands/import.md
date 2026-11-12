@@ -117,6 +117,8 @@ For each imported job, check whether tailored documents already exist from a pri
 - `cv/main_<company>_<role>.tex` / `.pdf`
 - `cover_letters/cover_<company>_<role>.tex` / `.pdf`
 
+(Or the custom **Output file** names an `ACTIVE-TEMPLATE` block in `05-cv-templates.md` / `06-cover-letter-templates.md` declares, with the template's source extension.)
+
 If they exist, say so. `/apply` for a second role at the same company should start from the existing tailored CV, and `/autofill` can attach the PDFs directly.
 
 ## Step 6: Present Results

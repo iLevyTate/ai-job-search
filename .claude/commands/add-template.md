@@ -113,6 +113,7 @@ Collect:
 5. **Style rules** - anything the drafter must preserve when filling the template: color scheme, section order, heading style, spacing conventions, bullet formatting, date format.
 6. **Page limit** - hard page count for the compiled PDF. Default: **2 pages** for a CV, **1 page** for a cover letter. `/apply`'s compile-and-inspect loop enforces this.
 7. **Known pitfalls** (optional) - macros/rules that break with certain content (like the stock template's `\lettercontent{}`/`itemize` interaction), characters that need escaping, sections that must not be reordered.
+8. **Output file name** (optional) - the name `/apply` gives each tailored document, without folder or extension. Default: `main_<company>_<role>` for a CV, `cover_<company>_<role>` for a cover letter. A custom name is fixed text plus tokens: `<company>` and `<role>` are derived by the **Subfolder naming** rule in `documents/README.md`; `<Company>` and `<Role>` are the same values with letter case kept. Example: `Jane_Doe_<Company>_Resume`. Accept only letters, digits, `_`, `-` and the tokens, and require a company token. A name without a role token cannot tell two roles at one company apart; say that `/apply` then adds the role after the company for the second application. The name usually contains the user's own name, so it goes only in the Step 5 block, never in `TEMPLATE.md`.
 
 ---
 
@@ -193,14 +194,16 @@ Insert (or replace, if one exists) this block immediately after the file's H1 ti
 > - **Compile command:** `<the full declared command>` (not the command named in the stock guidance below; `/apply`'s compile step must use this instead)
 > - **Fonts:** <font summary, including any path note for bundled fonts>
 > - **Page limit:** exactly <N> page(s)
-> - **Output file:** `cv/main_<company>_<role><source-extension>` / `cover_letters/cover_<company>_<role><source-extension>`; copy any class/package/font files the template needs into the output directory, or reference them by relative path
+> - **Output file:** `cv/<name><source-extension>` for a CV template, `cover_letters/<name><source-extension>` for a cover letter template, where `<name>` is the Step 2 output file name (default `main_<company>_<role>` / `cover_<company>_<role>`); copy any class/package/font files the template needs into the output directory, or reference them by relative path
 <!-- END ACTIVE-TEMPLATE -->
 ```
 
 Rules:
 
 - Exactly **one** managed block per guidance file. Replace the whole block between the `BEGIN`/`END` markers when switching templates; never stack blocks.
-- **`--use default`**: remove the managed block entirely. The stock moderncv / cover.cls guidance below it is untouched and takes over again.
+- **`--use default`**: remove the managed block entirely. The stock moderncv / cover.cls guidance below it is untouched and takes over again, and so do the default file names.
+- When switching templates, carry the current block's custom output file name into the new block unless the user gives another.
+- A custom output file name is not covered by the stock `.gitignore` rules (`cv/main_*.*`, `cover_letters/cover_*.*`) that keep tailored documents out of git. When the name is not the default, add a matching rule to `.gitignore` in the same step, with each token replaced by `*` (`Jane_Doe_<Company>_Resume` becomes `cv/Jane_Doe_*_Resume.*`), unless the user says this repository is private and versions its documents on purpose.
 - Do not modify anything outside the markers.
 
 ---

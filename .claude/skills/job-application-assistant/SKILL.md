@@ -28,6 +28,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 
 ### Step 2: Tailor CV
 - Before writing either document, derive `<company>_<role>` once by the **Subfolder naming** rule in `documents/README.md`; reuse that exact value for the CV, cover letter, and Step 3b archive path. If the rule says to stop because the derived name is empty, stop before creating any file.
+- If an `ACTIVE-TEMPLATE` block in `05-cv-templates.md` or `06-cover-letter-templates.md` declares a custom **Output file** name or source extension, use it for the file names below, following `/apply`'s rules for output names.
 - Read the most relevant existing CV variant from `cv/` as a starting point
 - Follow the guidelines in `05-cv-templates.md`
 - Create `cv/main_<company>_<role>.tex` with tailored content
