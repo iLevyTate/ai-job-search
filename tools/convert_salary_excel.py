@@ -76,11 +76,17 @@ def parse_numeric_cell(value):
         else:
             text = text.replace(",", "")
     elif "," in text:
-        if re.fullmatch(r"[+-]?\d+,\d{3}", text):
+        if re.fullmatch(r"[+-]?\d{1,3}(,\d{3}){2,}", text):
+            # Two or more groups (1,234,567) can only be thousands separators.
+            text = text.replace(",", "")
+        elif re.fullmatch(r"[+-]?\d+,\d{3}", text):
             raise ValueError("ambiguous comma separator")
-        text = text.replace(",", ".")
+        else:
+            text = text.replace(",", ".")
     elif "." in text:
-        if re.fullmatch(r"[+-]?\d+\.\d{3}", text):
+        if re.fullmatch(r"[+-]?\d{1,3}(\.\d{3}){2,}", text):
+            text = text.replace(".", "")
+        elif re.fullmatch(r"[+-]?\d+\.\d{3}", text):
             raise ValueError("ambiguous dot separator")
     return float(text)
 

@@ -23,7 +23,13 @@ if root_agents.exists():
     FRAMEWORK_FILES.append(root_agents)
 
 def run_git(args: list[str]) -> tuple[int, str, str]:
-    res = subprocess.run(["git"] + args, cwd=str(ROOT), capture_output=True, text=True)
+    # encoding is explicit: text=True alone decodes with the locale codepage
+    # (cp1252 on Windows), which cannot decode some UTF-8 bytes; the decode
+    # fails inside subprocess's reader thread and the output comes back empty.
+    res = subprocess.run(
+        ["git"] + args, cwd=str(ROOT), capture_output=True,
+        encoding="utf-8", errors="replace",
+    )
     return res.returncode, res.stdout, res.stderr
 
 def get_base_commit() -> str | None:
@@ -85,8 +91,17 @@ def has_non_trivial_changes(file_path: Path, base_commit: str) -> bool:
     meaningful_changes = 0
     version_changed = False
     
+    in_hunk = False
     for line in stdout.splitlines():
-        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+        # The `--- a/path` / `+++ b/path` file headers come before the first
+        # hunk; after an `@@` every +/- line is content. Keying on `in_hunk`
+        # instead of the prefix stops a removed content line that reads
+        # `-- note` (shown as `--- note`) from being skipped as a header,
+        # which would let a real edit pass without a version bump.
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not in_hunk:
             continue
         if line.startswith("+") or line.startswith("-"):
             content = line[1:].strip()

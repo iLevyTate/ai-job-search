@@ -34,6 +34,12 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+
+# Every git call and the won't-port path resolve against the repo root, so
+# running from a subfolder cannot load an empty won't-port list and bring
+# suppressed commits back into the report.
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def git(*args: str) -> str:
@@ -44,7 +50,7 @@ def git(*args: str) -> str:
     # arrives, and the tool hangs having printed nothing. A caller cannot tell
     # that apart from "no upstream commits need review".
     return subprocess.run(
-        ["git", *args], capture_output=True, text=True, encoding="utf-8",
+        ["git", *args], cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
         errors="replace", check=True,
     ).stdout
 
@@ -57,11 +63,11 @@ def rev_list(range_spec: str) -> list[str]:
 def patch_id(sha: str) -> str | None:
     """Stable patch-id for a commit, or None if it has no diff."""
     show = subprocess.run(
-        ["git", "show", sha], capture_output=True, text=True, encoding="utf-8",
+        ["git", "show", sha], cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
         errors="replace", check=True,
     ).stdout
     r = subprocess.run(
-        ["git", "patch-id", "--stable"], input=show, capture_output=True,
+        ["git", "patch-id", "--stable"], input=show, cwd=str(ROOT), capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )
     line = r.stdout.strip()
@@ -80,7 +86,7 @@ def files_touched(sha: str) -> list[str]:
 def path_exists(path: str) -> bool:
     # ls-tree against HEAD is authoritative for "does this fork still ship it".
     r = subprocess.run(
-        ["git", "cat-file", "-e", f"HEAD:{path}"], capture_output=True
+        ["git", "cat-file", "-e", f"HEAD:{path}"], cwd=str(ROOT), capture_output=True
     )
     return r.returncode == 0
 
@@ -100,8 +106,11 @@ def remote_slug(remote: str) -> str | None:
 
 def load_wontport(path: str) -> list[str]:
     """SHA prefixes the fork has decided never to port; missing file -> []."""
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = ROOT / resolved
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(resolved, encoding="utf-8") as f:
             raw = f.read()
     except FileNotFoundError:
         return []
