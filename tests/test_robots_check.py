@@ -11,8 +11,11 @@ exact boundary this tool exists to hold.
 
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -258,6 +261,54 @@ class TestArgumentHardening(unittest.TestCase):
             robots_check._fetch = original
         self.assertEqual(seen[0], "https://x.example/robots.txt")
 
+
+
+class TestUntrustedRobotsPolicy(unittest.TestCase):
+    def test_repeated_wildcards_do_not_backtrack_exponentially(self):
+        pattern = "/" + "*a" * 13 + "*b$"
+        policy = f"User-agent: *\nDisallow: {pattern}\n"
+        started = time.perf_counter()
+        self.assertTrue(allowed(policy, "*", "/" + "a" * 28 + "X"))
+        self.assertLess(time.perf_counter() - started, 0.5)
+
+    def test_mid_pattern_dollar_is_literal(self):
+        policy = "User-agent: *\nDisallow: /tag/$var\n"
+        self.assertFalse(allowed(policy, "*", "/tag/$var"))
+        self.assertFalse(allowed(policy, "*", "/tag/$var/sub"))
+        self.assertTrue(allowed(policy, "*", "/tag/var"))
+
+    def test_gate_rejects_non_web_or_malformed_urls_before_fetch(self):
+        import robots_check
+
+        for url in ("file:///tmp/robots.txt", "gopher://example.invalid/robots.txt",
+                    "ftp://example.invalid/robots.txt", "http:///robots.txt",
+                    "https://user@/robots.txt", "https://[broken/robots.txt"):
+            with self.subTest(url=url), patch.object(robots_check, "_fetch") as fetch:
+                self.assertEqual(robots_check.gate(url)[0], 1)
+                fetch.assert_not_called()
+
+    def test_curl_restricts_first_hop_and_redirects_to_http_or_https(self):
+        import robots_check
+
+        result = subprocess.CompletedProcess([], 0, "\n404", "")
+        with patch.object(robots_check.subprocess, "run", return_value=result) as run:
+            self.assertEqual(robots_check._fetch("https://example.invalid/robots.txt", "Claude-User"), ("", 404))
+        args = run.call_args.args[0]
+        for option in ("--proto", "--proto-redir"):
+            self.assertEqual(args[args.index(option) + 1], "=http,https")
+            self.assertLess(args.index(option), args.index("--"))
+
+    def test_real_curl_refuses_a_local_fixture(self):
+        import shutil
+        import robots_check
+
+        if not shutil.which("curl"):
+            self.skipTest("curl is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "robots.txt"
+            fixture.write_text("User-agent: *\nDisallow: /\n")
+            with self.assertRaises(RuntimeError):
+                robots_check._fetch(fixture.as_uri(), "Claude-User")
 
 
 if __name__ == "__main__":

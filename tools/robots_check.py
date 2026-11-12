@@ -16,6 +16,7 @@ Rules implemented (RFC 9309), deliberately on the cautious side:
   * 404 means no published policy, which is permission
   * any other failure to read robots.txt leaves permission unconfirmed,
     and the retry does not happen
+  * curl uses HTTP or HTTPS on the initial request and on redirects
 
 Usage:  python3 tools/robots_check.py <url>
 Exit 0 = the retry may proceed. Exit 1 = do not retry; go to escalation step 3.
@@ -35,7 +36,8 @@ def _fetch(url, ua):
     # scheme://host/robots.txt before calling here, so this is hardening for
     # direct callers rather than a hole in the gate path itself.
     r = subprocess.run(
-        ['curl', '-sS', '-L', '--max-redirs', '5', '--max-time', '12', '-A', ua,
+        ['curl', '-sS', '-L', '--proto', '=http,https', '--proto-redir', '=http,https',
+         '--max-redirs', '5', '--max-time', '12', '-A', ua,
          '-H', 'Accept: text/plain,*/*', '-w', '\n%{http_code}', '--', url],
         capture_output=True, text=True, timeout=20)
     if r.returncode != 0:
@@ -89,12 +91,33 @@ def _match(pattern, path):
     The pattern is percent-decoded to match the already-decoded path. Without
     this, "Disallow: /foo%20bar" never matched "/foo bar" and the rule was
     silently skipped - a fail-open on any site that encodes its own rules.
+    A table walk bounds the work by the pattern and path lengths, including
+    rules with repeated wildcards and no match.
     """
     if pattern == '':
         return -1
     pattern = unquote(pattern)
-    rx = '^' + ''.join('.*' if c == '*' else ('$' if c == '$' else re.escape(c)) for c in pattern)
-    return len(pattern) if re.match(rx, path) else -1
+    end_anchor = pattern.endswith('$')
+    pat = re.sub(r'\*{2,}', '*', pattern[:-1] if end_anchor else pattern)
+    reach = [True] + [False] * len(pat)
+    for j, char in enumerate(pat, 1):
+        if char != '*':
+            break
+        reach[j] = True
+    if reach[-1] and not end_anchor:
+        return len(pattern)
+    for char in path:
+        step = [False] * (len(pat) + 1)
+        for j, token in enumerate(pat, 1):
+            if token == '*':
+                # Match nothing or consume one more path character.
+                step[j] = step[j - 1] or reach[j]
+            elif token == char:
+                step[j] = reach[j - 1]
+        reach = step
+        if reach[-1] and not end_anchor:
+            return len(pattern)
+    return len(pattern) if reach[-1] else -1
 
 def allowed(text, agent, path):
     g = _groups(text)
@@ -107,7 +130,13 @@ def allowed(text, agent, path):
     return True if best_len < 0 else best_allow
 
 def gate(url):
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return 1, 'UNCONFIRMED (malformed URL) - do not retry, go to step 3'
+    if parts.scheme not in ('http', 'https') or not host:
+        return 1, 'UNCONFIRMED (expected an HTTP or HTTPS URL with a host) - do not retry, go to step 3'
     path = unquote(parts.path) or '/'
     if parts.query:
         path += '?' + parts.query
