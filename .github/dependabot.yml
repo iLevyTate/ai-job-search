@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/gui"
+      - "/.agents/skills/ats-autofill/cli"
+      - "/.agents/skills/freehire-search/cli"
+      - "/.agents/skills/jobbank-search/cli"
+      - "/.agents/skills/jobdanmark-search/cli"
+      - "/.agents/skills/jobindex-search/cli"
+      - "/.agents/skills/jobnet-search/cli"
+      - "/.agents/skills/linkedin-search/cli"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
