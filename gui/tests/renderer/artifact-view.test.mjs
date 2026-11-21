@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import {
+  artifactRequestPath,
   createArtifactViewState,
   groupArtifactsByTurn,
   moveArtifactSelection,
@@ -95,4 +96,12 @@ test("the file list groups each reply so the listbox holds only options and grou
   }
   assert.deepEqual([...list.children].map((group) => group.getAttribute("aria-label")), ["Reply 1", "Reply 2"]);
   assert.equal(list.querySelectorAll("[data-artifact-id]").length, 3);
+});
+
+test("artifact requests reject URL and traversal input", () => {
+  assert.equal(artifactRequestPath("artifact_123-ab", "preview"), "/artifacts/artifact_123-ab/preview");
+  for (const id of ["//evil.example", "../secret", "a?x=1", "a#x", "a/b", "", null]) {
+    assert.throws(() => artifactRequestPath(id, "preview"), /identifier/);
+  }
+  assert.throws(() => artifactRequestPath("a1", "../open"), /action/);
 });

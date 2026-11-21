@@ -948,8 +948,9 @@ async function readJson(req) {
 
 function bearerToken(req) {
   const header = req.headers.authorization || "";
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match ? match[1].trim() : "";
+  const separator = header.search(/\s/);
+  if (separator < 0 || header.slice(0, separator).toLowerCase() !== "bearer") return "";
+  return header.slice(separator).trim();
 }
 
 function autofillApi() {

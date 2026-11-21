@@ -6,6 +6,7 @@ import {
   reduceDeskEvent,
 } from "./event-store.js";
 import {
+  artifactRequestPath,
   createArtifactViewState,
   moveArtifactSelection,
   renderArtifactView,
@@ -388,16 +389,16 @@ async function loadArtifacts({ quiet = false } = {}) {
 }
 
 async function showArtifactPreview(id) {
-  const res = await fetch(`/artifacts/${id}/preview`);
+  const res = await fetch(artifactRequestPath(id, "preview"));
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error || "Could not preview that file.");
   }
   const type = res.headers.get("content-type") || "";
   let preview;
-  if (type.includes("text/html")) preview = { kind: "html", src: `/artifacts/${id}/preview` };
-  else if (type.includes("application/pdf")) preview = { kind: "pdf", src: `/artifacts/${id}/preview` };
-  else if (type.startsWith("image/")) preview = { kind: "image", src: `/artifacts/${id}/preview` };
+  if (type.includes("text/html")) preview = { kind: "html", src: artifactRequestPath(id, "preview") };
+  else if (type.includes("application/pdf")) preview = { kind: "pdf", src: artifactRequestPath(id, "preview") };
+  else if (type.startsWith("image/")) preview = { kind: "image", src: artifactRequestPath(id, "preview") };
   else if (type.includes("json")) preview = await res.json();
   else preview = { kind: "text", text: await res.text() };
   artifactState = { ...artifactState, selectedId: id, preview, confirm: null, problem: null };
@@ -405,7 +406,7 @@ async function showArtifactPreview(id) {
 }
 
 async function showArtifactCompare(id) {
-  const res = await fetch(`/artifacts/${id}/compare`);
+  const res = await fetch(artifactRequestPath(id, "compare"));
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error || "Could not compare that file.");
@@ -425,7 +426,7 @@ async function confirmArtifactAction() {
   const confirm = artifactState.confirm;
   if (!confirm) return;
   try {
-    const res = await post(`/artifacts/${confirm.id}/${confirm.action}`, {
+    const res = await post(artifactRequestPath(confirm.id, confirm.action), {
       expectedControllerGeneration: state.controllerGeneration,
     });
     if (!res.ok) {
