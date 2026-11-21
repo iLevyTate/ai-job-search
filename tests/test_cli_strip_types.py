@@ -40,6 +40,11 @@ def supports_erasable_syntax(spec):
     return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
 
 
+def supports_erasable_syntax(spec):
+    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
+    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
+
+
 class CliStripTypesTests(unittest.TestCase):
     def test_every_cli_opts_into_erasable_syntax_and_typescript_5_8(self):
         configs = sorted(CLI_ROOT.glob("*/cli/tsconfig.json"))
