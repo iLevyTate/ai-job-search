@@ -8,11 +8,17 @@ not start.
 """
 
 import json
+import re
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLI_ROOT = REPO_ROOT / ".agents" / "skills"
+
+
+def supports_erasable_syntax(spec):
+    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
+    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
 
 
 class CliStripTypesTests(unittest.TestCase):
@@ -29,9 +35,17 @@ class CliStripTypesTests(unittest.TestCase):
             package = json.loads((tsconfig.parent / "package.json").read_text(encoding="utf-8"))
             spec = package["devDependencies"]["typescript"]
             self.assertTrue(
-                spec.startswith("^5.8") or spec.startswith("~5.8") or spec.startswith(">=5.8"),
+                supports_erasable_syntax(spec),
                 f"{tsconfig.parent / 'package.json'} typescript is {spec}, need 5.8 or newer",
             )
+
+    def test_typescript_minimum_version(self):
+        for spec in ("^5.8.0", "~5.9.3", ">=5.8", "^6.0.3", "^7.0.2"):
+            with self.subTest(spec=spec):
+                self.assertTrue(supports_erasable_syntax(spec))
+        for spec in ("^5.7.3", "~4.8.0", "*", "^5.8.0-beta", ">=4.0"):
+            with self.subTest(spec=spec):
+                self.assertFalse(supports_erasable_syntax(spec))
 
     def test_ci_starts_clis_under_node_22_and_24(self):
         ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
