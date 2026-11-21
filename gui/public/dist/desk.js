@@ -9498,6 +9498,15 @@ ${incoming}`;
     if (action !== "open" && action !== "reveal") return { ...state2, confirm: null };
     return { ...state2, confirm: { action, id: state2.selectedId } };
   }
+  function artifactRequestPath(id, action) {
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+      throw new Error("Invalid artifact identifier.");
+    }
+    if (!["preview", "compare", "open", "reveal"].includes(action)) {
+      throw new Error("Invalid artifact action.");
+    }
+    return `/artifacts/${encodeURIComponent(id)}/${action}`;
+  }
 
   // public/src/tabs.js
   var DEFAULT_TABS = [
@@ -10653,23 +10662,23 @@ ${multiline}` : rendered;
     paintFiles();
   }
   async function showArtifactPreview(id) {
-    const res = await fetch(`/artifacts/${id}/preview`);
+    const res = await fetch(artifactRequestPath(id, "preview"));
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       throw new Error(body?.error || "Could not preview that file.");
     }
     const type = res.headers.get("content-type") || "";
     let preview;
-    if (type.includes("text/html")) preview = { kind: "html", src: `/artifacts/${id}/preview` };
-    else if (type.includes("application/pdf")) preview = { kind: "pdf", src: `/artifacts/${id}/preview` };
-    else if (type.startsWith("image/")) preview = { kind: "image", src: `/artifacts/${id}/preview` };
+    if (type.includes("text/html")) preview = { kind: "html", src: artifactRequestPath(id, "preview") };
+    else if (type.includes("application/pdf")) preview = { kind: "pdf", src: artifactRequestPath(id, "preview") };
+    else if (type.startsWith("image/")) preview = { kind: "image", src: artifactRequestPath(id, "preview") };
     else if (type.includes("json")) preview = await res.json();
     else preview = { kind: "text", text: await res.text() };
     artifactState = { ...artifactState, selectedId: id, preview, confirm: null, problem: null };
     paintFiles();
   }
   async function showArtifactCompare(id) {
-    const res = await fetch(`/artifacts/${id}/compare`);
+    const res = await fetch(artifactRequestPath(id, "compare"));
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       throw new Error(body?.error || "Could not compare that file.");
@@ -10685,7 +10694,7 @@ ${multiline}` : rendered;
     const confirm2 = artifactState.confirm;
     if (!confirm2) return;
     try {
-      const res = await post(`/artifacts/${confirm2.id}/${confirm2.action}`, {
+      const res = await post(artifactRequestPath(confirm2.id, confirm2.action), {
         expectedControllerGeneration: state.controllerGeneration
       });
       if (!res.ok) {

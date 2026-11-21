@@ -134,3 +134,14 @@ export function requestArtifactConfirm(state, action) {
   if (action !== "open" && action !== "reveal") return { ...state, confirm: null };
   return { ...state, confirm: { action, id: state.selectedId } };
 }
+
+// Artifact identifiers are opaque path segments, never URLs or path fragments.
+export function artifactRequestPath(id, action) {
+  if (typeof id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new Error("Invalid artifact identifier.");
+  }
+  if (!["preview", "compare", "open", "reveal"].includes(action)) {
+    throw new Error("Invalid artifact action.");
+  }
+  return `/artifacts/${encodeURIComponent(id)}/${action}`;
+}
