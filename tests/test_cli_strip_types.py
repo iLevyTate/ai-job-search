@@ -20,36 +20,6 @@ def supports_erasable_syntax(spec):
     return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
 
 
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
-def supports_erasable_syntax(spec):
-    match = re.fullmatch(r"(?:\^|~|>=)?(\d+)\.(\d+)(?:\.(\d+))?", spec)
-    return bool(match and tuple(map(int, match.groups(default="0"))) >= (5, 8, 0))
-
-
 class CliStripTypesTests(unittest.TestCase):
     def test_every_cli_opts_into_erasable_syntax_and_typescript_5_8(self):
         configs = sorted(CLI_ROOT.glob("*/cli/tsconfig.json"))
@@ -78,9 +48,14 @@ class CliStripTypesTests(unittest.TestCase):
 
     def test_ci_starts_clis_under_node_22_and_24(self):
         ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        self.assertIn('node-version: ["22", "24"]', ci)
-        self.assertIn("node --experimental-strip-types src/cli.ts --help", ci)
-        self.assertIn('"@bunli/core"', ci)
+        job = re.search(r"^  cli-node-start:\n((?:[ ]{4,}[^\n]*\n|[ \t]*\n)*)", ci, re.M)
+        self.assertIsNotNone(job, "CLI startup job is missing")
+        block = job.group(1)
+        versions = re.search(r"^        node-version: (\[[^\n]*\])", block, re.M)
+        self.assertIsNotNone(versions, "CLI startup job needs a Node test matrix")
+        self.assertTrue({"22", "24"}.issubset(json.loads(versions.group(1))))
+        self.assertIn("node --experimental-strip-types src/cli.ts --help", block)
+        self.assertIn('"@bunli/core"', block)
 
     def test_add_portal_tells_new_skills_to_inherit_the_flag(self):
         command = (REPO_ROOT / ".claude" / "commands" / "add-portal.md").read_text(encoding="utf-8")

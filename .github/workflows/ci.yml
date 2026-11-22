@@ -261,7 +261,7 @@ jobs:
     # (parameter properties, enums, namespaces, decorators). Running the
     # documented entry point is what catches a CLI that compiles and then
     # cannot start. Node 24 strips types by default, so the same bug returns
-    # there with no flag. The 22/24 matrix is only on this job.
+    # there with no flag. This job owns the Node startup matrix.
     name: Node ${{ matrix.node-version }} starts ${{ matrix.tool }}
     needs: discover-clis
     if: needs.discover-clis.outputs.tools != '[]'
